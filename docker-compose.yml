@@ -1,4 +1,3 @@
-# NOT DONE YET
 version: '3.8'
 services:
   blockchain:
