@@ -1,6 +1,11 @@
 from flask import Flask, request, jsonify
 from blockchain import Blockchain, Transaction
 
+# DEV NOTE: logging for development only
+import logging
+logging.basicConfig(level=logging.INFO)
+
+
 app = Flask(__name__)
 blockchain = Blockchain()
 
@@ -22,10 +27,16 @@ def add_transaction():
             )
             blockchain.add_transaction(tx)
             return jsonify({"status": "success", "transaction_id": tx.transaction_id}), 201
+    
         except KeyError as e:
             return jsonify({"error": f"Missing field: {str(e)}"}), 400
+    
+        except Exception as e:
+            logging.error(f"Transaction error: {str(e)}")
+            return jsonify({"error": "Internal server error"}), 500
     else:
         raise ValueError("add_transation() function can't build tx if data is not an object returned from the request it was provided.")
+    
         
 
 @app.route('/blockchain', methods=['GET'])

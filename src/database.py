@@ -19,7 +19,7 @@ def init_db():
         conn.execute('''
         CREATE TABLE IF NOT EXISTS blocks (
             id INTEGER PRIMARY KEY,
-            index INTEGER NOT NULL,
+            block_index INTEGER NOT NULL,
             timestamp REAL NOT NULL,
             previous_hash TEXT NOT NULL,
             hash TEXT NOT NULL,

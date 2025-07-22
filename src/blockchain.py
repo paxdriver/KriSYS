@@ -9,10 +9,6 @@ from database import init_db, db_connection
 POLICY = {}
 POLICY['block_interval'] = 180  # 3 minutes in seconds
 
-
-# Add to blockchain.py
-from database import init_db, db_connecti
-
 class Transaction:
     def __init__(
         self,
@@ -72,12 +68,11 @@ class Block:
         return hashlib.sha256(block_data.encode()).hexdigest()
 
 class Blockchain:
-    def __init__(self, db_path = db_connection):
+    def __init__(self):
         self.chain: List[Block] = []
         self.pending_transactions: List[Transaction] = []
         self.create_genesis_block()
-        self.block_interval = POLICY['block_interval']
-        self.db_path = db_path
+        self.block_interval = POLICY['block_interval'] 
         
         init_db()
         if not self.chain:  # Load existing chain
