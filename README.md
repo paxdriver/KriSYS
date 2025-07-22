@@ -153,3 +153,54 @@ System designed for humanitarian crises - prioritize reliability and simplicity 
 
 
 License: MIT - Attribute: Kristopher Driver krisdriver.com @paxdriver on social media kris@krisdriver.com
+
+
+NOTES: current file structure while under development
+/krisys-project
+├── docker-compose.yml
+├── Dockerfile
+├── blockchain/ (volume for database)
+└── src/
+    ├── app.py
+    ├── blockchain.py
+    ├── database.py
+    ├── requirements.txt
+    └── templates/
+        ├── index.html
+        └── scanner.html
+
+Test routes as of July 22 2025:
+- http://localhost:5000 - Blockchain explorer
+- http://localhost:5000/scanner - QR scanner interface
+- http://localhost:5000/wallet - Wallet creation endpoint
+- view blockchain - curl http://localhost:5000/blockchain 
+	-> [{"block_index":0,"hash":"bb04c0087d4deb91a232bdd83988245ae6bdfc0bc7918918494c8618d1ad30b9","nonce":0,"previous_hash":"0","timestamp":1753203088.20498,"transactions":[]}]
+
+- manual mining - curl -X POST -H "X-Admin-Token: default_admin_token_please_change" http://localhost:5000/admin/mine
+
+- checking in - curl -X POST -H "Content-Type: application/json" -d '{"address": "bb04c0087d4deb91a232bdd83988245ae6bdfc0bc7918918494c8618d1ad30b9"}' http://localhost:5000/checkin 
+	-> {"message":"Checked in bb04c0087d4deb91a232bdd83988245ae6bdfc0bc7918918494c8618d1ad30b9 at station STATION_001","status":"success","transaction_id":"70819e8662976cd1bfcee0132bb912a09ffbb7db924dd427adfcc2da390f773e"}
+
+
+Final structure to look more similar to this:
+krisys/
+├── backend/
+│   ├── blockchain/
+│   │   ├── __init__.py
+│   │   ├── block.py
+│   │   ├── transaction.py
+│   │   └── chain.py
+│   ├── api/
+│   │   ├── __init__.py
+│   │   └── endpoints.py
+│   ├── policies/
+│   │   ├── __init__.py
+│   │   └── message_policy.py
+│   └── main.py
+├── frontend/
+│   ├── index.html
+│   ├── js/
+│   │   └── main.js
+│   └── css/
+│       └── style.css
+└── requirements.txt

@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>KriSYS Check-in</title>
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <style>
+        body { font-family: sans-serif; text-align: center; max-width: 800px; margin: 0 auto; padding: 20px; }
+        #camera-container { position: relative; margin: 20px auto; }
+        #camera-feed { width: 100%; max-width: 640px; border: 2px solid #333; }
+        #result { margin: 20px 0; padding: 15px; background: #f0f8ff; border-radius: 5px; }
+        #scanner-status { margin: 10px 0; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>KriSYS Station Check-in</h1>
+    <div id="scanner-status">Initializing camera...</div>
+    
+    <div id="camera-container">
+        <video id="camera-feed" autoplay playsinline></video>
+    </div>
+    
+    <div id="result">
+        <!-- Scan results will appear here -->
+    </div>
+    
+    <script>
+        const video = document.getElementById('camera-feed');
+        const resultDiv = document.getElementById('result');
+        const statusDiv = document.getElementById('scanner-status');
+        let scanning = true;
+        
+        // Access camera
+        navigator.mediaDevices.getUserMedia({ 
+            video: { 
+                facingMode: "environment",
+                width: { ideal: 1280 },
+                height: { ideal: 720 }
+            } 
+        })
+        .then(stream => {
+            video.srcObject = stream;
+            video.play();
+            statusDiv.textContent = "Scanning... Point camera at QR code";
+            requestAnimationFrame(scan);
+        })
+        .catch(err => {
+            statusDiv.textContent = `Camera error: ${err.message}`;
+            console.error('Camera access error:', err);
+        });
+        
+        function scan() {
+            if (!scanning) return;
+            
+            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                const canvas = document.createElement('canvas');
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                    inversionAttempts: 'dontInvert'
+                });
+                
+                if (code) {
+                    scanning = false;
+                    statusDiv.textContent = "QR Code Detected!";
+                    resultDiv.innerHTML = `<p>Scanned address: <strong>${code.data}</strong></p>`;
+                    
+                    // Send to server
+                    fetch('/checkin', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ address: code.data })
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status === "success") {
+                            resultDiv.innerHTML += `
+                                <p style="color: green;">✓ Check-in successful!</p>
+                                <p>Transaction ID: ${data.transaction_id}</p>
+                            `;
+                        } else {
+                            resultDiv.innerHTML += `
+                                <p style="color: red;">✗ Error: ${data.error || 'Check-in failed'}</p>
+                            `;
+                        }
+                        
+                        // Resume scanning after delay
+                        setTimeout(() => {
+                            scanning = true;
+                            statusDiv.textContent = "Scanning...";
+                            resultDiv.innerHTML = "";
+                        }, 3000);
+                    })
+                    .catch(error => {
+                        resultDiv.innerHTML += `<p style="color: red;">Network error: ${error.message}</p>`;
+                        scanning = true;
+                    });
+                }
+            }
+            requestAnimationFrame(scan);
+        }
+    </script>
+</body>
+</html>

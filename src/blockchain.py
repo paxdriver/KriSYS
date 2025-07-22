@@ -18,6 +18,8 @@ POLICY = {
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
 class Transaction:
     def __init__(
         self,
@@ -110,7 +112,7 @@ class Blockchain:
         if not self.load_chain():
             self.create_genesis_block()
         
-        # Start background miner
+        # Start automatic background miner (DEV NOTE: set by the blockchain host's POLICY at initalization)
         self.miner_thread = threading.Thread(target=self.miner_loop, daemon=True)
         self.miner_thread.start()
     
@@ -227,20 +229,20 @@ class Blockchain:
         logger.info("Created genesis block")
 
     def add_transaction(self, transaction: Transaction):
-        """Add transaction with policy enforcement"""
-        # Policy: Size check (5KB max)
+        """Add transaction with POLICY enforcement"""
+        # POLICY: Size check (5KB max)
         tx_size = len(json.dumps(transaction.to_dict()))
         if tx_size > POLICY['max_tx_size']:
             raise ValueError(
                 f"Transaction exceeds size limit ({tx_size}/{POLICY['max_tx_size']} bytes)"
             )
         
-        # Policy: Deduplication
+        # POLICY: Deduplication
         if any(tx.transaction_id == transaction.transaction_id 
                for tx in self.pending_transactions):
             raise ValueError("Duplicate transaction ID")
         
-        # Policy: Rate limiting (1 tx per station per block interval)
+        # POLICY: Rate limiting (1 tx per station per block interval)
         recent_txs = [
             tx for tx in self.pending_transactions 
             if tx.station_address == transaction.station_address
@@ -272,6 +274,7 @@ class Blockchain:
         logger.info(f"Mined block #{new_block.block_index}")
         return new_block
 
+    # Automatic block mining
     def mine_and_save(self):
         """Mine block and persist to database"""
         if self.pending_transactions:

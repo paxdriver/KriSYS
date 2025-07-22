@@ -8,3 +8,4 @@ services:
       - "5000:5000"
     environment:
       - BLOCKCHAIN_DB_PATH=/data/blockchain.db
+      - ADMIN_TOKEN=secure_admin_key_123  # Change in production

@@ -1,0 +1,143 @@
+<!-- SCANNER -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>KriSYS Check-in</title>
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <style>
+        body { font-family: sans-serif; text-align: center; }
+        #camera-feed { width: 100%; max-width: 640px; }
+        #result { margin-top: 20px; font-size: 1.2em; }
+    </style>
+</head>
+<body>
+    <h1>Station Check-in</h1>
+    <video id="camera-feed" autoplay playsinline></video>
+    <div id="result"></div>
+    
+    <script>
+        const video = document.getElementById('camera-feed');
+        const resultDiv = document.getElementById('result');
+        let scanning = true;
+        
+        // Access camera
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+        .then(stream => {
+            video.srcObject = stream;
+            video.play();
+            requestAnimationFrame(scan);
+        });
+        
+        function scan() {
+            if (!scanning) return;
+            
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const code = jsQR(imageData.data, imageData.width, imageData.height);
+            
+            if (code) {
+                resultDiv.textContent = `Scanned: ${code.data}`;
+                scanning = false;
+                
+
+
+
+
+                // Send to main server - INCOMPLETE
+                fetch('http://YOUR_SERVER_IP:5000/checkin', {
+
+
+
+
+
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ address: code.data })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    resultDiv.innerHTML += `<br>${data.message}`;
+                    setTimeout(() => scanning = true, 3000);  // Resume after 3 sec
+                });
+            }
+            
+            requestAnimationFrame(scan);
+        }
+
+    // Wallet creation
+    async function createWallet() {
+        const numMembers = document.getElementById('num-members').value;
+        const response = await fetch('/wallet', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({num_members: numMembers})
+        });
+        
+        const wallet = await response.json();
+        if (wallet.error) {
+            alert(`Error: ${wallet.error}`);
+            return;
+        }
+        
+        document.getElementById('family-id').textContent = wallet.family_id;
+        const qrContainer = document.getElementById('member-qrs');
+        qrContainer.innerHTML = '';
+        
+        wallet.members.forEach(member => {
+            fetch(`/wallet/${wallet.family_id}/qr/${member.address}`)
+                .then(res => res.json())
+                .then(qrData => {
+                    const qrDiv = document.createElement('div');
+                    qrDiv.innerHTML = `
+                        <div style="text-align: center;">
+                            <p><strong>${member.label}</strong></p>
+                            <img src="${qrData.qr_code}" alt="${member.address}" style="width: 150px;">
+                            <p style="font-size: 0.8em;">${member.address}</p>
+                        </div>
+                    `;
+                    qrContainer.appendChild(qrDiv);
+                });
+        });
+        
+        document.getElementById('wallet-display').style.display = 'block';
+    }
+    
+    // Check-in simulator
+    async function simulateCheckIn(address) {
+        const response = await fetch('/checkin', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({address: address})
+        });
+        
+        const result = await response.json();
+        alert(result.message || result.error);
+        loadBlockchain();  // Refresh blockchain display
+    }
+    </script>
+
+    <!-- Add wallet section -->
+    <div id="wallet-section" style="margin: 20px 0; padding: 15px; background: #f0f8ff; border-radius: 8px;">
+        <h2>Family Wallet</h2>
+        <div id="wallet-controls">
+            <button onclick="createWallet()">Create New Family Wallet</button>
+            <div>
+                <label>Number of family members:</label>
+                <input type="number" id="num-members" min="1" max="20" value="3">
+            </div>
+        </div>
+        
+        <div id="wallet-display" style="margin-top: 20px; display: none;">
+            <h3>Your Family Wallet</h3>
+            <p><strong>Family ID:</strong> <span id="family-id"></span></p>
+            <div id="member-qrs" style="display: flex; flex-wrap: wrap; gap: 15px;"></div>
+        </div>
+    </div>
+
+</body>
+</html>

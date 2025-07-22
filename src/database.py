@@ -44,5 +44,15 @@ def init_db():
         )
         ''')
         
+        # Add wallets table
+        conn.execute('''
+        CREATE TABLE IF NOT EXISTS wallets (
+            id INTEGER PRIMARY KEY,
+            family_id TEXT UNIQUE NOT NULL,
+            members TEXT NOT NULL,  -- JSON array of members
+            created_at REAL DEFAULT (strftime('%s', 'now'))
+        )
+        ''')
+        
 if __name__ == "__main__":
     raise RuntimeError('This script should never be called directly, it offers helper functions to be imported by other scripts in this project.')
