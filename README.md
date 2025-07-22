@@ -150,3 +150,6 @@ Deployment Notes
 
 
 System designed for humanitarian crises - prioritize reliability and simplicity over advanced features. Each aid organization can deploy independently for their crisis response efforts.
+
+
+License: MIT - Attribute: Kristopher Driver krisdriver.com @paxdriver on social media kris@krisdriver.com
