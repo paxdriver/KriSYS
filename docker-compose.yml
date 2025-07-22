@@ -1,0 +1,11 @@
+# NOT DONE YET
+version: '3.8'
+services:
+  blockchain:
+    build: .
+    volumes:
+      - ./blockchain:/data  # Persistent storage for DB
+    ports:
+      - "5000:5000"
+    environment:
+      - BLOCKCHAIN_DB_PATH=/data/blockchain.db

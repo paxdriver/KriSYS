@@ -3,11 +3,15 @@ import json
 import time
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
+from database import init_db, db_connection
 
 # DEV NOTE: POLICY will define many parameters to be tailored by the crisis management host and blockchain maintainer, things like class priority of transactions (org, user, warnings, alert, etc)
 POLICY = {}
 POLICY['block_interval'] = 180  # 3 minutes in seconds
 
+
+# Add to blockchain.py
+from database import init_db, db_connecti
 
 class Transaction:
     def __init__(
@@ -68,11 +72,29 @@ class Block:
         return hashlib.sha256(block_data.encode()).hexdigest()
 
 class Blockchain:
-    def __init__(self):
+    def __init__(self, db_path = db_connection):
         self.chain: List[Block] = []
         self.pending_transactions: List[Transaction] = []
         self.create_genesis_block()
         self.block_interval = POLICY['block_interval']
+        self.db_path = db_path
+        
+        init_db()
+        if not self.chain:  # Load existing chain
+            self.load_chain()
+    
+    # DEV NOTE: WIP
+    def load_chain(self):
+        with db_connection() as conn:
+            # Load blocks and transactions from DB
+            pass # Implementation details
+        
+        
+    # DEV NOTE: WIP
+    def save_block(self, block):
+        with db_connection() as conn:
+            # Save block and transactions to dB
+            pass # Implementation details
 
     def create_genesis_block(self):
         genesis = Block(0, time.time(), [], "0")
