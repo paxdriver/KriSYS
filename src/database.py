@@ -55,5 +55,17 @@ def init_db():
         )
         ''')
         
+        # Add particular crisis details tables
+        conn.execute('''
+        CREATE TABLE IF NOT EXISTS crises (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            organization TEXT,
+            contact TEXT,
+            description TEXT,
+            created_at REAL DEFAULT (strftime('%s', 'now'))
+        )
+        ''')
+        
 if __name__ == "__main__":
     raise RuntimeError('This script should never be called directly, it offers helper functions to be imported by other scripts in this project.')

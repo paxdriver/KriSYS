@@ -6,23 +6,93 @@ from datetime import datetime, timedelta
 import pgpy
 from pgpy.constants import PubKeyAlgorithm, KeyFlags, HashAlgorithm, SymmetricKeyAlgorithm
 import threading
-import logging
 import secrets
 from typing import List, Dict, Optional
 from database import init_db, db_connection
-
-# DEV NOTE: POLICY will define many parameters to be tailored by the crisis management host and blockchain maintainer, things like class priority of transactions (org, user, warnings, alert, etc)
-# Policy configuration
-POLICY = {
-    'block_interval': 180,  # 3 minutes in seconds
-    'max_tx_size': 5120,    # 5KB in bytes
-    'tx_rate_limit': 180    # 3 minutes in seconds
-}
+import logging
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# DEV NOTE: POLICY will define many parameters to be tailored by the crisis management host and blockchain maintainer, things like class priority of transactions (org, user, warnings, alert, etc)
+# Policy configuration
+# blockchain.policy_system.policies['earthquake'] = {
+#     'block_interval': 120,  # 2 minutes for high urgency
+#     'size_limit': 10240,    # 10KB for detailed reports
+#     'rate_limit': 60,       # 1 minute between messages
+#     # ... other parameters ...
+# }
+# blockchain.policy_system.current_policy = 'earthquake'
+# POLICY = {
+#     'block_interval': 180,  # 3 minutes in seconds
+#     'max_tx_size': 5120,    # 5KB in bytes
+#     'tx_rate_limit': 180    # 3 minutes in seconds
+# }
+
+# Policy system for setting up a new KriSYS blockchain
+class PolicySystem:
+    def __init__(self):
+        self.policies = {
+            'default': {
+                'name': "Default Crisis Policy",
+                'id': "default",
+                'created_at': datetime.now().isoformat(),
+                'organization': "KriSYS Foundation",
+                'contact': "support@krisys.org",
+                'description': "Standard policy for crisis response",
+                'policy': {
+                    'block_interval': 180,
+                    'size_limit': 5120,
+                    'rate_limit': 180,
+                    'priority_levels': {
+                        'medical': 1,
+                        'food': 2,
+                        'shelter': 3,
+                        'personal': 4
+                    },
+                    'types': ['check_in', 'message', 'alert']
+                }
+            }
+        }
+        self.current_policy = 'default'
+    
+    def create_crisis_policy(self, name, organization, contact, description, policy_settings):
+        """Create a new crisis-specific policy"""
+        policy_id = name.lower().replace(" ", "_")
+        self.policies[policy_id] = {
+            'name': name,
+            'id': policy_id,
+            'created_at': datetime.now().isoformat(),
+            'organization': organization,
+            'contact': contact,
+            'description': description,
+            'policy': policy_settings
+        }
+        return policy_id
+    
+    def get_policy(self, name=None):
+        policy_id = name or self.current_policy
+        return self.policies.get(policy_id, self.policies['default'])
+    
+    def validate_transaction(self, transaction):
+        policy = self.get_policy()['policy']
+        
+        # Type validation
+        if transaction.type_field not in policy['types']:
+            raise ValueError(f"Invalid transaction type: {transaction.type_field}")
+        
+        # Size validation
+        tx_size = len(json.dumps(transaction.to_dict()))
+        if tx_size > policy['size_limit']:
+            raise ValueError(f"Transaction exceeds size limit ({tx_size}/{policy['size_limit']} bytes)")
+        
+        # Priority validation
+        valid_priorities = policy['priority_levels'].values()
+        if transaction.priority_level not in valid_priorities:
+            raise ValueError(f"Invalid priority level: {transaction.priority_level}")
+        
+        return True
 
 class Transaction:
     def __init__(
@@ -269,22 +339,72 @@ class WalletManager:
             conn.commit()
 
 class Blockchain:
-    def __init__(self):
+    def __init__(self, policy_system=None):
+        self.policy_system = policy_system or PolicySystem()    # Use provided policy or default if none provided
         self.chain: List[Block] = []
         self.pending_transactions: List[Transaction] = []
-        self.block_interval = POLICY['block_interval']
-        self.wallets = WalletManager()  # Initialize wallet manager
+        self.policy_system = PolicySystem()
+        self.wallets = WalletManager()
         
-        # Initialize database
-        init_db()  # This creates all tables including wallets
+        # Get policy values from PolicySystem
         
-        # Load existing chain or create genesis
-        if not self.load_chain():
+        # policy_data = self.policy_system.get_policy()
+        # policy_settings = policy_data['policy']
+        policy_settings = self.policy_system.get_policy()['policy']
+        self.block_interval = policy_settings['block_interval']
+        self.max_tx_size = policy_settings['size_limit']
+        self.tx_rate_limit = policy_settings['rate_limit']
+        
+        init_db()       # Initialize database
+        
+        if not self.load_chain():   # Load existing chain or create genesis block for new blockchain
             self.create_genesis_block()
         
         # Start automatic background miner
         self.miner_thread = threading.Thread(target=self.miner_loop, daemon=True)
         self.miner_thread.start()
+    
+    def add_transaction(self, transaction: Transaction):
+        """Add transaction with policy enforcement"""
+        
+        # Get current policy settings
+        policy_config = self.policy_system.get_policy()['policy']
+        ############# DEVELOPMENT ONLY ################
+        if policy_config: 
+            for item in policy_config:
+                logger.info(f'{item}: {policy_config[item]}')
+                logger.info('-'*20)
+        ############################################
+        
+        # 1. Validate transaction against policy
+        self.policy_system.validate_transaction(transaction)
+        
+        # 2. Size check
+        tx_size = len(json.dumps(transaction.to_dict()))
+        if tx_size > self.max_tx_size:
+            raise ValueError(
+                f"Transaction exceeds size limit ({tx_size}/{self.max_tx_size} bytes)"
+            )
+        
+        # 3. Deduplication
+        if any(tx.transaction_id == transaction.transaction_id 
+               for tx in self.pending_transactions):
+            raise ValueError("Duplicate transaction ID")
+        
+        # 4. Rate limiting
+        recent_txs = [
+            tx for tx in self.pending_transactions 
+            if tx.station_address == transaction.station_address
+            and (time.time() - tx.timestamp_created) < policy_config['rate_limit']
+        ]
+        if recent_txs:
+            raise ValueError(
+                f"Only one transaction per station every {policy_config['rate_limit']} seconds"
+            )
+        
+        self.pending_transactions.append(transaction)
+        logger.info(f"Added transaction: {transaction.transaction_id}")
+        
     
     def load_chain(self) -> bool:
         """Load blockchain from database, return True if successful"""
@@ -398,35 +518,6 @@ class Blockchain:
         self.save_block(genesis)
         logger.info("Created genesis block")
 
-    def add_transaction(self, transaction: Transaction):
-        """Add transaction with POLICY enforcement"""
-        # POLICY: Size check (5KB max)
-        tx_size = len(json.dumps(transaction.to_dict()))
-        if tx_size > POLICY['max_tx_size']:
-            raise ValueError(
-                f"Transaction exceeds size limit ({tx_size}/{POLICY['max_tx_size']} bytes)"
-            )
-        
-        # POLICY: Deduplication
-        if any(tx.transaction_id == transaction.transaction_id 
-               for tx in self.pending_transactions):
-            raise ValueError("Duplicate transaction ID")
-        
-        # POLICY: Rate limiting (1 tx per station per block interval)
-        recent_txs = [
-            tx for tx in self.pending_transactions 
-            if tx.station_address == transaction.station_address
-            and (time.time() - tx.timestamp_created) < POLICY['tx_rate_limit']
-        ]
-        
-        if recent_txs:
-            raise ValueError(
-                f"Only one transaction per station every {POLICY['tx_rate_limit']} seconds"
-            )
-        
-        self.pending_transactions.append(transaction)
-        logger.info(f"Added transaction: {transaction.transaction_id}")
-
     def mine_block(self) -> Block:
         """Create new block with pending transactions"""
         if not self.pending_transactions:
@@ -450,11 +541,14 @@ class Blockchain:
         if self.pending_transactions:
             block = self.mine_block()
             self.save_block(block)
-
+            
     def miner_loop(self):
         """Background thread for automatic block mining"""
         while True:
-            time.sleep(self.block_interval)
+            # time.sleep(self.block_interval)
+            # Get current block interval from policy
+            block_interval = self.policy_system.get_policy()['policy']['block_interval']
+            time.sleep(block_interval)
             try:
                 self.mine_and_save()
             except Exception as e:

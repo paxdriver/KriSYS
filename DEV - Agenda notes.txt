@@ -82,6 +82,10 @@ public_key.parse(wallet.members[0]["keypair_str"])
 
 <<< TEST WALLET MANAGER AND PGP DEFAULT AUTH
 
+DATABASE AND CRISIS BLOCKCHAIN CREATION - POLICIES (configs/admin setup)
+
+
+
 
 
 PHASE 2.1 - DEVELOPMENT ROADMAP

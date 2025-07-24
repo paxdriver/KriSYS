@@ -1,7 +1,7 @@
 import hashlib
 import json
 from flask import Flask, session, request, jsonify, render_template, send_file
-from blockchain import Blockchain, Transaction, WalletManager
+from blockchain import Blockchain, Transaction, WalletManager, PolicySystem
 import time
 import os
 from functools import wraps
@@ -22,8 +22,56 @@ logger = logging.getLogger(__name__)
 MAX_MEMBERS = 20                    # DEV NOTE: THIS SHOULD BE DEFINED IN THE BLOCKCHAIN ISNTANTIATION POLICY BY ADMIN
 
 app = Flask(__name__)
-blockchain = Blockchain()
+
+################
+# CREATING CRISIS
+policy_system = PolicySystem()
+hurricane_policy = policy_system.create_crisis_policy(
+    name="Hurricane Response 2024",
+    organization="Orange Cross",
+    contact="hurricane-response@orangecross.org",
+    description="Emergency response protocol for 2025 Atlantic hurricane season",
+    policy_settings={
+        'block_interval': 180,  # 3 minutes
+        'size_limit': 10240,    # 10KB for more detailed reports
+        'rate_limit': 600,      # 10 minute between messages
+        'priority_levels': {
+            'evacuation': 1,
+            'medical': 2,
+            'shelter': 3,
+            'supplies': 4,
+            'personal': 5
+        },
+        'types': ['check_in', 'message', 'alert', 'damage_report']
+    }
+)
+
+# Activate the hurricane policy
+policy_system.current_policy = hurricane_policy
+##############
+
+# Create the blockchain
+blockchain = Blockchain(policy_system)
+# Create wallet manager for the new blockchain
 blockchain.wallets = WalletManager()
+
+
+########### TESTING IN DEV MODE ###############
+def DEV_POLICY_CHECK():
+    # Get current policy information
+    current_policy = blockchain.policy_system.get_policy()
+    print(f"Crisis: {current_policy['name']}")
+    print(f"Organization: {current_policy['organization']}")
+    print(f"Contact: {current_policy['contact']}")
+    print(f"Description: {current_policy['description']}")
+
+    # Get specific policy setting
+    block_interval = current_policy['policy']['block_interval']
+    print(f"block_interval: {block_interval}")
+    
+# Call policy check after the blockchain and policy are instatiated
+DEV_POLICY_CHECK()
+########### TESTING IN DEV MODE ###############
 
 # Admin token setup : this is for the organization hosting the entire KriSYS system for a given disaster
 ADMIN_TOKEN = os.getenv('ADMIN_TOKEN', 'default_admin_token_please_change')
@@ -325,6 +373,25 @@ def get_address_qr(family_id: str, address: str):
         logger.error(f"QR generation error: {str(e)}")
         return jsonify({"error": "QR generation failed"}), 500
 
+
+# DEV NOTE: Checking policy details at this endpoint, consider removing if not needed in prod
+@app.route('/policy', methods=['GET'])
+def get_current_policy():
+    policy = blockchain.policy_system.get_policy()
+    return jsonify(policy)
+
+# Change the blockchain's policy details after it's been initialized
+@app.route('/admin/policy', methods=['POST'])
+@admin_required
+def set_policy():
+    data = request.json
+    policy_id = data.get('policy_id')
+    if policy_id in blockchain.policy_system.policies:
+        blockchain.policy_system.current_policy = policy_id
+        return jsonify({"status": "success", "policy": policy_id})
+    return jsonify({"error": "Invalid Policy ID provided"}), 400
+
+# Check in stations with templated message data
 @app.route('/checkin', methods=['POST'])
 def check_in():
     """Process QR code scan and create check-in transaction"""
