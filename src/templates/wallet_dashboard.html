@@ -1,169 +1,488 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>KriSYS Family Wallet</title>
     <style>
         :root {
-            --primary: #2c3e50;
-            --secondary: #3498db;
-            --light: #ecf0f1;
-            --dark: #34495e;
+            --primary: #2563eb;
+            --secondary: #3b82f6;
+            --dark: #1e3a8a;
+            --light: #eff6ff;
+            --gray: #6b7280;
         }
-        body { font-family: 'Segoe UI', sans-serif; background-color: #f5f7fa; }
-        .dashboard { display: grid; grid-template-columns: 250px 1fr; height: 100vh; }
-        .sidebar { background: var(--primary); color: white; padding: 20px; }
-        .main-content { padding: 20px; overflow-y: auto; }
-        .card { background: white; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); padding: 20px; margin-bottom: 20px; }
-        .btn { background: var(--secondary); color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; }
-        .member-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; }
-        .member-card { border: 1px solid #ddd; border-radius: 8px; padding: 15px; }
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+            color: #1f2937;
+            line-height: 1.6;
+        }
+        .dashboard-container {
+            display: grid;
+            grid-template-columns: 280px 1fr;
+            min-height: 100vh;
+        }
+        /* Sidebar Styles */
+        .sidebar {
+            background: linear-gradient(180deg, var(--dark) 0%, var(--primary) 100%);
+            color: white;
+            padding: 2rem 1.5rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            z-index: 10;
+        }
+        .wallet-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 2rem;
+        }
+        .wallet-icon {
+            width: 40px;
+            height: 40px;
+            background: var(--secondary);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+        }
+        .wallet-info h2 {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+        .wallet-id {
+            font-size: 0.85rem;
+            opacity: 0.8;
+            word-break: break-all;
+        }
+        .nav-menu {
+            list-style: none;
+        }
+        .nav-item {
+            margin-bottom: 0.5rem;
+        }
+        .nav-link {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            color: rgba(255, 255, 255, 0.9);
+            text-decoration: none;
+            transition: all 0.3s ease;
+        }
+        .nav-link:hover, .nav-link.active {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+        }
+        .nav-icon {
+            width: 24px;
+            text-align: center;
+        }
+        /* Main Content Styles */
+        .main-content {
+            padding: 2rem;
+            overflow-y: auto;
+        }
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+        }
+        .page-title {
+            font-size: 1.75rem;
+            font-weight: 700;
+            color: var(--dark);
+        }
+        .btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .btn:hover {
+            background: var(--dark);
+        }
+        .card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        .card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            overflow: hidden;
+            transition: transform 0.3s ease;
+        }
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 15px rgba(0, 0, 0, 0.1);
+        }
+        .card-header {
+            padding: 1.25rem;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .card-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--dark);
+        }
+        .card-body {
+            padding: 1.25rem;
+        }
+        .member-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 0.75rem 0;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .member-item:last-child {
+            border-bottom: none;
+        }
+        .member-avatar {
+            width: 40px;
+            height: 40px;
+            background: var(--light);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            color: var(--primary);
+        }
+        .member-info {
+            flex: 1;
+        }
+        .member-name {
+            font-weight: 500;
+        }
+        .member-address {
+            font-size: 0.85rem;
+            color: var(--gray);
+            word-break: break-all;
+        }
+        .notification-item {
+            padding: 1rem 0;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .notification-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.5rem;
+        }
+        .notification-title {
+            font-weight: 600;
+            color: var(--dark);
+        }
+        .notification-time {
+            font-size: 0.85rem;
+            color: var(--gray);
+        }
+        .notification-content {
+            color: #4b5563;
+        }
+        /* Responsive */
+        @media (max-width: 768px) {
+            .dashboard-container {
+                grid-template-columns: 1fr;
+            }
+            .sidebar {
+                display: none;
+            }
+        }
     </style>
 </head>
 <body>
-    <div class="dashboard">
+    <div class="dashboard-container">
         <!-- Sidebar -->
-        <div class="sidebar">
-            <h2>Family Wallet</h2>
-            <div id="family-info">
-                <p>Family ID: <span id="family-id">...</span></p>
-                <p>Members: <span id="member-count">0</span></p>
+        <aside class="sidebar">
+            <div class="wallet-header">
+                <div class="wallet-icon">F</div>
+                <div class="wallet-info">
+                    <h2>Family Wallet</h2>
+                    <div class="wallet-id" id="wallet-id-display">Loading...</div>
+                </div>
             </div>
-            <nav>
-                <ul>
-                    <li><a href="#" class="nav-link active" data-page="overview">Overview</a></li>
-                    <li><a href="#" class="nav-link" data-page="members">Members</a></li>
-                    <li><a href="#" class="nav-link" data-page="notifications">Notifications</a></li>
-                    <li><a href="#" class="nav-link" data-page="settings">Settings</a></li>
-                </ul>
-            </nav>
-        </div>
+            
+            <ul class="nav-menu">
+                <li class="nav-item">
+                    <a href="#" class="nav-link active" data-page="overview">
+                        <span class="nav-icon">📊</span>
+                        <span>Overview</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="#" class="nav-link" data-page="members">
+                        <span class="nav-icon">👨‍👩‍👧‍👦</span>
+                        <span>Family Members</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="#" class="nav-link" data-page="notifications">
+                        <span class="nav-icon">🔔</span>
+                        <span>Notifications</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="#" class="nav-link" data-page="security">
+                        <span class="nav-icon">🔒</span>
+                        <span>Security</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="#" class="nav-link" data-page="devices">
+                        <span class="nav-icon">📱</span>
+                        <span>Registered Devices</span>
+                    </a>
+                </li>
+            </ul>
+        </aside>
         
         <!-- Main Content -->
-        <div class="main-content">
+        <main class="main-content">
             <!-- Overview Page -->
-            <div id="overview-page" class="page active">
-                <h1>Family Overview</h1>
+            <div id="overview-page" class="page">
+                <div class="page-header">
+                    <h1 class="page-title">Family Overview</h1>
+                    <button class="btn" id="refresh-btn">
+                        <span>🔄</span> Refresh
+                    </button>
+                </div>
+                
+                <div class="card-grid">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">Family Members</h3>
+                        </div>
+                        <div class="card-body" id="members-overview">
+                            <!-- Dynamically populated -->
+                        </div>
+                    </div>
+                    
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">Recent Activity</h3>
+                        </div>
+                        <div class="card-body" id="recent-activity">
+                            <!-- Dynamically populated -->
+                        </div>
+                    </div>
+                </div>
+                
                 <div class="card">
-                    <h2>Recent Activity</h2>
-                    <div id="recent-activity"></div>
+                    <div class="card-header">
+                        <h3 class="card-title">All Notifications</h3>
+                    </div>
+                    <div class="card-body" id="all-notifications">
+                        <!-- Dynamically populated -->
+                    </div>
                 </div>
             </div>
             
             <!-- Members Page -->
-            <div id="members-page" class="page">
-                <h1>Family Members</h1>
-                <button class="btn" id="add-member-btn">Add Member</button>
-                <div class="member-list" id="member-list"></div>
-            </div>
-            
-            <!-- Notifications Page -->
-            <div id="notifications-page" class="page">
-                <h1>Notifications</h1>
-                <div class="filters">
-                    <select id="notification-filter">
-                        <option value="all">All Notifications</option>
-                        <option value="checkin">Check-ins</option>
-                        <option value="message">Messages</option>
-                    </select>
+            <div id="members-page" class="page" style="display:none;">
+                <div class="page-header">
+                    <h1 class="page-title">Family Members</h1>
+                    <button class="btn" id="add-member-btn">
+                        <span>➕</span> Add Member
+                    </button>
                 </div>
-                <div id="notification-list"></div>
-            </div>
-            
-            <!-- Settings Page -->
-            <div id="settings-page" class="page">
-                <h1>Wallet Settings</h1>
+                
                 <div class="card">
-                    <h2>Device Management</h2>
-                    <div id="registered-devices"></div>
-                    <button class="btn" id="register-device-btn">Register New Device</button>
+                    <div class="card-header">
+                        <h3 class="card-title">Current Members</h3>
+                    </div>
+                    <div class="card-body" id="members-list">
+                        <!-- Dynamically populated -->
+                    </div>
                 </div>
             </div>
-        </div>
+            
+            <!-- Other pages would follow similar structure -->
+        </main>
     </div>
 
     <script>
+        // Wallet Dashboard JavaScript
         document.addEventListener('DOMContentLoaded', () => {
             // Navigation
-            document.querySelectorAll('.nav-link').forEach(link => {
+            const navLinks = document.querySelectorAll('.nav-link');
+            const pages = document.querySelectorAll('.page');
+            
+            navLinks.forEach(link => {
                 link.addEventListener('click', (e) => {
                     e.preventDefault();
-                    document.querySelectorAll('.page').forEach(page => {
-                        page.classList.remove('active')
-                    })
-                    document.querySelectorAll('.nav-link').forEach(link => {
-                        link.classList.remove('active')
-                    })
                     
-                    const pageId = `${e.target.dataset.page}-page`
-                    document.getElementById(pageId).classList.add('active')
-                    e.target.classList.add('active')
-                })
-            })
-
+                    // Update active link
+                    navLinks.forEach(l => l.classList.remove('active'));
+                    link.classList.add('active');
+                    
+                    // Show corresponding page
+                    const targetPage = link.dataset.page;
+                    pages.forEach(page => {
+                        page.style.display = page.id === `${targetPage}-page` ? 'block' : 'none';
+                    });
+                });
+            });
+            
             // Load wallet data
             async function loadWalletData() {
                 try {
-                    const response = await fetch('/wallet/data')
-                    const data = await response.json()
+                    // In real implementation, this would fetch from /wallet/data
+                    const walletData = {
+                        family_id: 'fam_2e3a8a1b4c5d',
+                        members: [
+                            { id: 'm1', name: 'John Doe', address: 'addr_1a2b3c4d', last_seen: '2 hours ago' },
+                            { id: 'm2', name: 'Jane Smith', address: 'addr_5e6f7g8h', last_seen: '5 hours ago' },
+                            { id: 'm3', name: 'Alex Johnson', address: 'addr_9i0j1k2l', last_seen: '1 day ago' }
+                        ],
+                        notifications: [
+                            { 
+                                id: 'n1', 
+                                type: 'checkin', 
+                                title: 'Medical Check-in', 
+                                content: 'John checked in at Medical Station 3', 
+                                time: '2 hours ago',
+                                member: 'm1'
+                            },
+                            { 
+                                id: 'n2', 
+                                type: 'message', 
+                                title: 'New Message', 
+                                content: 'Jane sent: "We have extra supplies"', 
+                                time: '4 hours ago',
+                                member: 'm2'
+                            }
+                        ]
+                    };
                     
                     // Update UI
-                    document.getElementById('family-id').textContent = data.family_id
-                    document.getElementById('member-count').textContent = data.members.length
+                    document.getElementById('wallet-id-display').textContent = walletData.family_id;
+                    renderMembersOverview(walletData.members);
+                    renderMembersList(walletData.members);
+                    renderNotifications(walletData.notifications);
                     
-                    // Render members
-                    renderMembers(data.members)
-                    
-                    // Render notifications
-                    renderNotifications(data.notifications)
-                    
-                    // Render registered devices
-                    renderDevices(data.registered_devices)
                 } catch (error) {
-                    console.error('Failed to load wallet data:', error)
+                    console.error('Failed to load wallet data:', error);
+                    alert('Error loading wallet data. Please try again.');
                 }
             }
-
-            function renderMembers(members) {
-                const container = document.getElementById('member-list')
-                container.innerHTML = ''
+            
+            function renderMembersOverview(members) {
+                const container = document.getElementById('members-overview');
+                container.innerHTML = '';
+                
+                members.slice(0, 3).forEach(member => {
+                    const memberEl = document.createElement('div');
+                    memberEl.className = 'member-item';
+                    memberEl.innerHTML = `
+                        <div class="member-avatar">${member.name.charAt(0)}</div>
+                        <div class="member-info">
+                            <div class="member-name">${member.name}</div>
+                            <div class="member-address">${member.address}</div>
+                            <div class="member-status">Last seen: ${member.last_seen}</div>
+                        </div>
+                    `;
+                    container.appendChild(memberEl);
+                });
+                
+                if (members.length > 3) {
+                    const moreEl = document.createElement('div');
+                    moreEl.className = 'member-item';
+                    moreEl.innerHTML = `
+                        <div class="member-avatar">+${members.length - 3}</div>
+                        <div class="member-info">
+                            <div class="member-name">${members.length - 3} more members</div>
+                            <div>View all in Members section</div>
+                        </div>
+                    `;
+                    container.appendChild(moreEl);
+                }
+            }
+            
+            function renderMembersList(members) {
+                const container = document.getElementById('members-list');
+                container.innerHTML = '';
                 
                 members.forEach(member => {
-                    const memberCard = document.createElement('div')
-                    memberCard.className = 'member-card'
-                    memberCard.innerHTML = `
-                        <h3>${member.label}</h3>
-                        <p>${member.address}</p>
-                        <button class="btn edit-member" data-id="${member.address}">Edit</button>
-                        <button class="btn view-profile" data-id="${member.address}">Profile</button>
-                    `
-                    container.appendChild(memberCard)
-                })
+                    const memberEl = document.createElement('div');
+                    memberEl.className = 'member-item';
+                    memberEl.innerHTML = `
+                        <div class="member-avatar">${member.name.charAt(0)}</div>
+                        <div class="member-info">
+                            <div class="member-name">${member.name}</div>
+                            <div class="member-address">${member.address}</div>
+                        </div>
+                        <div class="member-actions">
+                            <button class="btn-icon" title="Edit">✏️</button>
+                            <button class="btn-icon" title="View Profile">👤</button>
+                            <button class="btn-icon" title="Generate QR">📇</button>
+                        </div>
+                    `;
+                    container.appendChild(memberEl);
+                });
             }
-
+            
             function renderNotifications(notifications) {
-                const container = document.getElementById('notification-list')
-                container.innerHTML = ''
+                const recentContainer = document.getElementById('recent-activity');
+                const allContainer = document.getElementById('all-notifications');
                 
-                notifications.forEach(notification => {
-                    const notifElement = document.createElement('div')
-                    notifElement.className = 'notification'
-                    notifElement.innerHTML = `
+                recentContainer.innerHTML = '';
+                allContainer.innerHTML = '';
+                
+                notifications.slice(0, 2).forEach(notif => {
+                    const notifEl = document.createElement('div');
+                    notifEl.className = 'notification-item';
+                    notifEl.innerHTML = `
                         <div class="notification-header">
-                            <strong>${notification.type === 'checkin' ? 'Check-in' : 'Message'}</strong>
-                            <span>${new Date(notification.timestamp).toLocaleString()}</span>
+                            <div class="notification-title">${notif.title}</div>
+                            <div class="notification-time">${notif.time}</div>
                         </div>
-                        <div class="notification-body">
-                            <p>${notification.message}</p>
-                            <p>From: ${notification.sender}</p>
+                        <div class="notification-content">${notif.content}</div>
+                    `;
+                    recentContainer.appendChild(notifEl);
+                });
+                
+                notifications.forEach(notif => {
+                    const notifEl = document.createElement('div');
+                    notifEl.className = 'notification-item';
+                    notifEl.innerHTML = `
+                        <div class="notification-header">
+                            <div class="notification-title">${notif.title}</div>
+                            <div class="notification-time">${notif.time}</div>
                         </div>
-                    `
-                    container.appendChild(notifElement)
-                })
+                        <div class="notification-content">${notif.content}</div>
+                    `;
+                    allContainer.appendChild(notifEl);
+                });
             }
-
+            
             // Initialize
-            loadWalletData()
-        })
+            loadWalletData();
+            
+            // Event listeners
+            document.getElementById('refresh-btn').addEventListener('click', loadWalletData);
+            document.getElementById('add-member-btn').addEventListener('click', () => {
+                alert('Add member functionality will be implemented');
+            });
+        });
     </script>
 </body>
 </html>

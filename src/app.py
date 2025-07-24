@@ -1,11 +1,12 @@
 import hashlib
 import json
-from flask import Flask, request, jsonify, render_template, send_file
+from flask import Flask, session, request, jsonify, render_template, send_file
 import time
 import os
 from functools import wraps
 from blockchain import Blockchain, Transaction
 from database import db_connection
+import pgpy
 import secrets
 import qrcode
 import base64
@@ -101,6 +102,50 @@ def get_address_transactions(address):
             if address in tx.related_addresses:
                 txs.append(tx.to_dict())
     return jsonify(txs), 200
+
+# Authentication challenge via PGP
+@app.route('auth/challenge', methods=['GET'])
+def get_auth_challenge():
+    """Generate authentication challenge"""
+    challenge = secrets.token_hex(16)
+    session['auth_challenge'] = challenge
+    return jsonify({"challenge": challenge})
+
+@app.route('/auth/login', methods=['POST'])
+def pgp_login():
+    """Authenticate using PGP signature"""
+    data = request.json
+    challenge = session.get('auth_challenge')
+    signature = data.get('signature')
+    fingerprint = data.get('fingerprint')
+    
+    if not challenge or not signature or not fingerprint:
+        return jsonify({"error": "Missing authentication data"}), 400
+    
+    try:
+        # Retrieve public key from blockchain
+        public_key = get_public_key(fingerprint)  # Implement this function
+        
+        # Verify signature
+        signed_challenge = pgpy.PGPMessage.from_blob(signature)
+        if public_key.verify(challenge, signed_challenge):
+            # Create session
+            session['wallet_fingerprint'] = fingerprint
+            return jsonify({"status": "authenticated"})
+        else:
+            return jsonify({"error": "Invalid signature"}), 401
+    except Exception as e:
+        logger.error(f"PGP login error: {str(e)}")
+        return jsonify({"error": "Authentication failed"}), 500
+
+def get_public_key(fingerprint):
+    """Retrieve public key from blockchain (simplified)"""
+    # In real implementation, this would query the blockchain
+    # For now, we'll use a mock
+    key, _ = pgpy.PGPKey.from_file('path/to/public_key.asc')
+    return key
+#### END SIMPLE AUTH
+
 
 # Admin endpoint for manual mining
 @app.route('/admin/mine', methods=['POST'])
@@ -238,7 +283,23 @@ def check_in():
 #     Device->>Server: Submit challenge response + device ID
 #     Server->>Device: Confirm registration
 #     Device->>LocalStorage: Store encrypted credentials
+
+
+# sequenceDiagram -> WALLET AUTH FLOW
+#     participant Client
+#     participant Server
+#     participant Blockchain
+#     Client->>Server: Request challenge
+#     Server->>Client: Send nonce
+#     Client->>Client: Sign nonce with private key
+#     Client->>Server: Send signed nonce + public key fingerprint
+#     Server->>Blockchain: Retrieve public key by fingerprint
+#     Blockchain->>Server: Return public key
+#     Server->>Server: Verify signature
+#     Server->>Client: Auth token if valid
+
 ###########################
+
 # Wallet Data Endpoint
 @app.route('/wallet/data', methods=['GET'])
 def get_wallet_data():

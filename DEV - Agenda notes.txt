@@ -11,6 +11,22 @@ Family/Group wallets should be able to add new members, label them with names, v
 
 Family wallet must be protected by password for backup, but ideally the family devices can register their TPM (Trusted Platform Module) built into their devices to decrypt messages and labels, provide access to the dashboard, and to allow offline/online transactions to get posted from their address and signatures. PGP key pairs with the blockchain provider issuing a public key to all users on the network is ideal to safeguard message data and prevent "LOG4J" brand of attacks via sql injection or other similar security situations requiring input sanitization at the server's API.
 
+Need to consider default method of message verification (fingerprint or signature via PGP?) and the blockchain should have its own key pair, issuing all wallets the public key to ensure public chain does not leak personal details in any of the transactions posted by any of the users when they submit new messages.
+
+WALLET AUTHENTICATION FLOW
+sequenceDiagram
+    participant Client
+    participant Server
+    participant Blockchain
+    Client->>Server: Request challenge
+    Server->>Client: Send nonce
+    Client->>Client: Sign nonce with private key
+    Client->>Server: Send signed nonce + public key fingerprint
+    Server->>Blockchain: Retrieve public key by fingerprint
+    Blockchain->>Server: Return public key
+    Server->>Server: Verify signature
+    Server->>Client: Auth token if valid
+
 
 PHASE 2.1 - DEVELOPMENT ROADMAP
 
