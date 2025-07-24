@@ -1,4 +1,3 @@
-// Add to wallet_dashboard.js
 async function authenticateWithPGP() {
     try {
         // Step 1: Get challenge
@@ -43,3 +42,30 @@ async function signMessage(message) {
     // return signature;
     return "mock-signature-for-development";
 }
+
+async function loadWalletData() {
+    try {
+        const familyId = "fam_12345"; // Should come from user session
+        const response = await fetch(`/wallet/${familyId}`);
+        const walletData = await response.json();
+        
+        if (walletData.error) {
+            showError(walletData.error);
+            return;
+        }
+        
+        // Update UI with wallet data
+        renderMembers(walletData.members);
+        renderDevices(walletData.devices);
+        renderNotifications(walletData.notifications);
+        
+    } catch (error) {
+        console.error('Failed to load wallet data:', error);
+        showError("Couldn't load wallet information");
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    initAuthentication();
+    loadWalletData();
+});

@@ -1,3 +1,4 @@
+# blockchain.py
 import hashlib
 import json
 import time
@@ -6,6 +7,7 @@ import pgpy
 from pgpy.constants import PubKeyAlgorithm, KeyFlags, HashAlgorithm, SymmetricKeyAlgorithm
 import threading
 import logging
+import secrets
 from typing import List, Dict, Optional
 from database import init_db, db_connection
 
@@ -100,21 +102,187 @@ class Block:
             "hash": self.hash,
             "nonce": self.nonce
         }
+        
+class Wallet:
+    def __init__(self, family_id):
+        self.family_id = family_id
+        self.auth = WalletAuth()
+        self.keypair = self.auth.generate_keypair()
+        self.keypair_str = str(self.keypair)
+        self.members = []
+        self.devices = []
+    
+    def add_member(self, name):
+        """Add new family member"""
+        member_id = f"{self.family_id}-{secrets.token_hex(4)}"
+        keypair = self.auth.generate_keypair()
+        keypair_str = str(keypair)
+        self.members.append({
+            "id": member_id,
+            "name": name,
+            "address": member_id,
+            "keypair": keypair_str
+        })
+        return member_id
+    
+    def register_device(self, device_id, public_key):
+        """Register new device for wallet access"""
+        
+        # Ensure we have a public key
+        if not public_key.is_public:
+            public_key = public_key.pubkey
+        
+        # Create device object
+        public_key_str = str(public_key)
+        device = {
+            "device_id": device_id,
+            "public_key": public_key_str,
+            "registered_at": time.time()
+        }
+        
+        # Encrypt credentials
+        creds = pgpy.PGPMessage.new(json.dumps({
+            "wallet_id": self.family_id,
+            "access_level": "full"
+        }))
+        encrypted_creds = public_key.encrypt(creds)
+        device["encrypted_creds"] = str(encrypted_creds)
+        
+        # Store device
+        self.devices.append(device)
+        return public_key_str
+        # return encrypted_creds
+
+class WalletManager:
+    def __init__(self):
+        """Initialize wallet manager with in-memory cache"""
+        self.wallets = {}  # In-memory cache: family_id -> Wallet object
+    
+    def create_wallet(self, family_id, members):
+        """
+        Create a new wallet and store in database
+        :param family_id: Unique family identifier
+        :param members: List of member objects (each with 'name')
+        :return: Wallet object
+        """
+        # Create wallet instance
+        wallet = Wallet(family_id)
+        
+        # Add members to wallet
+        for member in members:
+            wallet.add_member(member['name'])
+        
+        # Save to database
+        with db_connection() as conn:
+            # Convert members to serializable format
+            serializable_members = [{
+                "id": m["id"],
+                "name": m["name"],
+                "address": m["address"],
+                "keypair_str": m["keypair"]
+            } for m in wallet.members]
+            # Convert devices to serializable format
+            serializable_devices = [{
+                "device_id": d["device_id"],
+                "public_key_str": d["public_key"],
+                "registered_at": d["registered_at"]
+            } for d in wallet.devices]
+            
+            conn.execute(
+                "INSERT INTO wallets (family_id, members, devices) VALUES (?, ?, ?)",
+                (family_id, 
+                 json.dumps(serializable_members),
+                 json.dumps(serializable_devices))
+            )
+            conn.commit()
+        
+        # Cache in memory
+        self.wallets[family_id] = wallet
+        return wallet
+    
+    def get_wallet(self, family_id):
+        """
+        Retrieve wallet by family ID
+        :param family_id: Family identifier to retrieve
+        :return: Wallet object or None if not found
+        """
+        # First check in-memory cache
+        if family_id in self.wallets:
+            return self.wallets[family_id]
+        
+        # Then check database
+        with db_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM wallets WHERE family_id = ?",
+                (family_id,)
+            ).fetchone()
+            
+            if row:
+                # Reconstruct wallet from database
+                wallet = Wallet(row['family_id'])
+                wallet.members = json.loads(row['members'])
+                wallet.devices = json.loads(row.get('devices', '[]'))
+                
+                # Add to cache
+                self.wallets[family_id] = wallet
+                return wallet
+        
+        return None
+    
+    def add_device_to_wallet(self, family_id, device_id, public_key):
+        """
+        Register a new device for a wallet
+        :param family_id: Family identifier
+        :param device_id: Unique device identifier
+        :param public_key: Device's public key
+        :return: True if successful, False otherwise
+        """
+        wallet = self.get_wallet(family_id)
+        if not wallet:
+            return False
+        
+        # Add device to wallet
+        encrypted_creds = wallet.register_device(device_id, public_key)
+        
+        # Update database
+        with db_connection() as conn:
+            conn.execute(
+                "UPDATE wallets SET devices = ? WHERE family_id = ?",
+                (json.dumps(wallet.devices), family_id)
+            )
+            conn.commit()
+        
+        return True
+    
+    def delete_wallet(self, family_id):
+        """Delete wallet by family ID"""
+        # Remove from cache
+        if family_id in self.wallets:
+            del self.wallets[family_id]
+
+        # Delete from database
+        with db_connection() as conn:
+            conn.execute(
+                "DELETE FROM wallets WHERE family_id = ?",
+                (family_id,)
+            )
+            conn.commit()
 
 class Blockchain:
     def __init__(self):
         self.chain: List[Block] = []
         self.pending_transactions: List[Transaction] = []
         self.block_interval = POLICY['block_interval']
+        self.wallets = WalletManager()  # Initialize wallet manager
         
         # Initialize database
-        init_db()
+        init_db()  # This creates all tables including wallets
         
         # Load existing chain or create genesis
         if not self.load_chain():
             self.create_genesis_block()
         
-        # Start automatic background miner (DEV NOTE: set by the blockchain host's POLICY at initalization)
+        # Start automatic background miner
         self.miner_thread = threading.Thread(target=self.miner_loop, daemon=True)
         self.miner_thread.start()
     
@@ -394,38 +562,30 @@ class WalletAuth:
         """Fallback password authentication"""
         # Compare with stored hash
         pass
-    
-# blockchain.py
-class Wallet:
-    def __init__(self, family_id):
-        self.family_id = family_id
-        self.auth = WalletAuth()
-        self.keypair = self.auth.generate_keypair()
-        self.members = []
-        self.devices = []
-    
-    def add_member(self, name):
-        """Add new family member"""
-        member_id = f"{self.family_id}-{secrets.token_hex(4)}"
-        self.members.append({
-            "id": member_id,
-            "name": name,
-            "address": member_id,
-            "keypair": self.auth.generate_keypair()
-        })
-        return member_id
-    
-    def register_device(self, device_id, public_key):
-        """Register new device for wallet access"""
-        # Encrypt credentials with device's public key
-        creds = pgpy.PGPMessage.new(json.dumps({
-            "wallet_id": self.family_id,
-            "access_level": "full"
-        }))
-        encrypted_creds = public_key.encrypt(creds)
-        
-        self.auth.register_device(device_id, public_key, encrypted_creds)
-        self.devices.append(device_id)
-        return encrypted_creds
-    
-    
+
+######### WIP
+
+
+######### WALLET DATA IMPLEMENTATION NOTES: ############
+# app.py:
+# 	- Uses blockchain.wallets.create_wallet() to create wallets
+# 	- Uses blockchain.wallets.get_wallet() to retrieve wallets
+# Blockchain:
+# 	- Contains WalletManager instance as self.wallets
+# 	- Delegates wallet operations to the wallet manager
+# WalletManager:
+# 	- Handles database persistence
+# 	- Manages in-memory cache of wallets
+# 	- Implements CRUD operations for wallets
+# Wallet:
+# 	- Represents a single family wallet
+# 	- Contains members and devices
+# 	- Handles business logic (adding members/devices)
+# WalletAuth:
+# 	- Handles authentication mechanisms
+# 	- Manages device registration and credentials
+# Database:
+# 	- Provides connection management
+# 	- Ensures proper table structure
+# 	- Handles SQL execution
+######### WALLET DATA IMPLEMENTATION NOTES: ############

@@ -1,6 +1,7 @@
 import hashlib
 import json
 from flask import Flask, session, request, jsonify, render_template, send_file
+from blockchain import Blockchain, Transaction, WalletManager
 import time
 import os
 from functools import wraps
@@ -22,6 +23,7 @@ MAX_MEMBERS = 20                    # DEV NOTE: THIS SHOULD BE DEFINED IN THE BL
 
 app = Flask(__name__)
 blockchain = Blockchain()
+blockchain.wallets = WalletManager()
 
 # Admin token setup : this is for the organization hosting the entire KriSYS system for a given disaster
 ADMIN_TOKEN = os.getenv('ADMIN_TOKEN', 'default_admin_token_please_change')
@@ -48,6 +50,38 @@ def blockchain_explorer():
 def scanner_interface():
     return render_template('scanner.html')
 #######
+
+# All wallets on blockchain, from blockchain.py methods
+    ######### WALLET DATA IMPLEMENTATION NOTES: ############
+    # app.py:
+    # 	- Uses blockchain.wallets.create_wallet() to create wallets
+    # 	- Uses blockchain.wallets.get_wallet() to retrieve wallets
+    # Blockchain:
+    # 	- Contains WalletManager instance as self.wallets
+    # 	- Delegates wallet operations to the wallet manager
+    # WalletManager:
+    # 	- Handles database persistence
+    # 	- Manages in-memory cache of wallets
+    # 	- Implements CRUD operations for wallets
+    # Wallet:
+    # 	- Represents a single family wallet
+    # 	- Contains members and devices
+    # 	- Handles business logic (adding members/devices)
+    # WalletAuth:
+    # 	- Handles authentication mechanisms
+    # 	- Manages device registration and credentials
+    # Database:
+    # 	- Provides connection management
+    # 	- Ensures proper table structure
+    # 	- Handles SQL execution
+    ######### WALLET DATA IMPLEMENTATION NOTES: ############
+@app.route('/wallet/<family_id>', methods=['GET'])
+def get_wallet(family_id):
+    wallet = blockchain.wallets.get_wallet(family_id)
+    if wallet:
+        return jsonify(wallet)
+    return jsonify({"error": "Wallet not found"}), 404
+
 
 # Submissions from public queue
 @app.route('/transaction', methods=['POST'])
@@ -178,7 +212,7 @@ def register_device():
 ### END wallet auth
 
 # Authentication challenge via PGP
-@app.route('auth/challenge', methods=['GET'])
+@app.route('/auth/challenge', methods=['GET'])
 def get_auth_challenge():
     """Generate authentication challenge"""
     challenge = secrets.token_hex(16)

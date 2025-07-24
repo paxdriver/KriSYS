@@ -46,6 +46,43 @@ graph TD
     G --> J[Generate Addresses]
     G --> K[Register New Devices]
 
+WALLET MANAGER AND BLOCKCHAIN FLOW
+graph TD
+    A[app.py] --> B[Blockchain]
+    B --> C[WalletManager]
+    C --> D[Wallet]
+    D --> E[WalletAuth]
+    C --> F[Database]
+    
+    style A fill:#f9f,stroke:#333
+    style B fill:#bbf,stroke:#333
+    style C fill:#f96,stroke:#333
+    style D fill:#6f9,stroke:#333
+    style E fill:#9cf,stroke:#333
+    style F fill:#cff,stroke:#333
+
+
+>>> TEST WALLET MANAGER AND PGP DEFAULT AUTH
+
+-create wallet
+wallet = blockchain.wallets.create_wallet("fam_123", [{"name": "John Doe"}])
+
+-get wallet
+wallet = blockchain.wallets.get_wallet("fam_123")
+
+-add device
+blockchain.wallets.add_device_to_wallet("fam_123", "device_456", public_key)
+
+
+# Example: Load a public key from string
+from pgpy import PGPKey
+
+public_key = PGPKey()
+public_key.parse(wallet.members[0]["keypair_str"])
+
+<<< TEST WALLET MANAGER AND PGP DEFAULT AUTH
+
+
 
 PHASE 2.1 - DEVELOPMENT ROADMAP
 

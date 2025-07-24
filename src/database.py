@@ -3,7 +3,7 @@ import sqlite3
 import os
 from contextlib import contextmanager
 
-DB_PATH = os.getenv('BLOCKCHAIN_DB_PATH', 'blockchain.db')
+DB_PATH = os.getenv('BLOCKCHAIN_DB_PATH', 'blockchain/blockchain.db')
 
 @contextmanager
 def db_connection():
@@ -50,6 +50,7 @@ def init_db():
             id INTEGER PRIMARY KEY,
             family_id TEXT UNIQUE NOT NULL,
             members TEXT NOT NULL,  -- JSON array of members
+            devices TEXT DEFAULT '[]',  -- Store as JSON array
             created_at REAL DEFAULT (strftime('%s', 'now'))
         )
         ''')
