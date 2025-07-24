@@ -174,13 +174,22 @@ class Block:
         }
         
 class Wallet:
-    def __init__(self, family_id):
+    def __init__(self, family_id, crisis_id):
         self.family_id = family_id
+        self.crisis_id = crisis_id
         self.auth = WalletAuth()
         self.keypair = self.auth.generate_keypair()
         self.keypair_str = str(self.keypair)
         self.members = []
         self.devices = []
+        
+    def to_dict(self):
+        return {
+            "family_id": self.family_id,
+            "crisis_id": self.crisis_id,
+            "members": self.members,
+            "devices": self.devices
+        }
     
     def add_member(self, name):
         """Add new family member"""
@@ -228,7 +237,7 @@ class WalletManager:
         """Initialize wallet manager with in-memory cache"""
         self.wallets = {}  # In-memory cache: family_id -> Wallet object
     
-    def create_wallet(self, family_id, members):
+    def create_wallet(self, family_id, members, crisis_id):
         """
         Create a new wallet and store in database
         :param family_id: Unique family identifier
@@ -236,7 +245,7 @@ class WalletManager:
         :return: Wallet object
         """
         # Create wallet instance
-        wallet = Wallet(family_id)
+        wallet = Wallet(family_id, crisis_id)
         
         # Add members to wallet
         for member in members:
@@ -289,7 +298,7 @@ class WalletManager:
             
             if row:
                 # Reconstruct wallet from database
-                wallet = Wallet(row['family_id'])
+                wallet = Wallet(row['family_id'], row['crisis_id'])
                 wallet.members = json.loads(row['members'])
                 wallet.devices = json.loads(row.get('devices', '[]'))
                 
@@ -341,15 +350,12 @@ class WalletManager:
 class Blockchain:
     def __init__(self, policy_system=None):
         self.policy_system = policy_system or PolicySystem()    # Use provided policy or default if none provided
+        self.crisis_metadata = self.policy_system.get_policy()
         self.chain: List[Block] = []
         self.pending_transactions: List[Transaction] = []
-        self.policy_system = PolicySystem()
         self.wallets = WalletManager()
         
         # Get policy values from PolicySystem
-        
-        # policy_data = self.policy_system.get_policy()
-        # policy_settings = policy_data['policy']
         policy_settings = self.policy_system.get_policy()['policy']
         self.block_interval = policy_settings['block_interval']
         self.max_tx_size = policy_settings['size_limit']

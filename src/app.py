@@ -5,7 +5,6 @@ from blockchain import Blockchain, Transaction, WalletManager, PolicySystem
 import time
 import os
 from functools import wraps
-from blockchain import Blockchain, Transaction
 from database import db_connection
 import pgpy
 import secrets
@@ -93,6 +92,18 @@ def admin_required(f):
 def blockchain_explorer():
     return render_template('index.html')
 
+# Crisis metadata
+@app.route('/crisis', methods=['GET'])
+def get_crisis_info():
+    """Get metadata about the current crisis"""
+    return jsonify({
+        "name": blockchain.crisis_metadata['name'],
+        "organization": blockchain.crisis_metadata['organization'],
+        "contact": blockchain.crisis_metadata['contact'],
+        "description": blockchain.crisis_metadata['description'],
+        "created_at": blockchain.crisis_metadata['created_at']
+    })
+
 # Scanner web interface
 @app.route('/scanner')
 def scanner_interface():
@@ -127,7 +138,12 @@ def scanner_interface():
 def get_wallet(family_id):
     wallet = blockchain.wallets.get_wallet(family_id)
     if wallet:
-        return jsonify(wallet)
+        response = wallet.to_dict()
+        response['crisis'] = {
+            "id": blockchain.crisis_metadata['id'],
+            "name": blockchain.crisis_metadata['name']
+        }
+        return jsonify(response)
     return jsonify({"error": "Wallet not found"}), 404
 
 
@@ -345,12 +361,17 @@ def create_wallet():
         # Save to database DEV NOTE: simplified for now
         with db_connection() as conn:
             conn.execute(
-                "INSERT INTO wallets (family_id, members) VALUES (?, ?)",
-                (family_id, json.dumps(members))
+                "INSERT INTO wallets (family_id, members, crisis_id) VALUES (?, ?, ?)",
+                (family_id, json.dumps(members),
+                blockchain.crisis_metadata['id'])  # Store crisis ID
             )
             conn.commit()
         
-        return jsonify({"family_id": family_id, "members": members}), 201
+        return jsonify({
+            "family_id": family_id,
+            "members": members,
+            "crisis_id": blockchain.crisis_metadata['id']
+            }), 201
 
     except Exception as e:
         logger.error(f"Wallet creation error: {str(e)}")

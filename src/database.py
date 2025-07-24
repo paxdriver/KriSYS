@@ -51,7 +51,8 @@ def init_db():
             family_id TEXT UNIQUE NOT NULL,
             members TEXT NOT NULL,  -- JSON array of members
             devices TEXT DEFAULT '[]',  -- Store as JSON array
-            created_at REAL DEFAULT (strftime('%s', 'now'))
+            created_at REAL DEFAULT (strftime('%s', 'now')),
+            crisis_id TEXT NOT NULL
         )
         ''')
         
