@@ -103,6 +103,80 @@ def get_address_transactions(address):
                 txs.append(tx.to_dict())
     return jsonify(txs), 200
 
+@app.route('/auth/init', methods=['POST'])
+def init_auth():
+    """Begin authentication process"""
+    wallet_id = request.json.get('wallet_id')
+    device_id = request.json.get('device_id')
+    
+    # Generate challenge
+    challenge = secrets.token_hex(32)
+    session['auth_challenge'] = challenge
+    session['auth_wallet'] = wallet_id
+    
+    # Check if device is registered
+    is_registered = device_id in blockchain.get_wallet(wallet_id).devices
+    
+    return jsonify({
+        "challenge": challenge,
+        "device_registered": is_registered
+    })
+
+# WALLET AUTHENTICATION - on devices (PGP-based, password-based, or TPM/device registration)
+@app.route('/auth/verify', methods=['POST'])
+def verify_auth():
+    """Verify authentication signature"""
+    signature = request.json.get('signature')
+    device_id = request.json.get('device_id')
+    wallet_id = session.get('auth_wallet')
+    challenge = session.get('auth_challenge')
+    
+    if not all([signature, wallet_id, challenge]):
+        return jsonify({"error": "Missing authentication data"}), 400
+    
+    wallet = blockchain.get_wallet(wallet_id)
+    if wallet.auth.authenticate(challenge, signature, device_id):
+        # Create session token
+        session_token = secrets.token_urlsafe(32)
+        session['wallet_session'] = session_token
+        return jsonify({"status": "authenticated", "token": session_token})
+    
+    return jsonify({"error": "Authentication failed"}), 401
+
+@app.route('/auth/password', methods=['POST'])
+def password_auth():
+    """Password fallback authentication"""
+    wallet_id = session.get('auth_wallet')
+    password = request.json.get('password')
+    
+    if not password or not wallet_id:
+        return jsonify({"error": "Missing credentials"}), 400
+    
+    wallet = blockchain.get_wallet(wallet_id)
+    if wallet.auth.authenticate_with_password(password):
+        session_token = secrets.token_urlsafe(32)
+        session['wallet_session'] = session_token
+        return jsonify({"status": "authenticated", "token": session_token})
+    
+    return jsonify({"error": "Invalid credentials"}), 401
+
+# Wallet Auth - Device Registration endpoint (TPM module, for eg)
+@app.route('/wallet/register-device', methods=['POST'])
+def register_device():
+    wallet_id = request.json.get('wallet_id')
+    public_key = request.json.get('public_key')
+    device_id = request.json.get('device_id')
+    
+    wallet = blockchain.get_wallet(wallet_id)
+    encrypted_creds = wallet.register_device(device_id, public_key)
+    
+    return jsonify({
+        "status": "registered",
+        "device_id": device_id,
+        "encrypted_creds": str(encrypted_creds)
+    })
+### END wallet auth
+
 # Authentication challenge via PGP
 @app.route('auth/challenge', methods=['GET'])
 def get_auth_challenge():

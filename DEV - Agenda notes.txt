@@ -13,6 +13,11 @@ Family wallet must be protected by password for backup, but ideally the family d
 
 Need to consider default method of message verification (fingerprint or signature via PGP?) and the blockchain should have its own key pair, issuing all wallets the public key to ensure public chain does not leak personal details in any of the transactions posted by any of the users when they submit new messages.
 
+AUTH METHODS (defaults, framework overrides are an option, thank FOSS):
+1) Primary Authentication: PGP-based challenge-response for strong security
+2) Fallback Authentication: Password-based for device recovery
+3) Device Registration: For seamless access on trusted devices
+
 WALLET AUTHENTICATION FLOW
 sequenceDiagram
     participant Client
@@ -26,6 +31,20 @@ sequenceDiagram
     Blockchain->>Server: Return public key
     Server->>Server: Verify signature
     Server->>Client: Auth token if valid
+
+SECURITY ARCHITECTURE
+graph TD
+    A[User] -->|Initiate| B[Wallet Dashboard]
+    B --> C{Device Registered?}
+    C -->|Yes| D[PGP Challenge-Response]
+    C -->|No| E[Password Authentication]
+    D --> F[Access Granted]
+    E --> F
+    F --> G[Manage Wallet]
+    G --> H[Add Members]
+    G --> I[View Notifications]
+    G --> J[Generate Addresses]
+    G --> K[Register New Devices]
 
 
 PHASE 2.1 - DEVELOPMENT ROADMAP

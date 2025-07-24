@@ -363,20 +363,69 @@ class WalletAuth:
     def __init__(self):
         self.device_registry = {}  # device_id: encrypted_credentials
     
-    def register_device(self, device_id, encrypted_creds):
-        """Register a trusted device"""
-        self.device_registry[device_id] = encrypted_creds
+    def generate_keypair(self, passphrase=None):
+        """Generate PGP key pair for wallet"""
+        key = pgpy.PGPKey.new(PubKeyAlgorithm.RSAEncryptOrSign, 4096)
+        uid = pgpy.PGPUID.new('KriSYS Wallet', comment='Auto-generated')
+        key.add_uid(uid, usage={KeyFlags.Sign, KeyFlags.EncryptCommunications},
+                    hashes=[HashAlgorithm.SHA256],
+                    ciphers=[SymmetricKeyAlgorithm.AES256])
+        
+        if passphrase:
+            key.protect(passphrase, SymmetricKeyAlgorithm.AES256, HashAlgorithm.SHA256)
+        
+        return key
     
-    def authenticate(self, device_id=None, password=None):
-        """Flexible authentication"""
+    def register_device(self, device_id, public_key, encrypted_creds):
+        """Register trusted device"""
+        self.device_registry[device_id] = {
+            'public_key': public_key,
+            'creds': encrypted_creds
+        }
+    
+    def authenticate(self, challenge, signature, device_id=None):
+        """Authenticate using either device or password"""
         if device_id and device_id in self.device_registry:
-            return True  # Trusted device
-        elif password and self.verify_password(password):
-            return True
+            public_key = self.device_registry[device_id]['public_key']
+            return public_key.verify(challenge, signature)
         return False
     
-    def verify_password(self, password):
-        # Password verification logic
+    def authenticate_with_password(self, password_hash):
+        """Fallback password authentication"""
+        # Compare with stored hash
         pass
+    
+# blockchain.py
+class Wallet:
+    def __init__(self, family_id):
+        self.family_id = family_id
+        self.auth = WalletAuth()
+        self.keypair = self.auth.generate_keypair()
+        self.members = []
+        self.devices = []
+    
+    def add_member(self, name):
+        """Add new family member"""
+        member_id = f"{self.family_id}-{secrets.token_hex(4)}"
+        self.members.append({
+            "id": member_id,
+            "name": name,
+            "address": member_id,
+            "keypair": self.auth.generate_keypair()
+        })
+        return member_id
+    
+    def register_device(self, device_id, public_key):
+        """Register new device for wallet access"""
+        # Encrypt credentials with device's public key
+        creds = pgpy.PGPMessage.new(json.dumps({
+            "wallet_id": self.family_id,
+            "access_level": "full"
+        }))
+        encrypted_creds = public_key.encrypt(creds)
+        
+        self.auth.register_device(device_id, public_key, encrypted_creds)
+        self.devices.append(device_id)
+        return encrypted_creds
     
     

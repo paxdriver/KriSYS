@@ -314,6 +314,104 @@
                     </div>
                 </div>
             </div>
+
+            <!-- templates/wallet_dashboard.html -->
+            <div id="auth-modal" class="modal">
+                <div class="modal-content">
+                    <h2>Access Family Wallet</h2>
+                    
+                    <!-- Device Authentication -->
+                    <div id="device-auth" style="display:none;">
+                        <p>Authenticating with registered device...</p>
+                        <button id="auth-retry">Retry</button>
+                    </div>
+                    
+                    <!-- Password Fallback -->
+                    <div id="password-auth" style="display:none;">
+                        <label>Enter Wallet Password:</label>
+                        <input type="password" id="wallet-password">
+                        <button id="password-submit">Authenticate</button>
+                    </div>
+                    
+                    <!-- Device Registration -->
+                    <div id="device-registration" style="display:none;">
+                        <p>Register this device for future access</p>
+                        <button id="register-device">Register Device</button>
+                    </div>
+                </div>
+            </div>
+
+            <script>
+                // Authentication Flow
+                async function initAuthentication(walletId) {
+                    // Check if device ID exists
+                    const deviceId = localStorage.getItem('krisys_device_id') || generateDeviceId();
+                    
+                    const response = await fetch('/auth/init', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            wallet_id: walletId,
+                            device_id: deviceId
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.device_registered) {
+                        // Sign challenge with device key
+                        const signature = await signChallenge(data.challenge);
+                        verifyAuthentication(signature, deviceId);
+                    } else {
+                        // Show password or registration options
+                        document.getElementById('password-auth').style.display = 'block';
+                        document.getElementById('device-registration').style.display = 'block';
+                    }
+                }
+                
+                async function verifyAuthentication(signature, deviceId) {
+                    const response = await fetch('/auth/verify', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            signature: signature,
+                            device_id: deviceId
+                        })
+                    });
+                    
+                    const result = await response.json();
+                    if (result.status === 'authenticated') {
+                        localStorage.setItem('wallet_session', result.token);
+                        loadDashboard();
+                    } else {
+                        showError("Authentication failed. Please try again.");
+                    }
+                }
+                
+                async function registerDevice(walletId, publicKey) {
+                    const response = await fetch('/wallet/register-device', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            wallet_id: walletId,
+                            public_key: publicKey,
+                            device_id: localStorage.getItem('krisys_device_id')
+                        })
+                    });
+                    
+                    const result = await response.json();
+                    if (result.status === 'registered') {
+                        initAuthentication(walletId);
+                    }
+                }
+                
+                // Generate device ID on first use
+                function generateDeviceId() {
+                    const deviceId = 'device_' + Math.random().toString(36).substr(2, 9);
+                    localStorage.setItem('krisys_device_id', deviceId);
+                    return deviceId;
+                }
+            </script>
             
             <!-- Other pages would follow similar structure -->
         </main>
