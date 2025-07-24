@@ -1,3 +1,4 @@
+// /src/wallet_dashboard.js
 async function authenticateWithPGP() {
     try {
         // Step 1: Get challenge
