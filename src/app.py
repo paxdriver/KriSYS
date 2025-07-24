@@ -204,6 +204,97 @@ def check_in():
         logger.error(f"Check-in error: {str(e)}")
         return jsonify({"error": str(e)}), 400
 
+
+
+
+
+
+
+###########################
+#  Dev NOTE: Implementation Details for family/group wallet management of addresses and notifications
+
+# graph TD -> WALLET MANAGEMENT SYSTEM ARCHITECTURE
+#     A[Family Wallet] --> B[Authentication]
+#     A --> C[Member Management]
+#     A --> D[Address Generation]
+#     A --> E[Notifications]
+#     B --> B1[Password/Device Auth]
+#     C --> C1[Add Members]
+#     C --> C2[Edit Labels]
+#     D --> D1[New Addresses]
+#     E --> E1[All Transactions]
+#     E --> E2[Individual Filters]
+
+ 
+# sequenceDiagram -> DEVICE REGISTRATION FLOW
+#     participant User
+#     participant Device
+#     participant Server
+#     User->>Device: Initiate device registration
+#     Device->>Server: Request registration challenge
+#     Server->>Device: Send encrypted challenge
+#     Device->>User: Prompt for wallet password
+#     User->>Device: Enter password
+#     Device->>Server: Submit challenge response + device ID
+#     Server->>Device: Confirm registration
+#     Device->>LocalStorage: Store encrypted credentials
+###########################
+# Wallet Data Endpoint
+@app.route('/wallet/data', methods=['GET'])
+def get_wallet_data():
+    # In production: verify authentication
+    family_id = request.args.get('family_id')
+    
+    # Mock data - will be replaced with real DB queries
+    return jsonify({
+        "family_id": family_id,
+        "members": [
+            {"address": f"{family_id}-0", "label": "John Doe"},
+            {"address": f"{family_id}-1", "label": "Jane Smith"}
+        ],
+        "notifications": [
+            {
+                "type": "checkin",
+                "timestamp": time.time() - 3600,
+                "message": "Checked in at Medical Station",
+                "sender": "Medical Station 1"
+            },
+            {
+                "type": "message",
+                "timestamp": time.time() - 7200,
+                "message": "We have supplies at Shelter 3",
+                "sender": "Shelter Coordinator"
+            }
+        ],
+        "registered_devices": ["mobile-12345", "tablet-67890"]
+    })
+
+# Add New Member in Wallet Endpoint
+@app.route('/wallet/member', methods=['POST'])
+def add_wallet_member():
+    family_id = request.json.get('family_id')
+    label = request.json.get('label')
+    
+    # Generate new address
+    new_address = f"{family_id}-{secrets.token_hex(4)}"
+    
+    # Add to database
+    with db_connection() as conn:
+        conn.execute(
+            "UPDATE wallets SET members = json_insert(members, '$[#]', json_object('address', ?, 'label', ?)) WHERE family_id = ?",
+            (new_address, label, family_id)
+        )
+        conn.commit()
+    
+    return jsonify({
+        "status": "success",
+        "new_member": {"address": new_address, "label": label}
+    }), 201
+#################
+
+
+
+
 if __name__ == '__main__':
     # Start background miner thread in production
     app.run(host='0.0.0.0', port=5000)

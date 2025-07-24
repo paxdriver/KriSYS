@@ -309,3 +309,24 @@ class Blockchain:
                 return False
                 
         return True
+    
+# Wallet login to decrypt and make visible labels, messages and data related to addresses belonging to this group
+class WalletAuth:
+    def __init__(self):
+        self.device_registry = {}  # device_id: encrypted_credentials
+    
+    def register_device(self, device_id, encrypted_creds):
+        """Register a trusted device"""
+        self.device_registry[device_id] = encrypted_creds
+    
+    def authenticate(self, device_id=None, password=None):
+        """Flexible authentication"""
+        if device_id and device_id in self.device_registry:
+            return True  # Trusted device
+        elif password and self.verify_password(password):
+            return True
+        return False
+    
+    def verify_password(self, password):
+        # Password verification logic
+        pass

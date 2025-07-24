@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>KriSYS Family Wallet</title>
+    <style>
+        :root {
+            --primary: #2c3e50;
+            --secondary: #3498db;
+            --light: #ecf0f1;
+            --dark: #34495e;
+        }
+        body { font-family: 'Segoe UI', sans-serif; background-color: #f5f7fa; }
+        .dashboard { display: grid; grid-template-columns: 250px 1fr; height: 100vh; }
+        .sidebar { background: var(--primary); color: white; padding: 20px; }
+        .main-content { padding: 20px; overflow-y: auto; }
+        .card { background: white; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); padding: 20px; margin-bottom: 20px; }
+        .btn { background: var(--secondary); color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; }
+        .member-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; }
+        .member-card { border: 1px solid #ddd; border-radius: 8px; padding: 15px; }
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <h2>Family Wallet</h2>
+            <div id="family-info">
+                <p>Family ID: <span id="family-id">...</span></p>
+                <p>Members: <span id="member-count">0</span></p>
+            </div>
+            <nav>
+                <ul>
+                    <li><a href="#" class="nav-link active" data-page="overview">Overview</a></li>
+                    <li><a href="#" class="nav-link" data-page="members">Members</a></li>
+                    <li><a href="#" class="nav-link" data-page="notifications">Notifications</a></li>
+                    <li><a href="#" class="nav-link" data-page="settings">Settings</a></li>
+                </ul>
+            </nav>
+        </div>
+        
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Overview Page -->
+            <div id="overview-page" class="page active">
+                <h1>Family Overview</h1>
+                <div class="card">
+                    <h2>Recent Activity</h2>
+                    <div id="recent-activity"></div>
+                </div>
+            </div>
+            
+            <!-- Members Page -->
+            <div id="members-page" class="page">
+                <h1>Family Members</h1>
+                <button class="btn" id="add-member-btn">Add Member</button>
+                <div class="member-list" id="member-list"></div>
+            </div>
+            
+            <!-- Notifications Page -->
+            <div id="notifications-page" class="page">
+                <h1>Notifications</h1>
+                <div class="filters">
+                    <select id="notification-filter">
+                        <option value="all">All Notifications</option>
+                        <option value="checkin">Check-ins</option>
+                        <option value="message">Messages</option>
+                    </select>
+                </div>
+                <div id="notification-list"></div>
+            </div>
+            
+            <!-- Settings Page -->
+            <div id="settings-page" class="page">
+                <h1>Wallet Settings</h1>
+                <div class="card">
+                    <h2>Device Management</h2>
+                    <div id="registered-devices"></div>
+                    <button class="btn" id="register-device-btn">Register New Device</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // Navigation
+            document.querySelectorAll('.nav-link').forEach(link => {
+                link.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    document.querySelectorAll('.page').forEach(page => {
+                        page.classList.remove('active')
+                    })
+                    document.querySelectorAll('.nav-link').forEach(link => {
+                        link.classList.remove('active')
+                    })
+                    
+                    const pageId = `${e.target.dataset.page}-page`
+                    document.getElementById(pageId).classList.add('active')
+                    e.target.classList.add('active')
+                })
+            })
+
+            // Load wallet data
+            async function loadWalletData() {
+                try {
+                    const response = await fetch('/wallet/data')
+                    const data = await response.json()
+                    
+                    // Update UI
+                    document.getElementById('family-id').textContent = data.family_id
+                    document.getElementById('member-count').textContent = data.members.length
+                    
+                    // Render members
+                    renderMembers(data.members)
+                    
+                    // Render notifications
+                    renderNotifications(data.notifications)
+                    
+                    // Render registered devices
+                    renderDevices(data.registered_devices)
+                } catch (error) {
+                    console.error('Failed to load wallet data:', error)
+                }
+            }
+
+            function renderMembers(members) {
+                const container = document.getElementById('member-list')
+                container.innerHTML = ''
+                
+                members.forEach(member => {
+                    const memberCard = document.createElement('div')
+                    memberCard.className = 'member-card'
+                    memberCard.innerHTML = `
+                        <h3>${member.label}</h3>
+                        <p>${member.address}</p>
+                        <button class="btn edit-member" data-id="${member.address}">Edit</button>
+                        <button class="btn view-profile" data-id="${member.address}">Profile</button>
+                    `
+                    container.appendChild(memberCard)
+                })
+            }
+
+            function renderNotifications(notifications) {
+                const container = document.getElementById('notification-list')
+                container.innerHTML = ''
+                
+                notifications.forEach(notification => {
+                    const notifElement = document.createElement('div')
+                    notifElement.className = 'notification'
+                    notifElement.innerHTML = `
+                        <div class="notification-header">
+                            <strong>${notification.type === 'checkin' ? 'Check-in' : 'Message'}</strong>
+                            <span>${new Date(notification.timestamp).toLocaleString()}</span>
+                        </div>
+                        <div class="notification-body">
+                            <p>${notification.message}</p>
+                            <p>From: ${notification.sender}</p>
+                        </div>
+                    `
+                    container.appendChild(notifElement)
+                })
+            }
+
+            // Initialize
+            loadWalletData()
+        })
+    </script>
+</body>
+</html>

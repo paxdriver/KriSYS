@@ -1,0 +1,40 @@
+Encrypted Label Storage:
+	- Use family's public key to encrypt labels
+	- Store encrypted labels in wallets table
+	- Decrypt client-side with private key derived from password
+
+IDEA OF WALLET AND ADDRESS MANAGEMENT SYSTEM FEATURES:
+
+The idea is addresses related to a wallet (family/group) should be able to label addresses of that group so that each can be easily associated with members of the group, but we don't want that information to be visible to anyone on the blockchain, only the family themselves. Other people can add individuals to their wallets and label those people themselves and that would be encrypted on that other person's contact list, whether the information they enter is right or wrong is irrelevent, the lable is stored as a transaction type and encrypted allowing only the person/group who entered the label to read it in plain english.
+
+Family/Group wallets should be able to add new members, label them with names, view notifications for all transactions matching family wallet address, and select specific addresses for transactions registered including that individual's address. Group messages display in the individual's dashboard as well as the family dashboard.
+
+Family wallet must be protected by password for backup, but ideally the family devices can register their TPM (Trusted Platform Module) built into their devices to decrypt messages and labels, provide access to the dashboard, and to allow offline/online transactions to get posted from their address and signatures. PGP key pairs with the blockchain provider issuing a public key to all users on the network is ideal to safeguard message data and prevent "LOG4J" brand of attacks via sql injection or other similar security situations requiring input sanitization at the server's API.
+
+
+PHASE 2.1 - DEVELOPMENT ROADMAP
+
+Core Dashboard UI (2 days)
+	- Complete all page templates
+	- Implement navigation and basic styling
+	- Mock data integration
+ 
+Authentication System (1 day)
+	- Password-based login
+	- Device registration flow
+	- Session management
+
+Member Management (1 day)
+	- Add/remove members
+	- Edit labels (with offline support)
+	- Generate new addresses
+ 
+Notifications System (1 day)
+	- Real-time transaction monitoring
+	- Filtering by type and member
+	- Individual profile views
+ 
+Offline Capabilities (2 days)
+	- Service worker implementation
+	- Local data persistence
+	- Background sync
