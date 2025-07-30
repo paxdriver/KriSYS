@@ -2,6 +2,11 @@
 import sqlite3
 import os
 from contextlib import contextmanager
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 DB_PATH = os.getenv('BLOCKCHAIN_DB_PATH', 'blockchain/blockchain.db')
 
@@ -67,6 +72,15 @@ def init_db():
             created_at REAL DEFAULT (strftime('%s', 'now'))
         )
         ''')
+        
+        # Add crisis_id column if missing
+        try:
+            conn.execute("ALTER TABLE wallets ADD COLUMN crisis_id TEXT NOT NULL DEFAULT 'default_crisis'")
+            conn.commit()
+            logger.info("Added crisis_id column to wallets table")
+        except sqlite3.OperationalError:
+            # Column already exists
+            pass
         
 if __name__ == "__main__":
     raise RuntimeError('This script should never be called directly, it offers helper functions to be imported by other scripts in this project.')

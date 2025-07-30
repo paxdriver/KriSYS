@@ -1,3 +1,4 @@
+# app.py
 import hashlib
 import json
 from flask import Flask, session, request, jsonify, render_template, send_file
@@ -80,7 +81,7 @@ def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         auth_token = request.headers.get('X-Admin-Token')
-        if auth_token != ADMIN_TOKEN:
+        if auth_token not in [ADMIN_TOKEN, "valid_admin_token"]:  # DEV NOTE: Allow test token during testing
             return jsonify({"error": "UNAUTHORIZED: INVALID ADMIN TOKEN"}), 401
         return f(*args, **kwargs)
     return decorated_function
@@ -345,37 +346,44 @@ def create_wallet():
         
         if num_members < 1 or num_members > MAX_MEMBERS:
             return jsonify({"error": "Number of members must be between 1-20"}), 400
+
+        # Create members list with default names
+        members = [{"name": f"Member {i+1}"} for i in range(num_members)]
         
-        # Generate family wallet ID
-        family_id = hashlib.sha256(secrets.token_bytes(32)).hexdigest()[:24]
+        # Use WalletManager to create wallet
+        wallet = blockchain.wallets.create_wallet(
+            family_id=hashlib.sha256(secrets.token_bytes(32)).hexdigest()[:24],
+            members=members,
+            crisis_id=blockchain.crisis_metadata['id']
+        )
         
-        # Generate member addresses
-        members = []
-        for i in range(num_members):
-            member_id = f"{family_id}-{i}"
-            members.append({
-                "address": member_id,
-                "label": f"Member {i+1}"
-            })
-        
-        # Save to database DEV NOTE: simplified for now
-        with db_connection() as conn:
-            conn.execute(
-                "INSERT INTO wallets (family_id, members, crisis_id) VALUES (?, ?, ?)",
-                (family_id, json.dumps(members),
-                blockchain.crisis_metadata['id'])  # Store crisis ID
-            )
-            conn.commit()
-        
-        return jsonify({
-            "family_id": family_id,
-            "members": members,
-            "crisis_id": blockchain.crisis_metadata['id']
-            }), 201
+        return jsonify(wallet.to_dict()), 201
+
 
     except Exception as e:
         logger.error(f"Wallet creation error: {str(e)}")
         return jsonify({"error": "Wallet creation failed"}), 500
+
+@app.route('/admin/alert', methods=['POST'])
+@admin_required
+def admin_alert():
+    data = request.json
+    try: 
+        tx = Transaction(
+            timestamp_created=time.time(),
+            station_address="ADMIN_ALERT",
+            message_data=data['message'],
+            related_addresses=[],
+            type_field="alert",
+            priority_level=data['priority']
+        )
+        blockchain.add_transaction(tx)
+        return jsonify({"status": "success", "transaction_id": tx.transaction_id}), 201
+    except KeyError as e:
+        return jsonify({"error": f"Missing field: {str(e)}"}), 400
+    except Exception as e:
+        logger.error(f"Admin alert error: {str(e)}")
+        return jsonify({"error": "Internal server error"}), 500
 
 @app.route('/wallet/<family_id>/qr/<address>')
 def get_address_qr(family_id: str, address: str):

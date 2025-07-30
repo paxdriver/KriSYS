@@ -73,7 +73,9 @@ class PolicySystem:
     
     def get_policy(self, name=None):
         policy_id = name or self.current_policy
-        return self.policies.get(policy_id, self.policies['default'])
+        policy = self.policies.get(policy_id, self.policies['default'])
+        policy['id'] = policy_id
+        return policy
     
     def validate_transaction(self, transaction):
         policy = self.get_policy()['policy']
@@ -370,6 +372,10 @@ class Blockchain:
         self.miner_thread = threading.Thread(target=self.miner_loop, daemon=True)
         self.miner_thread.start()
     
+    def get_wallet(self, family_id):
+        """Get wallet by family ID"""
+        return self.wallets.get_wallet(family_id)
+    
     def add_transaction(self, transaction: Transaction):
         """Add transaction with policy enforcement"""
         
@@ -547,18 +553,22 @@ class Blockchain:
         if self.pending_transactions:
             block = self.mine_block()
             self.save_block(block)
-            
+        
     def miner_loop(self):
         """Background thread for automatic block mining"""
         while True:
-            # time.sleep(self.block_interval)
-            # Get current block interval from policy
-            block_interval = self.policy_system.get_policy()['policy']['block_interval']
-            time.sleep(block_interval)
             try:
-                self.mine_and_save()
+                # Get current block interval from policy
+                block_interval = self.policy_system.get_policy()['policy']['block_interval']
+                
+                # Only mine if we have transactions
+                if self.pending_transactions:
+                    self.mine_and_save()
+                    
+                time.sleep(block_interval)        
             except Exception as e:
                 logger.error(f"Mining error: {str(e)}")
+                time.sleep(5)  # Wait before retrying
 
     def validate_chain(self) -> bool:
         """Validate blockchain integrity"""

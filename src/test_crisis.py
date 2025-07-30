@@ -1,52 +1,88 @@
 # test_crisis.py
 import unittest
 import time
-from app import app, blockchain
-from blockchain import Transaction
+from blockchain import Blockchain, Transaction
+from app import app  # Import Flask app context
 
 class CrisisSystemTest(unittest.TestCase):
     def setUp(self):
+        self.blockchain = Blockchain()
         self.app = app.test_client()
-        # Setup test data (e.g., clear and re-initialize the test database)
+        
+    def test_1_wallet_creation(self):
+        """Test family wallet creation"""
+        response = self.app.post('/wallet', json={
+            'num_members': 3
+        })
+        self.assertEqual(response.status_code, 201)
+        wallet_data = response.json
+        self.assertIn('family_id', wallet_data)
+        self.assertEqual(len(wallet_data['members']), 3)
+        print(f"✅ Created wallet: {wallet_data['family_id']}")
 
-    def test_wallet_creation(self):
-        # Create a wallet and verify crisis ID matches the current crisis
-        pass
+    def test_2_user_message(self):
+        """Test user-to-user message transaction"""
+        wallet = self._create_test_wallet()
+        user_address = wallet['members'][0]['address']
+        
+        response = self.app.post('/transaction', json={
+            'timestamp_created': time.time(),
+            'station_address': 'user_device_123',
+            'message_data': 'Family safe at shelter 5',
+            'related_addresses': [user_address],
+            'type_field': 'message',
+            'priority_level': 5  # Personal message
+        })
+        self.assertEqual(response.status_code, 201)
+        print("✅ User message transaction submitted")
 
-    def test_check_in_transaction(self):
-        # Create a check-in transaction and verify it is accepted
-        pass
+    def test_3_station_checkin(self):
+        """Test station check-in transaction"""
+        response = self.app.post('/checkin', json={
+            'address': 'family_123-member_1',
+            'station_id': 'medical_station_3'
+        })
+        self.assertEqual(response.status_code, 201)
+        print("✅ Station check-in completed")
 
-    def test_user_message_transaction(self):
-        # Create a user message and verify it is encrypted
-        pass
+    def test_4_admin_alert(self):
+        """Test admin alert broadcast"""
+        response = self.app.post('/admin/alert', json={
+            'message': 'Evacuation order for zone B',
+            'priority': 1  # Evacuation alert
+        }, headers={'X-Admin-Token': 'valid_admin_token'})
+        
+        self.assertEqual(response.status_code, 201)
+        print("✅ Admin alert broadcasted")
 
-    def test_admin_alert_transaction(self):
-        # Create an admin alert and verify it is in plaintext
-        pass
+    def test_5_transaction_verification(self):
+        """Verify transactions on blockchain"""
+        # Mine pending transactions
+        self.app.post('/admin/mine', headers={'X-Admin-Token': 'valid_admin_token'})
+        
+        chain = self.app.get('/blockchain').json
+        self.assertGreater(len(chain), 0)
+        
+        # Find our test transactions
+        user_msg_found = any(
+            tx['type_field'] == 'message' and tx['message_data'] == 'Family safe at shelter 5'
+            for block in chain 
+            for tx in block['transactions']
+        )
+        
+        admin_alert_found = any(
+            tx['type_field'] == 'alert' and tx['message_data'] == 'Evacuation order for zone B'
+            for block in chain 
+            for tx in block['transactions']
+        )
+        
+        self.assertTrue(user_msg_found, "User message not found on blockchain")
+        self.assertTrue(admin_alert_found, "Admin alert not found on blockchain")
+        print("✅ Transactions verified on blockchain")
 
-    def test_damage_report_transaction(self):
-        # Create a damage report and verify it is accepted
-        pass
-
-    def test_policy_enforcement(self):
-        # Test size limit
-        # Test rate limit
-        # Test priority level enforcement
-        pass
+    def _create_test_wallet(self):
+        response = self.app.post('/wallet', json={'num_members': 1})
+        return response.json
 
 if __name__ == '__main__':
     unittest.main()
-
-
-# July 30 2025: Phase 2 progress checks
-# Wallet Creation: Create a family wallet and verify it is stored with the correct crisis context.
-# Transaction Types:
-# 	- Check-in: Simulate a station checking in a family member.
-# 	- User Message: Send a message from one user to another (should be PGP encrypted).
-# 	- Admin Alert: Send a plaintext alert from an admin account (should be readable by all).
-# 	- Damage Report: Send a damage report from a station.
-# Policy Enforcement:
-# 	- Verify that transactions exceeding size limits are rejected.
-# 	- Verify rate limiting per station.
-# 	- Verify priority levels are enforced.
