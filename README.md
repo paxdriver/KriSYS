@@ -192,17 +192,26 @@ License: MIT - Attribute: Kristopher Driver krisdriver.com @paxdriver on social 
 
 
 NOTES: current file structure while under development
-/krisys-project
+/KriSYS/
 ├── docker-compose.yml
 ├── Dockerfile
 ├── blockchain/ (volume for database)
+    └── blockchain.db
 └── src/
     ├── app.py
     ├── blockchain.py
     ├── database.py
+    ├── camera_server.py
     ├── requirements.txt
+    └── static/
+    	├── js/
+			└── wallet_dashboard.js
+		└── css/
+			└── wallet_dashboard.css
     └── templates/
         ├── index.html
+        ├── admin.html
+        ├── wallet_dashboard.html
         └── scanner.html
 
 Test routes as of July 22 2025:

@@ -9,3 +9,6 @@ services:
     environment:
       - BLOCKCHAIN_DB_PATH=/data/blockchain.db
       - ADMIN_TOKEN=secure_admin_key_123  # Change in production
+      - FLASK_DEBUG=1
+    command: >
+      sh -c "python -m flask run --host=0.0.0.0 --port=5000"

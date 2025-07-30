@@ -1,4 +1,4 @@
-# test_crisis.py
+# /src/test_crisis.py
 import unittest
 import time
 from blockchain import Blockchain, Transaction
@@ -86,3 +86,11 @@ class CrisisSystemTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+    
+
+# TO RUN THIS TEST SCRIPT...
+# docker cp test_crisis.py krisys_blockchain_1:/app/test_crisis.py
+# docker exec -it krisys_blockchain_1 python test_crisis.py
+
+
+# sqlite3 ./blockchain/blockchain.db "SELECT * FROM wallets"

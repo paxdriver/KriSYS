@@ -1,214 +1,16 @@
-{% comment %} /src/templates/wallet_dashboard.html {% endcomment %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>KriSYS Family Wallet</title>
-    <style>
-        :root {
-            --primary: #2563eb;
-            --secondary: #3b82f6;
-            --dark: #1e3a8a;
-            --light: #eff6ff;
-            --gray: #6b7280;
-        }
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-        body {
-            font-family: 'Inter', sans-serif;
-            background-color: #f3f4f6;
-            color: #1f2937;
-            line-height: 1.6;
-        }
-        .dashboard-container {
-            display: grid;
-            grid-template-columns: 280px 1fr;
-            min-height: 100vh;
-        }
-        /* Sidebar Styles */
-        .sidebar {
-            background: linear-gradient(180deg, var(--dark) 0%, var(--primary) 100%);
-            color: white;
-            padding: 2rem 1.5rem;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            z-index: 10;
-        }
-        .wallet-header {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            margin-bottom: 2rem;
-        }
-        .wallet-icon {
-            width: 40px;
-            height: 40px;
-            background: var(--secondary);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: bold;
-        }
-        .wallet-info h2 {
-            font-size: 1.25rem;
-            font-weight: 600;
-        }
-        .wallet-id {
-            font-size: 0.85rem;
-            opacity: 0.8;
-            word-break: break-all;
-        }
-        .nav-menu {
-            list-style: none;
-        }
-        .nav-item {
-            margin-bottom: 0.5rem;
-        }
-        .nav-link {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 0.75rem 1rem;
-            border-radius: 8px;
-            color: rgba(255, 255, 255, 0.9);
-            text-decoration: none;
-            transition: all 0.3s ease;
-        }
-        .nav-link:hover, .nav-link.active {
-            background: rgba(255, 255, 255, 0.1);
-            color: white;
-        }
-        .nav-icon {
-            width: 24px;
-            text-align: center;
-        }
-        /* Main Content Styles */
-        .main-content {
-            padding: 2rem;
-            overflow-y: auto;
-        }
-        .page-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 2rem;
-        }
-        .page-title {
-            font-size: 1.75rem;
-            font-weight: 700;
-            color: var(--dark);
-        }
-        .btn {
-            background: var(--primary);
-            color: white;
-            border: none;
-            padding: 0.75rem 1.5rem;
-            border-radius: 8px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: background 0.3s ease;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .btn:hover {
-            background: var(--dark);
-        }
-        .card-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-            gap: 1.5rem;
-            margin-bottom: 2rem;
-        }
-        .card {
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
-            overflow: hidden;
-            transition: transform 0.3s ease;
-        }
-        .card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 10px 15px rgba(0, 0, 0, 0.1);
-        }
-        .card-header {
-            padding: 1.25rem;
-            border-bottom: 1px solid #e5e7eb;
-        }
-        .card-title {
-            font-size: 1.1rem;
-            font-weight: 600;
-            color: var(--dark);
-        }
-        .card-body {
-            padding: 1.25rem;
-        }
-        .member-item {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 0.75rem 0;
-            border-bottom: 1px solid #e5e7eb;
-        }
-        .member-item:last-child {
-            border-bottom: none;
-        }
-        .member-avatar {
-            width: 40px;
-            height: 40px;
-            background: var(--light);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: bold;
-            color: var(--primary);
-        }
-        .member-info {
-            flex: 1;
-        }
-        .member-name {
-            font-weight: 500;
-        }
-        .member-address {
-            font-size: 0.85rem;
-            color: var(--gray);
-            word-break: break-all;
-        }
-        .notification-item {
-            padding: 1rem 0;
-            border-bottom: 1px solid #e5e7eb;
-        }
-        .notification-header {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 0.5rem;
-        }
-        .notification-title {
-            font-weight: 600;
-            color: var(--dark);
-        }
-        .notification-time {
-            font-size: 0.85rem;
-            color: var(--gray);
-        }
-        .notification-content {
-            color: #4b5563;
-        }
-        /* Responsive */
-        @media (max-width: 768px) {
-            .dashboard-container {
-                grid-template-columns: 1fr;
-            }
-            .sidebar {
-                display: none;
-            }
-        }
-    </style>
+    <link rel="stylesheet" href="/static/css/wallet_dashboard.css">
+    <script>
+        // Pass data from Flask to JavaScript
+        const walletData = {{ wallet | tojson | safe }};
+        const transactions = {{ transactions | tojson | safe }};
+        const familyId = "{{ family_id }}"
+    </script>
 </head>
 <body>
     <div class="dashboard-container">
@@ -316,272 +118,58 @@
                 </div>
             </div>
 
-            <!-- templates/wallet_dashboard.html -->
+            <!-- Authentication Modal -->
             <div id="auth-modal" class="modal">
+                <!-- DEVELOPMENT - Inside the auth-modal div -->
+                <div id="unlock-form" style="display:none;">
+                    <h3>Unlock Wallet</h3>
+                    <label>Enter Passphrase:</label>
+                    <input type="password" id="wallet-passphrase" class="form-input">
+                    <button id="unlock-wallet-btn" class="btn">Unlock Wallet</button>
+                    <p id="unlock-error" style="color:red; display:none;"></p>
+                </div>
+                <!-- DEVELOPMENT - Inside the auth-modal div -->
+
+
                 <div class="modal-content">
                     <h2>Access Family Wallet</h2>
                     
                     <!-- Device Authentication -->
                     <div id="device-auth" style="display:none;">
                         <p>Authenticating with registered device...</p>
-                        <button id="auth-retry">Retry</button>
+                        <button id="auth-retry" class="btn">Retry</button>
                     </div>
                     
                     <!-- Password Fallback -->
                     <div id="password-auth" style="display:none;">
-                        <label>Enter Wallet Password:</label>
-                        <input type="password" id="wallet-password">
-                        <button id="password-submit">Authenticate</button>
+                        <label for="wallet-password">Enter Wallet Password:</label>
+                        <input type="password" id="wallet-password" class="form-input">
+                        <button id="password-submit" class="btn">Authenticate</button>
                     </div>
                     
                     <!-- Device Registration -->
                     <div id="device-registration" style="display:none;">
                         <p>Register this device for future access</p>
-                        <button id="register-device">Register Device</button>
+                        <button id="register-device" class="btn">Register Device</button>
                     </div>
                 </div>
             </div>
-
-            <script>
-                // Authentication Flow
-                async function initAuthentication(walletId) {
-                    // Check if device ID exists
-                    const deviceId = localStorage.getItem('krisys_device_id') || generateDeviceId();
-                    
-                    const response = await fetch('/auth/init', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({
-                            wallet_id: walletId,
-                            device_id: deviceId
-                        })
-                    });
-                    
-                    const data = await response.json();
-                    
-                    if (data.device_registered) {
-                        // Sign challenge with device key
-                        const signature = await signChallenge(data.challenge);
-                        verifyAuthentication(signature, deviceId);
-                    } else {
-                        // Show password or registration options
-                        document.getElementById('password-auth').style.display = 'block';
-                        document.getElementById('device-registration').style.display = 'block';
-                    }
-                }
-                
-                async function verifyAuthentication(signature, deviceId) {
-                    const response = await fetch('/auth/verify', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({
-                            signature: signature,
-                            device_id: deviceId
-                        })
-                    });
-                    
-                    const result = await response.json();
-                    if (result.status === 'authenticated') {
-                        localStorage.setItem('wallet_session', result.token);
-                        loadDashboard();
-                    } else {
-                        showError("Authentication failed. Please try again.");
-                    }
-                }
-                
-                async function registerDevice(walletId, publicKey) {
-                    const response = await fetch('/wallet/register-device', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({
-                            wallet_id: walletId,
-                            public_key: publicKey,
-                            device_id: localStorage.getItem('krisys_device_id')
-                        })
-                    });
-                    
-                    const result = await response.json();
-                    if (result.status === 'registered') {
-                        initAuthentication(walletId);
-                    }
-                }
-                
-                // Generate device ID on first use
-                function generateDeviceId() {
-                    const deviceId = 'device_' + Math.random().toString(36).substr(2, 9);
-                    localStorage.setItem('krisys_device_id', deviceId);
-                    return deviceId;
-                }
-            </script>
             
-            <!-- Other pages would follow similar structure -->
+            <!-- TEMPORARY DEBUG -->
+            <div style="background: #f0f0f0; padding: 20px; margin-top: 20px;">
+                <h3>Debug Information</h3>
+                <pre id="debug-output"></pre>
+            </div>
+            <!-- TEMPORARY DEBUG -->
+        
         </main>
     </div>
 
+    <script src="/static/js/wallet_dashboard.js"></script>
     <script>
-        // Wallet Dashboard JavaScript
-        document.addEventListener('DOMContentLoaded', () => {
-            // Navigation
-            const navLinks = document.querySelectorAll('.nav-link');
-            const pages = document.querySelectorAll('.page');
-            
-            navLinks.forEach(link => {
-                link.addEventListener('click', (e) => {
-                    e.preventDefault();
-                    
-                    // Update active link
-                    navLinks.forEach(l => l.classList.remove('active'));
-                    link.classList.add('active');
-                    
-                    // Show corresponding page
-                    const targetPage = link.dataset.page;
-                    pages.forEach(page => {
-                        page.style.display = page.id === `${targetPage}-page` ? 'block' : 'none';
-                    });
-                });
-            });
-            
-            // Load wallet data
-            async function loadWalletData() {
-                try {
-                    // In real implementation, this would fetch from /wallet/data
-                    const walletData = {
-                        family_id: 'fam_2e3a8a1b4c5d',
-                        members: [
-                            { id: 'm1', name: 'John Doe', address: 'addr_1a2b3c4d', last_seen: '2 hours ago' },
-                            { id: 'm2', name: 'Jane Smith', address: 'addr_5e6f7g8h', last_seen: '5 hours ago' },
-                            { id: 'm3', name: 'Alex Johnson', address: 'addr_9i0j1k2l', last_seen: '1 day ago' }
-                        ],
-                        notifications: [
-                            { 
-                                id: 'n1', 
-                                type: 'checkin', 
-                                title: 'Medical Check-in', 
-                                content: 'John checked in at Medical Station 3', 
-                                time: '2 hours ago',
-                                member: 'm1'
-                            },
-                            { 
-                                id: 'n2', 
-                                type: 'message', 
-                                title: 'New Message', 
-                                content: 'Jane sent: "We have extra supplies"', 
-                                time: '4 hours ago',
-                                member: 'm2'
-                            }
-                        ]
-                    };
-                    
-                    // Update UI
-                    document.getElementById('wallet-id-display').textContent = walletData.family_id;
-                    renderMembersOverview(walletData.members);
-                    renderMembersList(walletData.members);
-                    renderNotifications(walletData.notifications);
-                    
-                } catch (error) {
-                    console.error('Failed to load wallet data:', error);
-                    alert('Error loading wallet data. Please try again.');
-                }
-            }
-            
-            function renderMembersOverview(members) {
-                const container = document.getElementById('members-overview');
-                container.innerHTML = '';
-                
-                members.slice(0, 3).forEach(member => {
-                    const memberEl = document.createElement('div');
-                    memberEl.className = 'member-item';
-                    memberEl.innerHTML = `
-                        <div class="member-avatar">${member.name.charAt(0)}</div>
-                        <div class="member-info">
-                            <div class="member-name">${member.name}</div>
-                            <div class="member-address">${member.address}</div>
-                            <div class="member-status">Last seen: ${member.last_seen}</div>
-                        </div>
-                    `;
-                    container.appendChild(memberEl);
-                });
-                
-                if (members.length > 3) {
-                    const moreEl = document.createElement('div');
-                    moreEl.className = 'member-item';
-                    moreEl.innerHTML = `
-                        <div class="member-avatar">+${members.length - 3}</div>
-                        <div class="member-info">
-                            <div class="member-name">${members.length - 3} more members</div>
-                            <div>View all in Members section</div>
-                        </div>
-                    `;
-                    container.appendChild(moreEl);
-                }
-            }
-            
-            function renderMembersList(members) {
-                const container = document.getElementById('members-list');
-                container.innerHTML = '';
-                
-                members.forEach(member => {
-                    const memberEl = document.createElement('div');
-                    memberEl.className = 'member-item';
-                    memberEl.innerHTML = `
-                        <div class="member-avatar">${member.name.charAt(0)}</div>
-                        <div class="member-info">
-                            <div class="member-name">${member.name}</div>
-                            <div class="member-address">${member.address}</div>
-                        </div>
-                        <div class="member-actions">
-                            <button class="btn-icon" title="Edit">✏️</button>
-                            <button class="btn-icon" title="View Profile">👤</button>
-                            <button class="btn-icon" title="Generate QR">📇</button>
-                        </div>
-                    `;
-                    container.appendChild(memberEl);
-                });
-            }
-            
-            function renderNotifications(notifications) {
-                const recentContainer = document.getElementById('recent-activity');
-                const allContainer = document.getElementById('all-notifications');
-                
-                recentContainer.innerHTML = '';
-                allContainer.innerHTML = '';
-                
-                notifications.slice(0, 2).forEach(notif => {
-                    const notifEl = document.createElement('div');
-                    notifEl.className = 'notification-item';
-                    notifEl.innerHTML = `
-                        <div class="notification-header">
-                            <div class="notification-title">${notif.title}</div>
-                            <div class="notification-time">${notif.time}</div>
-                        </div>
-                        <div class="notification-content">${notif.content}</div>
-                    `;
-                    recentContainer.appendChild(notifEl);
-                });
-                
-                notifications.forEach(notif => {
-                    const notifEl = document.createElement('div');
-                    notifEl.className = 'notification-item';
-                    notifEl.innerHTML = `
-                        <div class="notification-header">
-                            <div class="notification-title">${notif.title}</div>
-                            <div class="notification-time">${notif.time}</div>
-                        </div>
-                        <div class="notification-content">${notif.content}</div>
-                    `;
-                    allContainer.appendChild(notifEl);
-                });
-            }
-            
-            // Initialize
-            loadWalletData();
-            
-            // Event listeners
-            document.getElementById('refresh-btn').addEventListener('click', loadWalletData);
-            document.getElementById('add-member-btn').addEventListener('click', () => {
-                alert('Add member functionality will be implemented');
-            });
-        });
+
+        initializeDashboard(walletData, transactions, familyId)
+
     </script>
 </body>
 </html>

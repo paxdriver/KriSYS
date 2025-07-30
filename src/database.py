@@ -78,9 +78,9 @@ def init_db():
             conn.execute("ALTER TABLE wallets ADD COLUMN crisis_id TEXT NOT NULL DEFAULT 'default_crisis'")
             conn.commit()
             logger.info("Added crisis_id column to wallets table")
-        except sqlite3.OperationalError:
-            # Column already exists
-            pass
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e):
+                logger.error(f"Error adding crisis_id column: {str(e)}")
         
 if __name__ == "__main__":
     raise RuntimeError('This script should never be called directly, it offers helper functions to be imported by other scripts in this project.')

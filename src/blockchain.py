@@ -30,46 +30,85 @@ logger = logging.getLogger(__name__)
 #     'tx_rate_limit': 180    # 3 minutes in seconds
 # }
 
+# PRODUCTION: Implement proper session storage for private keys
+
+# PRODUCTION: Add key revocation mechanism
+
+# PRODUCTION: Implement key rotation
+
+
 # Policy system for setting up a new KriSYS blockchain
 class PolicySystem:
-    def __init__(self):
-        self.policies = {
-            'default': {
-                'name': "Default Crisis Policy",
-                'id': "default",
-                'created_at': datetime.now().isoformat(),
-                'organization': "KriSYS Foundation",
-                'contact': "support@krisys.org",
-                'description': "Standard policy for crisis response",
-                'policy': {
-                    'block_interval': 180,
-                    'size_limit': 5120,
-                    'rate_limit': 180,
-                    'priority_levels': {
-                        'medical': 1,
-                        'food': 2,
-                        'shelter': 3,
-                        'personal': 4
-                    },
-                    'types': ['check_in', 'message', 'alert']
-                }
-            }
-        }
-        self.current_policy = 'default'
+    # Required policy fields with default values
+    REQUIRED_POLICY_FIELDS = {
+        'block_interval': 180,
+        'size_limit': 5120,
+        'rate_limit': 180,
+        'priority_levels': {
+            'medical': 1,
+            'food': 2,
+            'shelter': 3,
+            'personal': 4
+        },
+        'types': ['check_in', 'message', 'alert']
+    }
     
-    def create_crisis_policy(self, name, organization, contact, description, policy_settings):
-        """Create a new crisis-specific policy"""
-        policy_id = name.lower().replace(" ", "_")
-        self.policies[policy_id] = {
-            'name': name,
-            'id': policy_id,
+    def __init__(self):
+        self.policies = {}
+        self.current_policy = "default"
+        self._create_default_policy()   
+
+    def _create_default_policy(self):
+        """Create a base default policy"""
+        self.policies['default'] = {
+            'name': "Default Crisis Policy",
+            'id': "default",
             'created_at': datetime.now().isoformat(),
-            'organization': organization,
-            'contact': contact,
-            'description': description,
-            'policy': policy_settings
+            'organization': "KriSYS Foundation",
+            'contact': "support@krisys.org",
+            'description': "Standard policy for crisis response",
+            'policy': self.REQUIRED_POLICY_FIELDS,
         }
+    
+    def create_crisis_policy(self, 
+        name: str, organization: str, 
+        contact: str, description: str, 
+        policy_settings: dict, policy_id: Optional[str] = None):
+        
+        """
+        Create a new crisis policy with custom settings
+        - policy_id: Optional custom ID (auto-generated if not provided)
+        - policy_settings: Partial settings (missing fields use defaults)
+        """
+        
+        # Generate unique ID if not provided
+        if not policy_id:
+            base_id = name.lower().replace(" ", "_")
+            policy_id = base_id
+            counter = 1
+            while policy_id in self.policies:
+                policy_id = f"{base_id}_{counter}"
+                counter += 1
+        
+        # Merge defaults with provided custom policy details
+        full_policy = self.REQUIRED_POLICY_FIELDS.copy()
+        full_policy.update(policy_settings)
+        
+        # Create the complete policy object
+        policy_data = {
+            "name": name,
+            "id": policy_id, 
+            "organization": organization,
+            "contact": contact,
+            "description": description,
+            "policy": full_policy,
+        }
+        
+        # Store the policy in the system
+        self.policies[policy_id] = policy_data
+        
         return policy_id
+        
     
     def get_policy(self, name=None):
         policy_id = name or self.current_policy
@@ -184,6 +223,41 @@ class Wallet:
         self.keypair_str = str(self.keypair)
         self.members = []
         self.devices = []
+        self.private_key = None  # Store decrypted private key during session
+        
+    # Public key retrieval
+    def get_public_key(self):
+        """Get public key for this wallet"""
+        if self.keypair_str:
+            key = pgpy.PGPKey()
+            key.parse(self.keypair_str)
+            return key.pubkey
+        return None
+    
+    def unlock(self, passphrase):
+        """Temporarily unlock wallet for current request"""
+        try:
+            keypair = pgpy.PGPKey()
+            keypair.parse(self.keypair_str)
+            keypair.unlock(passphrase)
+            self.private_key = keypair
+            return True
+        except Exception as e:
+            logger.error(f"Unlock failed: {str(e)}")
+            return False
+    
+    def decrypt_message(self, encrypted_message):
+        """Decrypt a message using the wallet's private key"""
+        if not self.private_key:
+            raise ValueError("Wallet not unlocked")
+        
+        try:
+            msg = pgpy.PGPMessage.from_blob(encrypted_message)
+            decrypted = self.private_key.decrypt(msg)
+            return str(decrypted.message)
+        except Exception as e:
+            logger.error(f"Decryption failed: {str(e)}")
+            return None
         
     def to_dict(self):
         return {
@@ -280,29 +354,35 @@ class WalletManager:
         # Cache in memory
         self.wallets[family_id] = wallet
         return wallet
-    
+        
     def get_wallet(self, family_id):
-        """
-        Retrieve wallet by family ID
-        :param family_id: Family identifier to retrieve
-        :return: Wallet object or None if not found
-        """
         # First check in-memory cache
         if family_id in self.wallets:
             return self.wallets[family_id]
-        
+                
         # Then check database
         with db_connection() as conn:
-            row = conn.execute(
+            cursor = conn.execute(
                 "SELECT * FROM wallets WHERE family_id = ?",
                 (family_id,)
-            ).fetchone()
+            )
+            row = cursor.fetchone()
             
             if row:
+                # Convert Row to dictionary
+                columns = [col[0] for col in cursor.description]
+                row_dict = dict(zip(columns, row))
+                
                 # Reconstruct wallet from database
-                wallet = Wallet(row['family_id'], row['crisis_id'])
-                wallet.members = json.loads(row['members'])
-                wallet.devices = json.loads(row.get('devices', '[]'))
+                wallet = Wallet(row_dict['family_id'], row_dict['crisis_id'])
+                    
+                wallet.members = json.loads(row_dict['members'])
+                
+                # Handle devices if present
+                if 'devices' in row_dict and row_dict['devices']:
+                    wallet.devices = json.loads(row_dict['devices'])
+                else:
+                    wallet.devices = []
                 
                 # Add to cache
                 self.wallets[family_id] = wallet
@@ -591,21 +671,6 @@ class Blockchain:
         return True
 
 
-# PGP key-pair system for blockchain msg obfuscation and for wallets to store labels and notes
-    # Wallets to use PGP to authenticate transactions posted, and to decrypt messages received
-    
-    # sequenceDiagram
-        # participant Client
-        # participant Server
-        # participant Blockchain
-        # Client->>Server: Request challenge
-        # Server->>Client: Send nonce
-        # Client->>Client: Sign nonce with private key
-        # Client->>Server: Send signed nonce + public key fingerprint
-        # Server->>Blockchain: Retrieve public key by fingerprint
-        # Blockchain->>Server: Return public key
-        # Server->>Server: Verify signature
-        # Server->>Client: Auth token if valid
 class PGPAuth:
     def __init__(self):
         self.keys = {}
@@ -674,6 +739,23 @@ class WalletAuth:
         pass
 
 ######### WIP
+
+
+# PGP key-pair system for blockchain msg obfuscation and for wallets to store labels and notes
+    # Wallets to use PGP to authenticate transactions posted, and to decrypt messages received
+    
+    # sequenceDiagram
+        # participant Client
+        # participant Server
+        # participant Blockchain
+        # Client->>Server: Request challenge
+        # Server->>Client: Send nonce
+        # Client->>Client: Sign nonce with private key
+        # Client->>Server: Send signed nonce + public key fingerprint
+        # Server->>Blockchain: Retrieve public key by fingerprint
+        # Blockchain->>Server: Return public key
+        # Server->>Server: Verify signature
+        # Server->>Client: Auth token if valid
 
 
 ######### WALLET DATA IMPLEMENTATION NOTES: ############
