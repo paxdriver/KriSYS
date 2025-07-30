@@ -1,12 +1,10 @@
 KriSYS - Crisis Communication Blockchain System
 
-Overview
-
+OVERVIEW:
 
 KriSYS is a humanitarian blockchain system for tracking people and coordinating aid during disasters and crises. Unlike traditional blockchains, this uses centralized validation by aid organizations rather than mining or proof-of-stake. The system enables offline message queuing, family tracking, and aid coordination when internet and cellular networks are compromised.
 
 Core Concept
-
 - Aid organizations host their own blockchain for a specific crisis
 - Users get family wallets (with individual addresses) via QR codes from aid stations
 - Messages/check-ins are recorded as transactions on the blockchain
@@ -14,73 +12,114 @@ Core Concept
 - Families abroad can track loved ones via blockchain browser using wallet addresses
 
 Technical Architecture
-
 - Backend: Python API server with custom blockchain implementation (no mining - admin validates all blocks)
 - Frontend: HTML/JavaScript (will port to React later)
 - Database: Custom blockchain structure with 3-minute block intervals
 - Communication: WiFi-based device-to-device sync when offline
 - Deployment: Web server hosting blockchain + API, with public read-only blockchain access
 
-Development Phases
 
-Phase 1: Basic Infrastructure
+DEVELOPMENT PHASES
 
+PHASE 1: Basic Infrastructure
 
 Priority: Core blockchain + basic check-ins
 
-
-1. 
-Custom blockchain implementation in Python
-
-
+1. Custom blockchain implementation in Python
 	- Block structure with 3-minute intervals
 	- Transaction format: timestamp_created, timestamp_posted, station_address, message_data, related_addresses, relay_hash, transaction_id, posted_id, type_field, priority_level
 	- Admin validation system (no cryptographic mining)
 	- Transaction deduplication by ID
-2. 
-Basic API endpoints
 
-
+2. Basic API endpoints
 	- POST /transaction (add to blockchain)
 	- GET /blockchain (read-only access)
 	- GET /address/{address} (get transactions for address)
 	- Admin endpoints for block validation
-3. 
-Simple web interface
 
-
+3. Simple web interface
 	- Blockchain browser/search by address
 	- Basic transaction viewing
 	- Admin panel for blockchain management
-4. 
-Policy system framework (not fully implemented)
 
-
+4. Policy system framework (not fully implemented)
 	- Design structure for message priorities, size limits, frequency controls
 	- Single default policy class for MVP
 	- Prepare for multi-tier priority system later
 
-Phase 2: Wallet System + QR Codes
 
+PHASE 2: Wallet System + QR Codes
 
 Priority: User wallet management
-
 
 1. Wallet generation system
 	- Family wallet creation (group address)
 	- Individual address generation within wallet
 	- QR code generation for addresses
+
 2. Station check-in system
 	- QR code scanning functionality
 	- Template message system for different station types
 	- Raspberry Pi + webcam scanning setup instructions
+
 3. Enhanced web interface
 	- Wallet management interface
 	- Address book with custom labels (local storage only)
 	- Subscription system for following other addresses
 
-Phase 3: Offline Messaging + Sync
 
+
+***********************************************************
+Project Checkpoint Summary & Next Steps Prompt
+
+Project Name: KriSYS - Crisis Communication Blockchain System
+Current Phase: Phase 1 Complete (Core Blockchain + Basic Wallet System)
+Checkpoint Date: July 30, 2025
+Git Commit: 6bb5824a491f6b5983c1e82f057ddce178ce857d
+-----------------------------------------------------------
+
+Core Achievements:
+
+1. ✅ Custom blockchain implementation (Python) with policy-driven crisis configurations
+2. ✅ Wallet management system with PGP authentication
+3. ✅ Hurricane crisis policy configured:
+	- Block interval: 180s
+	- Max TX size: 10KB
+	- Priority levels: Evacuation(1), Medical(2), Shelter(3), Supplies(4), Personal(5)
+	- TX types: check_in, message, alert, damage_report
+4. ✅ API endpoints:
+	- Blockchain explorer
+	- Wallet management
+	- Transaction submission
+	- Crisis metadata
+5. ✅ Dockerized deployment with SQLite persistence
+
+Next Priority Tasks:
+1. Implement message type handling (user messages vs admin alerts)
+2. Add PGP encryption/decryption for wallet messages
+3. Build station check-in system with QR scanning
+4. Develop admin alert broadcasting system
+5. Create frontend wallet interface (HTML/JS)
+
+Technical Environment:
+- Python 3.11
+- Flask API
+- PGPy for encryption
+- SQLite database
+- Docker deployment
+- VS Code on Linux Mint
+
+Critical Design Principles:
+1. Privacy First: User messages encrypted, admin alerts plaintext
+2. Offline Resilience: WiFi-based device sync
+3. Crisis-Specific: Each disaster has own blockchain instance
+4. Aid-Organization Controlled: Full validation control
+***********************************************************
+
+
+
+
+PHASE 3: Offline Messaging + Sync
 
 Priority: Device-to-device communication
 
@@ -99,11 +138,9 @@ Priority: Device-to-device communication
 	- Battery optimization considerations
 	- Storage management and pruning options
 
-Phase 4: Advanced Features
-
+PHASE 4: Advanced Features
 
 Priority: Enhanced functionality
-
 
 1. Multiple message types
 	- Check-in templates (food, medical, shelter stations)
@@ -143,11 +180,10 @@ Critical Design Principles
 
 Testing Strategy
 
-
 Set up test scenario with multiple devices, simulate offline conditions, test message queuing and sync, validate blockchain integrity across all operations.
 
-Deployment Notes
 
+Deployment Notes
 
 System designed for humanitarian crises - prioritize reliability and simplicity over advanced features. Each aid organization can deploy independently for their crisis response efforts.
 
