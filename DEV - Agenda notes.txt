@@ -1,3 +1,50 @@
+==============================================================
+July 30, 2025 - KriSYS project status. The current state includes:
+
+****************************
+Note on Admin Alerts vs. User Messages:
+    - Admin Alerts: These are sent by the admin (via a station) and are not encrypted. They are meant to be broadcasted to everyone and should be stored in plaintext on the blockchain.
+    
+    - User Messages: These are sent between users (via their wallets) and are encrypted using PGP. Only the intended recipient should be able to decrypt them.
+****************************
+
+1. Blockchain Implementation: A custom blockchain in Python with:
+	- Block creation every 3 minutes (configurable per crisis policy)
+	- Transaction structure supporting multiple types (check-in, message, alert, damage_report)
+	- Wallet system for families and individuals
+	- Policy system allowing crisis-specific configurations
+
+2. Crisis Policy: We have created a hurricane crisis policy with:
+	- Block interval: 180 seconds
+	- Max transaction size: 10 KB
+	- Rate limit: 600 seconds between messages per station
+	- Priority levels: evacuation (1), medical (2), shelter (3), supplies (4), personal (5)
+	- Transaction types: check_in, message, alert, damage_report
+
+3. API Endpoints:
+	- Blockchain explorer (GET /blockchain)
+	- Address-based transaction lookup (GET /address/<address>)
+	- Wallet management (POST /wallet, GET /wallet/<family_id>)
+	- Transaction submission (POST /transaction)
+	- Authentication endpoints for wallet access
+	- Admin endpoints for manual mining and policy changes (admin token protected)
+	- Crisis metadata endpoint (GET /crisis)
+
+4. Database: SQLite database with tables for blocks, transactions, wallets, and crises.
+
+5. Frontend: Basic HTML/JS interfaces for blockchain exploration and QR code scanning (to be expanded).
+
+Next Steps:
+1. Testing: Write tests to verify the system, especially for the new crisis policy and transaction types.
+2. Wallet Messaging: Implement PGP encryption for wallet-to-wallet messages.
+3. Admin Alerts: Implement plaintext alert broadcasting by admin (to be readable by all).
+4. Check-in Stations: Implement station functionality (check-in, alerts, warnings).
+5. Frontend Expansion: Build out the wallet interface and admin panel.
+
+
+
+==============================================================
+
 Encrypted Label Storage:
 	- Use family's public key to encrypt labels
 	- Store encrypted labels in wallets table
