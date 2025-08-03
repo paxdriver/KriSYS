@@ -427,6 +427,10 @@ def wallet_dashboard(family_id):
                         decrypted = wallet.decrypt_message(tx.message_data)
                         if decrypted:
                             tx_data['decrypted_message'] = decrypted
+                            logger.info(tx_data['decrypted_message'])
+                        else:
+                            tx_data['decryption_error'] = decrypted
+                            logger.info(tx_data['decryption_error'])
                     except Exception as e:
                         logger.error(f"Decryption failed: {str(e)}")
                         tx_data['decryption_error'] = True

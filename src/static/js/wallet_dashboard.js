@@ -182,10 +182,10 @@ function renderRecentActivity(transactions) {
         txEl.className = 'transaction';
         
         // Add decryption indicator
-        const lockIcon = (walletData.unlocked && tx.type_field === 'message') ? '🔓' : '🔒';
-        // Always show lock icon for messages?
-        // const lockIcon = tx.type_field === 'message' ? '🔒' : '';
-
+        let lockIcon = (walletData.unlocked && tx.type_field === 'message') ? '🔓' : '🔒';
+        let messageContent = tx.message_data
+        
+        // Handle transactions of type message
         if (tx.type_field === 'message') {
             if (tx.decrypted_message) {
                 // Show decrypted message
@@ -200,6 +200,7 @@ function renderRecentActivity(transactions) {
             else {
                 // Show encrypted message
                 lockIcon = '🔒';
+                console.log(messageContent)
             }
         }
         
@@ -209,6 +210,7 @@ function renderRecentActivity(transactions) {
                 <span class="tx-lock">${lockIcon}</span>
                 <span class="tx-time">${formatDateTime(tx.timestamp_posted)}</span>
             </div>
+            
             <div class="tx-message">${messageContent}</div>
             <div class="tx-message">***************</div>
             <div class="tx-message">${tx.message_data}</div>
