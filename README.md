@@ -344,3 +344,9 @@ krisys/
 │   └── css/
 │       └── style.css
 └── requirements.txt
+
+
+License
+
+MIT License - Attribution: Kristopher Driver
+Contact: kris@krisdriver.com | @paxdriver
