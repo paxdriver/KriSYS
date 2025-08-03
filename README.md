@@ -1,22 +1,134 @@
 KriSYS - Crisis Communication Blockchain System
 
-OVERVIEW:
+Overview
 
-KriSYS is a humanitarian blockchain system for tracking people and coordinating aid during disasters and crises. Unlike traditional blockchains, this uses centralized validation by aid organizations rather than mining or proof-of-stake. The system enables offline message queuing, family tracking, and aid coordination when internet and cellular networks are compromised.
+KriSYS is a humanitarian blockchain system for tracking people and coordinating aid during disasters when traditional communication networks fail. Unlike traditional blockchains, KriSYS uses centralized validation by aid organizations, enabling efficient crisis response with offline capabilities.
 
-Core Concept
-- Aid organizations host their own blockchain for a specific crisis
-- Users get family wallets (with individual addresses) via QR codes from aid stations
-- Messages/check-ins are recorded as transactions on the blockchain
-- Offline devices sync via WiFi when in proximity, queuing messages until someone reaches a station
-- Families abroad can track loved ones via blockchain browser using wallet addresses
+Core Concept:
+
+- Aid organizations host dedicated blockchains for specific crises
+- Families receive wallet addresses via QR codes
+- Messages and check-ins are recorded as blockchain transactions
+- Offline devices sync via WiFi when in proximity
+- Global family tracking through blockchain explorer
+
+Current Status (August 2025)
+
+✅ Completed Features
+
+- Custom Blockchain Implementation
+	- Admin-validated blocks (no mining)
+	- 3-minute block intervals
+	- Transaction deduplication
+	- SQLite persistence
+- Policy System
+	- Crisis-specific configurations
+	- Priority levels (Evacuation, Medical, Shelter, Supplies, Personal)
+	- Message type handling
+- Wallet Management
+	- Family wallet creation
+	- Individual member addresses
+	- PGP encryption/decryption
+- API Endpoints
+	- Transaction submission
+	- Blockchain explorer
+	- Wallet management
+	- Admin operations
+- Web Interface
+	- Wallet dashboard
+	- Transaction viewing
+	- QR code generation
+- Deployment
+	- Dockerized environment
+	- SQLite database persistence
+
+🚧 In Progress
+
+- Message decryption workflow
+- Device-to-device sync prototype
+- Enhanced admin alert system
+- QR scanning interface
 
 Technical Architecture
-- Backend: Python API server with custom blockchain implementation (no mining - admin validates all blocks)
-- Frontend: HTML/JavaScript (will port to React later)
-- Database: Custom blockchain structure with 3-minute block intervals
-- Communication: WiFi-based device-to-device sync when offline
-- Deployment: Web server hosting blockchain + API, with public read-only blockchain access
+
+	graph TD
+	    A[Frontend] -->|HTTP| B[Flask API]
+	    B --> C[Blockchain Engine]
+	    C --> D[SQLite Database]
+	    E[Mobile Devices] -->|WiFi Sync| F[Offline Queue]
+	    F --> B
+
+
+GETTING STARTED
+
+Prerequisites
+- Docker
+- Docker Compose
+- Python 3.11
+
+Installation
+
+1. Clone repository:
+	git clone https://github.com/yourusername/krisys.git
+	cd krisys
+
+2. Build and start containers:
+	docker-compose up --build
+
+
+Usage
+
+1. Access Web Interface:
+http://localhost:5000
+
+2. Create Test Wallet:
+	docker exec -it krisys_blockchain_1 python test_pgpwallet.py
+
+3. Send Test Message:
+	docker exec -it krisys_blockchain_1 python test_private_message.py
+
+4. Access Wallet Dashboard:
+http://localhost:5000/wallet/dashboard/<family_id>
+
+
+File Structure
+
+	/kriSYS/
+	├── docker-compose.yml
+	├── Dockerfile
+	├── blockchain/               	# Database volume
+	│   └── blockchain.db
+	└── src/
+	    ├── app.py                	# Main application
+	    ├── blockchain.py         	# Core blockchain logic
+	    ├── database.py           	# Database operations
+	    ├── requirements.txt
+	    ├── test_crisis.py        	# Integration tests
+	    ├── test_pgpwallet.py     	# Wallet tests
+	    ├── test_private_message.py # Messaging tests
+	    ├── static/
+	    │   ├── js/
+	    │   │   └── wallet_dashboard.js
+	    │   └── css/
+	    │       └── wallet_dashboard.css
+	    └── templates/
+	        ├── index.html
+	        ├── admin.html
+	        ├── wallet_dashboard.html
+	        └── scanner.html
+
+Key Endpoints
+
+ENDPOINT						METHOD		DESCRIPTION
+---------------------------------------------------------------------
+/								GET			Blockchain explorer
+/wallet							POST		Create new family wallet
+/wallet/<family_id>				GET			Get wallet info
+/wallet/dashboard/<family_id>	GET			Wallet dashboard
+/transaction					POST		Submit transaction
+/admin/mine						POST		Mine pending transactions
+/admin/alert					POST		Broadcast admin alert
+/checkin						POST		Record station check-in
 
 
 DEVELOPMENT PHASES
@@ -67,15 +179,12 @@ Priority: User wallet management
 	- Address book with custom labels (local storage only)
 	- Subscription system for following other addresses
 
-
-
 ***********************************************************
 Project Checkpoint Summary & Next Steps Prompt
 
 Project Name: KriSYS - Crisis Communication Blockchain System
 Current Phase: Phase 1 Complete (Core Blockchain + Basic Wallet System)
-Checkpoint Date: July 30, 2025
-Git Commit: 6bb5824a491f6b5983c1e82f057ddce178ce857d
+Checkpoint Date: Aug 2, 2025
 -----------------------------------------------------------
 
 Core Achievements:
@@ -107,7 +216,6 @@ Technical Environment:
 - PGPy for encryption
 - SQLite database
 - Docker deployment
-- VS Code on Linux Mint
 
 Critical Design Principles:
 1. Privacy First: User messages encrypted, admin alerts plaintext
@@ -115,9 +223,6 @@ Critical Design Principles:
 3. Crisis-Specific: Each disaster has own blockchain instance
 4. Aid-Organization Controlled: Full validation control
 ***********************************************************
-
-
-
 
 PHASE 3: Offline Messaging + Sync
 
@@ -214,18 +319,8 @@ NOTES: current file structure while under development
         ├── wallet_dashboard.html
         └── scanner.html
 
-Test routes as of July 22 2025:
-- http://localhost:5000 - Blockchain explorer
-- http://localhost:5000/scanner - QR scanner interface
-- http://localhost:5000/wallet - Wallet creation endpoint
-- view blockchain - curl http://localhost:5000/blockchain 
-	-> [{"block_index":0,"hash":"bb04c0087d4deb91a232bdd83988245ae6bdfc0bc7918918494c8618d1ad30b9","nonce":0,"previous_hash":"0","timestamp":1753203088.20498,"transactions":[]}]
 
-- manual mining - curl -X POST -H "X-Admin-Token: default_admin_token_please_change" http://localhost:5000/admin/mine
-
-- checking in - curl -X POST -H "Content-Type: application/json" -d '{"address": "bb04c0087d4deb91a232bdd83988245ae6bdfc0bc7918918494c8618d1ad30b9"}' http://localhost:5000/checkin 
-	-> {"message":"Checked in bb04c0087d4deb91a232bdd83988245ae6bdfc0bc7918918494c8618d1ad30b9 at station STATION_001","status":"success","transaction_id":"70819e8662976cd1bfcee0132bb912a09ffbb7db924dd427adfcc2da390f773e"}
-
+NOTE: For common commands and testing as of now, see "DEV - quick referece.txt" and "DEV - Agenda Notes".txt
 
 Final structure to look more similar to this:
 krisys/

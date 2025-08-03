@@ -391,7 +391,7 @@ def wallet_dashboard(family_id):
         if not wallet:
             return render_template('error.html', message="Wallet not found"), 404
         
-        # Handle unlock form submission
+        # Handle unlock form submission - DEV NOTE: PASSPHRASE NEEDED TO UNLOCK OR JWT ON LOCAL STORAGE!!!
         passphrase = None
         if request.method == 'POST':
             passphrase = request.form.get('passphrase')
@@ -405,10 +405,15 @@ def wallet_dashboard(family_id):
             "name": crisis_meta['name']
         }
         
+        # Add unlocked status to wallet data
+        wallet_data['unlocked'] = wallet.private_key is not None
+        
+        # DEBUGGING
         if wallet_data: logger.info(wallet_data)
         else:
             logger.info(f'blockchain.policy_system.get_policy(): {crisis_meta}') 
             logger.exception("NO WALLET DATA RECEIVED!!!")
+        # DEBUGGING
         
         # Get transactions
         transactions = []
@@ -416,37 +421,52 @@ def wallet_dashboard(family_id):
             for tx in block.transactions:
                 tx_data = tx.to_dict()
                 
-                # Attempt decryption if wallet is unlocked
+                # Decrypt message if wallet is unlocked
                 if wallet.private_key and tx.type_field == "message":
                     try:
                         decrypted = wallet.decrypt_message(tx.message_data)
                         if decrypted:
-                            tx_data['message_data'] = decrypted
-                            tx_data['decrypted'] = True
+                            tx_data['decrypted_message'] = decrypted
                     except Exception as e:
                         logger.error(f"Decryption failed: {str(e)}")
-                        tx_data['decrypted'] = False
+                        tx_data['decryption_error'] = True
                 
                 transactions.append(tx_data)
         
         # Filter and sort
         member_addresses = [m['address'] for m in wallet.members]
-        relevant_txs = [
-            tx for tx in transactions
+        # relevant_txs = [
+        #     tx for tx in transactions
             # Include if:
             # 1. It's a broadcast message (no specific addresses)
             # 2. It's addressed to any wallet member
             # 3. It's an admin alert (or other broadcast type)
-            if (not tx['related_addresses'] or  # Broadcast messages
-                tx['type_field'] == 'alert' or  # All alerts
-                any(addr in tx['related_addresses'] for addr in member_addresses))
+        relevant_txs = [
+            tx for tx in transactions
+            if (tx['type_field'] == 'alert' or  # Always show alerts
+                any(addr in tx['related_addresses'] for addr in member_addresses)
+            )
         ]
         
         relevant_txs = sorted(relevant_txs, key=lambda x: x['timestamp_posted'], reverse=True)[:10]
         
+        # DEV NOTE: Debugging
+        logger.info(f"Found {len(relevant_txs)} relevant transactions")
+        for tx in relevant_txs:
+            logger.info(f"TX: {tx['transaction_id']} | Type: {tx['type_field']} | Addresses: {tx['related_addresses']}")
+        # DEV NOTE: Debugging
+        
+        
         logger.info(f'wallet: {wallet} being sent to dashboard html template')
         logger.info(f'relevant_txs: {relevant_txs} being sent to dashboard html template')
         logger.info(f'family_id: {family_id} being sent to dashboard html template')
+        
+        logger.info("/////////////////////////")
+        logger.info(f"Wallet member addresses: {member_addresses}")
+        logger.info(f"Relevant transactions count: {len(relevant_txs)}")
+        for tx in relevant_txs:
+            logger.info(f"TX: {tx['transaction_id']} | Type: {tx['type_field']} | Addresses: {tx['related_addresses']}")
+        logger.info("/////////////////////////")
         
         return render_template('wallet_dashboard.html', 
                                wallet = wallet_data, # passing dict for jinja to parse on the other side
@@ -481,7 +501,31 @@ def add_wallet_member():
     }), 201
 #################
 
+# DEV NOTE: NEED TO ADD SESSION MANAGEMENT LATER, THIS IS UNLOCKING FROM FRONTEND JUST FOR DEMONSTRATION PURPOSES
 @app.route('/auth/unlock', methods=['POST'])
+def unlock_wallet_endpoint():
+    """Simplified unlock endpoint without session management"""
+    try:
+        data = request.json
+        family_id = data.get('family_id')
+        passphrase = data.get('passphrase')
+        
+        if not family_id or passphrase is None:
+            return jsonify({"error": "Missing family_id or passphrase"}), 400
+        
+        wallet = blockchain.wallets.get_wallet(family_id)
+        if not wallet:
+            return jsonify({"error": "Wallet not found"}), 404
+        
+        # Always return success for demo purposes
+        return jsonify({
+            "status": "unlocked",
+            "message": "Wallet unlocked for current session"
+        })
+            
+    except Exception as e:
+        logger.error(f"Unlock error: {str(e)}")
+        return jsonify({"error": "Internal server error"}), 500
 
 
 @app.route('/debug/wallet/<family_id>')

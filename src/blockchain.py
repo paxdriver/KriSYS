@@ -239,8 +239,14 @@ class Wallet:
         try:
             keypair = pgpy.PGPKey()
             keypair.parse(self.keypair_str)
-            keypair.unlock(passphrase)
-            self.private_key = keypair
+            
+            # DEV NOTE: empty password for now in testing
+            with keypair.unlock(""):
+            # keypair.unlock(passphrase)
+                self.private_key = keypair
+            # DEV NOTE: empty password for now in testing
+            
+            # self.private_key = keypair
             return True
         except Exception as e:
             logger.error(f"Unlock failed: {str(e)}")
@@ -495,7 +501,7 @@ class Blockchain:
             )
         
         self.pending_transactions.append(transaction)
-        logger.info(f"Added transaction: {transaction.transaction_id}")
+        logger.info(f"Added transaction: {transaction.transaction_id} to blockchain.pending_transactions")
         
     
     def load_chain(self) -> bool:
@@ -714,8 +720,12 @@ class WalletAuth:
                     hashes=[HashAlgorithm.SHA256],
                     ciphers=[SymmetricKeyAlgorithm.AES256])
         
-        if passphrase:
-            key.protect(passphrase, SymmetricKeyAlgorithm.AES256, HashAlgorithm.SHA256)
+        #####################
+        # DEV NOTE: empty password for now, will be the password protection for direct messages
+        key.protect("", SymmetricKeyAlgorithm.AES256, HashAlgorithm.SHA256)
+        # if passphrase:
+        #     key.protect(passphrase, SymmetricKeyAlgorithm.AES256, HashAlgorithm.SHA256)
+        #####################
         
         return key
     

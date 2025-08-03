@@ -8,8 +8,12 @@
     <script>
         // Pass data from Flask to JavaScript
         const walletData = {{ wallet | tojson | safe }};
-        const transactions = {{ transactions | tojson | safe }};
+        const transactions = {{ transactions | tojson
+         | safe }};
         const familyId = "{{ family_id }}"
+
+        // Unlocked status added to walletData
+        walletData.unlocked = {{ 'true' if wallet.private_key else 'false' }};
     </script>
 </head>
 <body>
@@ -98,9 +102,23 @@
                     </div>
                 </div>
             </div>
+
+            
+            <!-- Filter Members -->
+            <div class="member-filter">
+                <select id="member-filter">
+                    <option value="all">All Family Members</option>
+                    {% for member in wallet.members %}
+                    <option value="{{ member.address }}">{{ member.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
             
             <!-- Members Page -->
             <div id="members-page" class="page" style="display:none;">
+                <div id="unlock-status" style="display: none; margin: 10px 0; padding: 5px; background: #f0f0f0;">
+                🔒 Wallet locked
+                </div>
                 <div class="page-header">
                     <h1 class="page-title">Family Members</h1>
                     <button class="btn" id="add-member-btn">
@@ -120,12 +138,20 @@
 
             <!-- Authentication Modal -->
             <div id="auth-modal" class="modal">
-                <!-- DEVELOPMENT - Inside the auth-modal div -->
-                <div id="unlock-form" style="display:none;">
+                <!-- DEVELOPMENT - Add unlock status indicator -->
+                <div id="unlock-status" class="unlock-status">
+                    {% if session.get('wallet_' + family_id + '_unlocked') %}
+                        🔓 Wallet unlocked
+                    {% else %}
+                        🔒 Wallet locked
+                    {% endif %}
+                </div>
+                <!-- DEVELOPMENT - UNLOCK WITH PASSWORD FORM (SESSION MANAGEMENT) -->
+                <div id="unlock-form" style="display:{% if not session.get('wallet_' + family_id + '_unlocked') %}block{% else %}none{% endif %};">
                     <h3>Unlock Wallet</h3>
                     <label>Enter Passphrase:</label>
                     <input type="password" id="wallet-passphrase" class="form-input">
-                    <button id="unlock-wallet-btn" class="btn">Unlock Wallet</button>
+                    <button id="unlock-wallet-btn" class="btn" onclick="unlockWallet()">Unlock Wallet</button>
                     <p id="unlock-error" style="color:red; display:none;"></p>
                 </div>
                 <!-- DEVELOPMENT - Inside the auth-modal div -->
