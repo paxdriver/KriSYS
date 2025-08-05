@@ -1,6 +1,7 @@
 # app.py
 import hashlib
 from flask import Flask, request, jsonify, render_template, send_file
+from flask_cors import CORS
 from blockchain import Blockchain, Transaction, WalletManager, PolicySystem
 import time
 import json
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 MAX_MEMBERS = 20     # DEV NOTE: THIS SHOULD BE DEFINED IN THE BLOCKCHAIN ISNTANTIATION POLICY BY ADMIN
 
 app = Flask(__name__, static_folder='static')
+CORS(app, origins=['http://localhost:3000', 'http://localhost:5000'])
 app.secret_key = os.environ.get('SECRET_KEY', 'dev_secret_key_please_change_in_prod')  # PRODUCTION: Use secure random key
 
 ################

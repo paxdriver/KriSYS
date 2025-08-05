@@ -1,4 +1,6 @@
-__pycache__
-.pytest_cache
-blockchain/
+**/__pycache__/
+**/.pytest_cache/
+**/blockchain/
+**/node_modules/
 DEV\ -\ prompt*
+.env*

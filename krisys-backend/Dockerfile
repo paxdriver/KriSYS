@@ -9,11 +9,11 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-COPY src/requirements.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY src /app
+COPY . /app
 
 EXPOSE 5000
 
-CMD ["gunicorn", "-b", "0.0.0.0:5000", "app:app", "--workers", "2"]
+CMD ["gunicorn", "-b", "0.0.0.0:5000", "app:app", "--workers", "2", "--reload"]
