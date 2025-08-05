@@ -6,42 +6,52 @@ import MembersPage from './MembersPage'
 import UnlockForm from './UnlockForm'
 
 export default function WalletDashboard({ walletData, transactions, familyId, onRefresh }) {
-  const [currentPage, setCurrentPage] = useState('overview')
-  const [isUnlocked, setIsUnlocked] = useState(false)
+    const [currentPage, setCurrentPage] = useState('overview')
+    const [privateKey, setPrivateKey] = useState(null)
+    const [isUnlocked, setIsUnlocked] = useState(false)
 
-  return (
-    <div className="dashboard-container">
-      <Sidebar 
-        walletData={walletData}
-        currentPage={currentPage}
-        onPageChange={setCurrentPage}
-      />
-      
-      <main className="main-content">
-        {!isUnlocked && (
-          <UnlockForm 
-            familyId={familyId}
-            onUnlock={() => setIsUnlocked(true)}
-          />
-        )}
-        
-        {currentPage === 'overview' && (
-          <Overview 
-            walletData={walletData}
-            transactions={transactions}
-            onRefresh={onRefresh}
-          />
-        )}
-        
-        {currentPage === 'members' && (
-          <MembersPage 
-            walletData={walletData}
-            transactions={transactions}
-          />
-        )}
-        
-        {/* Add other pages as needed */}
-      </main>
-    </div>
-  )
+    const handleUnlock = key => {
+        setPrivateKey(key)
+    }
+
+
+    
+    return (
+        <div className="dashboard-container">
+            <Sidebar 
+                walletData={walletData}
+                currentPage={currentPage}
+                onPageChange={setCurrentPage}
+            />
+            
+            <main className="main-content">
+                {!privateKey ? (
+                    <UnlockForm 
+                        familyId={familyId}
+                        onUnlock={() => setIsUnlocked(true)}
+                    />) : (<>
+                    
+                    <div className="unlock-status">🔓 Wallet unlocked</div>
+                        {currentPage === 'overview' && (
+                            <Overview 
+                                walletData={walletData}
+                                transactions={transactions}
+                                privateKey={privateKey} // Pass to child components
+                            />
+                        )}
+                                
+                        {currentPage === 'members' && (
+                            <MembersPage 
+                                walletData={walletData}
+                                transactions={transactions}
+                            />
+                        )}
+                    
+                    {/* other pages */}
+                    
+                    </>)
+                }
+            </main>
+        </div>
+    )
 }
