@@ -73,14 +73,17 @@ def init_db():
         )
         ''')
         
-        # Add crisis_id column if missing
-        try:
-            conn.execute("ALTER TABLE wallets ADD COLUMN crisis_id TEXT NOT NULL DEFAULT 'default_crisis'")
-            conn.commit()
-            logger.info("Added crisis_id column to wallets table")
-        except sqlite3.OperationalError as e:
-            if "duplicate column name" not in str(e):
-                logger.error(f"Error adding crisis_id column: {str(e)}")
+        # Add keypairs lookup table, with private keys salted by users' passphrase to unlock and decrypt personal messages locally
+        conn.execute('''
+        CREATE TABLE IF NOT EXISTS wallet_keys (
+            id INTEGER PRIMARY KEY,
+            family_id TEXT UNIQUE NOT NULL REFERENCES wallets(family_id),
+            encrypted_private_key TEXT NOT NULL,  -- Encrypted with user passphrase
+            public_key TEXT NOT NULL,             -- For others to encrypt messages sent to this wallet
+            created_at REAL DEFAULT (strftime('%s', 'now'))
+        )
+        ''')
+        
         
 if __name__ == "__main__":
     raise RuntimeError('This script should never be called directly, it offers helper functions to be imported by other scripts in this project.')

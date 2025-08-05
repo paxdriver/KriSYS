@@ -1,36 +1,42 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+PGP AUTH FLOW
 
-## Getting Started
+Server Responsibilities:
 
-First, run the development server:
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+Flask Backend (the API server at port 5000):
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+- Stores encrypted private keys in SQLite database
+- Handles passphrase authentication
+- Decrypts and delivers private keys to authenticated users
+- Stores public blockchain data
+- NO message decryption (that's moving to client)
+Next.js Frontend (port 3000):
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
-## Learn More
+- Receives private key from Flask backend after authentication
+- Stores private key in browser memory only
+- Handles all message decryption client-side
+- Manages unlock state in React
 
-To learn more about Next.js, take a look at the following resources:
+Implementation Plan:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Flask Backend Changes:
 
-## Deploy on Vercel
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+1. Modify wallet creation to encrypt private keys with user passphrase
+2. Add authentication endpoint that returns decrypted private key
+3. Remove all message decryption from dashboard routes
+React Frontend Changes:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+1. Store received private key in React state
+2. Each message component decrypts its own content using that key
+3. Private key never leaves browser memory
+Database Changes:
+
+
+1. Store encrypted private keys in wallets table
+2. Remove any session-based unlock tracking
+The key insight: Flask backend becomes a secure key vault that only does authentication and key delivery, while React frontend becomes the crypto engine that decrypts all messages locally.

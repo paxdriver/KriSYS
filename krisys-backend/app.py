@@ -23,10 +23,11 @@ logger = logging.getLogger(__name__)
 MAX_MEMBERS = 20     # DEV NOTE: THIS SHOULD BE DEFINED IN THE BLOCKCHAIN ISNTANTIATION POLICY BY ADMIN
 
 app = Flask(__name__, static_folder='static')
+################ DEV NOTE: CHANGE ADMIN SECRETS!!!!!!!
 CORS(app, origins=['http://localhost:3000', 'http://localhost:5000'])
 app.secret_key = os.environ.get('SECRET_KEY', 'dev_secret_key_please_change_in_prod')  # PRODUCTION: Use secure random key
-
 ################
+
 # CREATING CRISIS
 policy_system = PolicySystem()
 hurricane_policy_id = policy_system.create_crisis_policy(
@@ -77,27 +78,21 @@ def DEV_POLICY_CHECK():
     
 # Call policy check after the blockchain and policy are instatiated
 DEV_POLICY_CHECK()
-########### TESTING IN DEV MODE ###############
 
 # Admin token setup : this is for the organization hosting the entire KriSYS system for a given disaster
 ADMIN_TOKEN = os.getenv('ADMIN_TOKEN', 'default_admin_token_please_change')
+########### TESTING IN DEV MODE ###############
 
-# Admin authentication decorator - this is for the blockchain provider, the agent hosting the entire chain
+# Admin authentication decorator
 def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         auth_token = request.headers.get('X-Admin-Token')
-        if auth_token not in [ADMIN_TOKEN, "valid_admin_token"]:  # DEV NOTE: Allow test token during testing
+        if auth_token not in [ADMIN_TOKEN, "valid_admin_token"]:
             return jsonify({"error": "UNAUTHORIZED: INVALID ADMIN TOKEN"}), 401
         return f(*args, **kwargs)
     return decorated_function
 
-###### DEV NOTE: TEMPLATES - Flask automatically looks for templates in the /templates/ folder so /templates/scanner.html and /templates/index.html are correct as they are
-
-# HTML browser to explore the public blockchain
-@app.route('/')
-def blockchain_explorer():
-    return render_template('index.html')
 
 # Crisis metadata
 @app.route('/crisis', methods=['GET'])
@@ -111,12 +106,7 @@ def get_crisis_info():
         "created_at": blockchain.crisis_metadata['created_at']
     })
 
-# Scanner web interface
-@app.route('/scanner')
-def scanner_interface():
-    return render_template('scanner.html')
-
-# Wallet info
+# Wallet info - NO KEYS INCLUDED
 @app.route('/wallet/<family_id>', methods=['GET'])
 def get_wallet(family_id):
     wallet = blockchain.wallets.get_wallet(family_id)
@@ -140,7 +130,7 @@ def get_wallet_transactions(family_id):
     # Get all member addresses
     addresses = [member['address'] for member in wallet.members]
     
-    # Find transactions related to any member
+    # Find transactions related to any member - NO DECRYPTION ON SERVER
     transactions = []
     for block in blockchain.chain:
         for tx in block.transactions:
@@ -149,22 +139,22 @@ def get_wallet_transactions(family_id):
     
     return jsonify(transactions)
 
-
-# Submissions from public queue
+# Message submission with encryption
 @app.route('/transaction', methods=['POST'])
 def add_transaction():
     data = request.json
     if data:
         if data['type_field'] == 'message':
             
-            # Handle message encryption
+            # Handle message encryption using wallet_keys table
             message_data = data['message_data']
             if data['type_field'] == 'message' and 'recipient_id' in data:
-                recipient = blockchain.wallets.get_wallet(data['recipient_id'])
-                if recipient:
+                # Get recipient's public key from wallet_keys table
+                public_key_str = blockchain.wallets.get_wallet_public_key(data['recipient_id'])
+                if public_key_str:
                     # Encrypt message with recipient's public key
                     pub_key = pgpy.PGPKey()
-                    pub_key.parse(recipient.keypair_str)
+                    pub_key.parse(public_key_str)
                     encrypted_msg = pub_key.encrypt(pgpy.PGPMessage.new(message_data))
                     message_data = str(encrypted_msg)
                     
@@ -189,26 +179,13 @@ def add_transaction():
                 logger.error(f"Transaction error: {str(e)}")
                 return jsonify({"error": "Internal server error"}), 500
         else:
-            # OTHER TYPES OF TRANSACTIONS LIKE UPDATING PROFILE OR SOMETHING...
             return jsonify({"error": "THIS TYPE OF TRANSACTION IS NOT YET DEFINED"}), 500
-            pass
     else:
-        # raise ValueError("add_transation() function can't build tx if data is not an object returned from the request it was provided.")
         return jsonify({"error": "No data provided"}), 400
     
 @app.route('/blockchain', methods=['GET'])
 def get_chain():
-    # chain_data = [{
-    #     "index": block.index,
-    #     "timestamp": block.timestamp,
-    #     "transactions": [tx.to_dict() for tx in block.transactions],
-    #     "previous_hash": block.previous_hash,
-    #     "hash": block.hash
-    # } for block in blockchain.chain]
     chain_data = [block.to_dict() for block in blockchain.chain]
-    
-    logger.info(jsonify(chain_data))
-    
     return jsonify(chain_data), 200
 
 @app.route('/address/<string:address>', methods=['GET'])
@@ -219,7 +196,6 @@ def get_address_transactions(address):
             if address in tx.related_addresses:
                 txs.append(tx.to_dict())
     return jsonify(txs), 200
-
 
 # Admin endpoint for manual mining
 @app.route('/admin/mine', methods=['POST'])
@@ -240,7 +216,7 @@ def mine_block():
 # Wallet management endpoints
 @app.route('/wallet', methods=['POST'])
 def create_wallet():
-    """Create a new family/group/agency/rurouni wallet containing individuals' addresses"""
+    """Create a new family wallet with keys stored separately"""
     try: 
         data = request.json
         num_members = int(data.get('num_members', 1))
@@ -251,15 +227,15 @@ def create_wallet():
         # Create members list with default names
         members = [{"name": f"Member {i+1}"} for i in range(num_members)]
         
-        # Use WalletManager to create wallet
+        # Use WalletManager to create wallet (keys stored in wallet_keys table)
         wallet = blockchain.wallets.create_wallet(
             family_id=hashlib.sha256(secrets.token_bytes(32)).hexdigest()[:24],
             members=members,
-            crisis_id=blockchain.crisis_metadata['id']
+            crisis_id=blockchain.crisis_metadata['id'],
+            passphrase=""  # Empty passphrase for development
         )
         
         return jsonify(wallet.to_dict()), 201
-
 
     except Exception as e:
         logger.error(f"Wallet creation error: {str(e)}")
@@ -303,14 +279,11 @@ def get_address_qr(family_id: str, address: str):
         logger.error(f"QR generation error: {str(e)}")
         return jsonify({"error": "QR generation failed"}), 500
 
-
-# DEV NOTE: Checking policy details at this endpoint, consider removing if not needed in prod
 @app.route('/policy', methods=['GET'])
 def get_current_policy():
     policy = blockchain.policy_system.get_policy()
     return jsonify(policy)
 
-# Change the blockchain's policy details after it's been initialized
 @app.route('/admin/policy', methods=['POST'])
 @admin_required
 def set_policy():
@@ -321,7 +294,6 @@ def set_policy():
         return jsonify({"status": "success", "policy": policy_id})
     return jsonify({"error": "Invalid Policy ID provided"}), 400
 
-# Check in stations with templated message data
 @app.route('/checkin', methods=['POST'])
 def check_in():
     """Process QR code scan and create check-in transaction"""
@@ -354,186 +326,43 @@ def check_in():
         logger.error(f"Check-in error: {str(e)}")
         return jsonify({"error": str(e)}), 400
 
-
-# Wallet Data Endpoint
-@app.route('/wallet/data', methods=['GET'])
-def get_wallet_data():
-    # In production: verify authentication
-    family_id = request.args.get('family_id')
-    
-    # Mock data - will be replaced with real DB queries
-    return jsonify({
-        "family_id": family_id,
-        "members": [
-            {"address": f"{family_id}-0", "label": "John Doe"},
-            {"address": f"{family_id}-1", "label": "Jane Smith"}
-        ],
-        "notifications": [
-            {
-                "type": "checkin",
-                "timestamp": time.time() - 3600,
-                "message": "Checked in at Medical Station",
-                "sender": "Medical Station 1"
-            },
-            {
-                "type": "message",
-                "timestamp": time.time() - 7200,
-                "message": "We have supplies at Shelter 3",
-                "sender": "Shelter Coordinator"
-            }
-        ],
-        "registered_devices": ["mobile-12345", "tablet-67890"]
-    })
-
-# Dashboard to view family wallet
-@app.route('/wallet/dashboard/<family_id>', methods=['GET', 'POST'])
-def wallet_dashboard(family_id):
-    try:
-        wallet = blockchain.wallets.get_wallet(family_id)
-        if not wallet:
-            return render_template('error.html', message="Wallet not found"), 404
-        
-        # Handle unlock form submission - DEV NOTE: PASSPHRASE NEEDED TO UNLOCK OR JWT ON LOCAL STORAGE!!!
-        passphrase = None
-        if request.method == 'POST':
-            passphrase = request.form.get('passphrase')
-            if passphrase: wallet.unlock(passphrase)
-        
-        # Prepare wallet data
-        wallet_data = wallet.to_dict()
-        crisis_meta = blockchain.policy_system.get_policy()
-        wallet_data['crisis'] = {
-            "id": crisis_meta['id'],
-            "name": crisis_meta['name']
-        }
-        
-        # Add unlocked status to wallet data
-        wallet_data['unlocked'] = wallet.private_key is not None
-        
-        # DEBUGGING
-        if wallet_data: logger.info(wallet_data)
-        else:
-            logger.info(f'blockchain.policy_system.get_policy(): {crisis_meta}') 
-            logger.exception("NO WALLET DATA RECEIVED!!!")
-        # DEBUGGING
-        
-        # Get transactions
-        transactions = []
-        for block in blockchain.chain:
-            for tx in block.transactions:
-                tx_data = tx.to_dict()
-                
-                # Decrypt message if wallet is unlocked
-                if wallet.private_key and tx.type_field == "message":
-                    try:
-                        decrypted = wallet.decrypt_message(tx.message_data)
-                        if decrypted:
-                            tx_data['decrypted_message'] = decrypted
-                            logger.info(tx_data['decrypted_message'])
-                        else:
-                            tx_data['decryption_error'] = decrypted
-                            logger.info(tx_data['decryption_error'])
-                    except Exception as e:
-                        logger.error(f"Decryption failed: {str(e)}")
-                        tx_data['decryption_error'] = True
-                
-                transactions.append(tx_data)
-        
-        # Filter and sort
-        member_addresses = [m['address'] for m in wallet.members]
-        # relevant_txs = [
-        #     tx for tx in transactions
-            # Include if:
-            # 1. It's a broadcast message (no specific addresses)
-            # 2. It's addressed to any wallet member
-            # 3. It's an admin alert (or other broadcast type)
-        relevant_txs = [
-            tx for tx in transactions
-            if (tx['type_field'] == 'alert' or  # Always show alerts
-                any(addr in tx['related_addresses'] for addr in member_addresses)
-            )
-        ]
-        
-        relevant_txs = sorted(relevant_txs, key=lambda x: x['timestamp_posted'], reverse=True)[:10]
-        
-        # DEV NOTE: Debugging
-        logger.info(f"Found {len(relevant_txs)} relevant transactions")
-        for tx in relevant_txs:
-            logger.info(f"TX: {tx['transaction_id']} | Type: {tx['type_field']} | Addresses: {tx['related_addresses']}")
-        # DEV NOTE: Debugging
-        
-        
-        logger.info(f'wallet: {wallet} being sent to dashboard html template')
-        logger.info(f'relevant_txs: {relevant_txs} being sent to dashboard html template')
-        logger.info(f'family_id: {family_id} being sent to dashboard html template')
-        
-        logger.info("/////////////////////////")
-        logger.info(f"Wallet member addresses: {member_addresses}")
-        logger.info(f"Relevant transactions count: {len(relevant_txs)}")
-        for tx in relevant_txs:
-            logger.info(f"TX: {tx['transaction_id']} | Type: {tx['type_field']} | Addresses: {tx['related_addresses']}")
-        logger.info("/////////////////////////")
-        
-        return render_template('wallet_dashboard.html', 
-                               wallet = wallet_data, # passing dict for jinja to parse on the other side
-                               transactions = relevant_txs,
-                               family_id = family_id)
-    
-    except Exception as e:
-        logger.exception("Wallet dashboard error")
-        return render_template('error.html', message=str(e)), 500
-
-
-# Add New Member in Wallet Endpoint
-@app.route('/wallet/member', methods=['POST'])
-def add_wallet_member():
-    family_id = request.json.get('family_id')
-    label = request.json.get('label')
-    
-    # Generate new address
-    new_address = f"{family_id}-{secrets.token_hex(4)}"
-    
-    # Add to database
-    with db_connection() as conn:
-        conn.execute(
-            "UPDATE wallets SET members = json_insert(members, '$[#]', json_object('address', ?, 'label', ?)) WHERE family_id = ?",
-            (new_address, label, family_id)
-        )
-        conn.commit()
-    
-    return jsonify({
-        "status": "success",
-        "new_member": {"address": new_address, "label": label}
-    }), 201
-#################
-
-# DEV NOTE: NEED TO ADD SESSION MANAGEMENT LATER, THIS IS UNLOCKING FROM FRONTEND JUST FOR DEMONSTRATION PURPOSES
+# NEW: Authentication endpoint that returns private key for client-side decryption
 @app.route('/auth/unlock', methods=['POST'])
 def unlock_wallet_endpoint():
-    """Simplified unlock endpoint without session management"""
+    """
+    Authenticate user and return private key for client-side decryption
+    This is the ONLY server-side decryption - just for key delivery
+    """
     try:
         data = request.json
         family_id = data.get('family_id')
-        passphrase = data.get('passphrase')
+        passphrase = data.get('passphrase', "")  # Empty for development
         
-        if not family_id or passphrase is None:
-            return jsonify({"error": "Missing family_id or passphrase"}), 400
+        if not family_id:
+            return jsonify({"error": "Missing family_id"}), 400
         
+        # Check if wallet exists
         wallet = blockchain.wallets.get_wallet(family_id)
         if not wallet:
             return jsonify({"error": "Wallet not found"}), 404
         
-        # Always return success for demo purposes
-        return jsonify({
-            "status": "unlocked",
-            "message": "Wallet unlocked for current session"
-        })
+        # Authenticate and get private key
+        private_key_str = blockchain.wallets.authenticate_and_get_private_key(family_id, passphrase)
+        
+        if private_key_str:
+            return jsonify({
+                "status": "unlocked",
+                "private_key": private_key_str,  # Send key to React frontend
+                "message": "Wallet unlocked - private key delivered for client-side decryption"
+            })
+        else:
+            return jsonify({"error": "Invalid passphrase"}), 401
             
     except Exception as e:
         logger.error(f"Unlock error: {str(e)}")
         return jsonify({"error": "Internal server error"}), 500
 
-
+# Debug endpoints
 @app.route('/debug/wallet/<family_id>')
 def debug_wallet(family_id):
     wallet = blockchain.wallets.get_wallet(family_id)
@@ -553,208 +382,5 @@ def debug_transactions():
 def debug_blockchain():
     return jsonify([block.to_dict() for block in blockchain.chain])
 
-
-
 if __name__ == '__main__':
-    # Start background miner thread in production
     app.run(host='0.0.0.0', port=5000)
-    
-    
-    
-    
-
-    
-    
-    
-    
-# @app.route('/auth/init', methods=['POST'])
-# def init_auth():
-#     """Begin authentication process"""
-#     wallet_id = request.json.get('wallet_id')
-#     device_id = request.json.get('device_id')
-    
-#     # Generate challenge
-#     challenge = secrets.token_hex(32)
-    
-#     # Check if device is registered
-#     is_registered = device_id in blockchain.get_wallet(wallet_id).devices
-    
-#     return jsonify({
-#         "challenge": challenge,
-#         "device_registered": is_registered
-#     })
-    
-
-# WALLET AUTHENTICATION - on devices (PGP-based, password-based, or TPM/device registration)
-# @app.route('/auth/verify', methods=['POST'])
-# def verify_auth():
-#     """Verify authentication signature"""
-#     signature = request.json.get('signature')
-#     device_id = request.json.get('device_id')
-    
-#     if not all([signature, wallet_id, challenge]):
-#         return jsonify({"error": "Missing authentication data"}), 400
-    
-#     wallet = blockchain.get_wallet(family_id)
-#     if wallet.auth.authenticate(challenge, signature, device_id):
-#         # Create session token
-#         session_token = secrets.token_urlsafe(32)
-#         session['wallet_session'] = session_token
-#         return jsonify({"status": "authenticated", "token": session_token})
-    
-#     return jsonify({"error": "Authentication failed"}), 401
-
-# @app.route('/auth/password', methods=['POST'])
-# def password_auth():
-#     """Password fallback authentication"""
-#     wallet_id = session.get('auth_wallet')
-#     password = request.json.get('password')
-    
-#     if not password or not wallet_id:
-#         return jsonify({"error": "Missing credentials"}), 400
-    
-#     wallet = blockchain.get_wallet(wallet_id, session)
-#     if wallet.auth.authenticate_with_password(password):
-#         session_token = secrets.token_urlsafe(32)
-#         session['wallet_session'] = session_token
-#         return jsonify({"status": "authenticated", "token": session_token})
-    
-#     return jsonify({"error": "Invalid credentials"}), 401
-
-# Wallet Auth - Device Registration endpoint (TPM module, for eg)
-# @app.route('/wallet/register-device', methods=['POST'])
-# def register_device():
-#     wallet_id = request.json.get('wallet_id')
-#     public_key = request.json.get('public_key')
-#     device_id = request.json.get('device_id')
-    
-#     wallet = blockchain.get_wallet(wallet_id, session)
-#     encrypted_creds = wallet.register_device(device_id, public_key)
-    
-#     return jsonify({
-#         "status": "registered",
-#         "device_id": device_id,
-#         "encrypted_creds": str(encrypted_creds)
-#     })
-### END wallet auth
-
-# Authentication challenge via PGP
-# @app.route('/auth/challenge', methods=['GET'])
-# def get_auth_challenge():
-#     """Generate authentication challenge"""
-#     challenge = secrets.token_hex(16)
-#     session['auth_challenge'] = challenge
-#     return jsonify({"challenge": challenge})
-
-# @app.route('/auth/login', methods=['POST'])
-# def pgp_login():
-#     """Authenticate using PGP signature"""
-#     data = request.json
-#     challenge = session.get('auth_challenge')
-#     signature = data.get('signature')
-#     fingerprint = data.get('fingerprint')
-    
-#     if not challenge or not signature or not fingerprint:
-#         return jsonify({"error": "Missing authentication data"}), 400
-    
-#     try:
-#         # Retrieve public key from blockchain
-#         public_key = get_public_key(fingerprint)  # Implement this function
-        
-#         # Verify signature
-#         signed_challenge = pgpy.PGPMessage.from_blob(signature)
-#         if public_key.verify(challenge, signed_challenge):
-#             # Create session
-#             # session['wallet_fingerprint'] = fingerprint
-#             return jsonify({"status": "authenticated"})
-#         else:
-#             return jsonify({"error": "Invalid signature"}), 401
-#     except Exception as e:
-#         logger.error(f"PGP login error: {str(e)}")
-#         return jsonify({"error": "Authentication failed"}), 500
-
-# def get_public_key(fingerprint):
-#     """Retrieve public key from blockchain (simplified)"""
-#     # In real implementation, this would query the blockchain
-#     # For now, we'll use a mock
-#     key, _ = pgpy.PGPKey.from_file('path/to/public_key.asc')
-#     return key
-#### END SIMPLE AUTH
-
-
-
-
-    
-    
-#######
-
-# All wallets on blockchain, from blockchain.py methods
-    ######### WALLET DATA IMPLEMENTATION NOTES: ############
-    # app.py:
-    # 	- Uses blockchain.wallets.create_wallet() to create wallets
-    # 	- Uses blockchain.wallets.get_wallet() to retrieve wallets
-    # Blockchain:
-    # 	- Contains WalletManager instance as self.wallets
-    # 	- Delegates wallet operations to the wallet manager
-    # WalletManager:
-    # 	- Handles database persistence
-    # 	- Manages in-memory cache of wallets
-    # 	- Implements CRUD operations for wallets
-    # Wallet:
-    # 	- Represents a single family wallet
-    # 	- Contains members and devices
-    # 	- Handles business logic (adding members/devices)
-    # WalletAuth:
-    # 	- Handles authentication mechanisms
-    # 	- Manages device registration and credentials
-    # Database:
-    # 	- Provides connection management
-    # 	- Ensures proper table structure
-    # 	- Handles SQL execution
-    ######### WALLET DATA IMPLEMENTATION NOTES: ############
-
-
-###########################
-#  Dev NOTE: Implementation Details for family/group wallet management of addresses and notifications
-
-# graph TD -> WALLET MANAGEMENT SYSTEM ARCHITECTURE
-#     A[Family Wallet] --> B[Authentication]
-#     A --> C[Member Management]
-#     A --> D[Address Generation]
-#     A --> E[Notifications]
-#     B --> B1[Password/Device Auth]
-#     C --> C1[Add Members]
-#     C --> C2[Edit Labels]
-#     D --> D1[New Addresses]
-#     E --> E1[All Transactions]
-#     E --> E2[Individual Filters]
-
- 
-# sequenceDiagram -> DEVICE REGISTRATION FLOW
-#     participant User
-#     participant Device
-#     participant Server
-#     User->>Device: Initiate device registration
-#     Device->>Server: Request registration challenge
-#     Server->>Device: Send encrypted challenge
-#     Device->>User: Prompt for wallet password
-#     User->>Device: Enter password
-#     Device->>Server: Submit challenge response + device ID
-#     Server->>Device: Confirm registration
-#     Device->>LocalStorage: Store encrypted credentials
-
-
-# sequenceDiagram -> WALLET AUTH FLOW
-#     participant Client
-#     participant Server
-#     participant Blockchain
-#     Client->>Server: Request challenge
-#     Server->>Client: Send nonce
-#     Client->>Client: Sign nonce with private key
-#     Client->>Server: Send signed nonce + public key fingerprint
-#     Server->>Blockchain: Retrieve public key by fingerprint
-#     Blockchain->>Server: Return public key
-#     Server->>Server: Verify signature
-#     Server->>Client: Auth token if valid
-
-###########################

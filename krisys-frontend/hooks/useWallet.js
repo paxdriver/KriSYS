@@ -3,7 +3,8 @@ import { useState } from "react"
 // hooks/useWallet
 const useWallet = (walletData, txs, familyId) => {
 
-    const [wallet, setWallet] = useState(null)
+    // Private PGP key, unlocked on server with passphrase so that server only stores salted private key
+    const [privateKey, setPrivateKey] = useState(null)
     const [isUnlocked, setIsUnlocked] = useState(false)
 
     console.log("RenderWalletData function")

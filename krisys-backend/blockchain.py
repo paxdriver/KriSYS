@@ -218,52 +218,8 @@ class Wallet:
     def __init__(self, family_id, crisis_id):
         self.family_id = family_id
         self.crisis_id = crisis_id
-        self.auth = WalletAuth()
-        self.keypair = self.auth.generate_keypair()
-        self.keypair_str = str(self.keypair)
         self.members = []
-        self.devices = []
-        self.private_key = None  # Store decrypted private key during session
-        
-    # Public key retrieval
-    def get_public_key(self):
-        """Get public key for this wallet"""
-        if self.keypair_str:
-            key = pgpy.PGPKey()
-            key.parse(self.keypair_str)
-            return key.pubkey
-        return None
-    
-    def unlock(self, passphrase):
-        """Temporarily unlock wallet for current request"""
-        try:
-            keypair = pgpy.PGPKey()
-            keypair.parse(self.keypair_str)
-            
-            # DEV NOTE: empty password for now in testing
-            with keypair.unlock(""):
-            # keypair.unlock(passphrase)
-                self.private_key = keypair
-            # DEV NOTE: empty password for now in testing
-            
-            # self.private_key = keypair
-            return True
-        except Exception as e:
-            logger.error(f"Unlock failed: {str(e)}")
-            return False
-    
-    def decrypt_message(self, encrypted_message):
-        """Decrypt a message using the wallet's private key"""
-        if not self.private_key:
-            raise ValueError("Wallet not unlocked")
-        
-        try:
-            msg = pgpy.PGPMessage.from_blob(encrypted_message)
-            decrypted = self.private_key.decrypt(msg)
-            return str(decrypted.message)
-        except Exception as e:
-            logger.error(f"Decryption failed: {str(e)}")
-            return None
+        self.devices = []        
         
     def to_dict(self):
         return {
@@ -276,54 +232,40 @@ class Wallet:
     def add_member(self, name):
         """Add new family member"""
         member_id = f"{self.family_id}-{secrets.token_hex(4)}"
-        keypair = self.auth.generate_keypair()
-        keypair_str = str(keypair)
         self.members.append({
             "id": member_id,
             "name": name,
             "address": member_id,
-            "keypair": keypair_str
         })
         return member_id
     
-    def register_device(self, device_id, public_key):
+    def register_device(self, device_id, public_key_str):
+    # def register_device(self, device_id, public_key):
         """Register new device for wallet access"""
-        
-        # Ensure we have a public key
-        if not public_key.is_public:
-            public_key = public_key.pubkey
-        
-        # Create device object
-        public_key_str = str(public_key)
+
         device = {
             "device_id": device_id,
             "public_key": public_key_str,
             "registered_at": time.time()
         }
-        
-        # Encrypt credentials
-        creds = pgpy.PGPMessage.new(json.dumps({
-            "wallet_id": self.family_id,
-            "access_level": "full"
-        }))
-        encrypted_creds = public_key.encrypt(creds)
-        device["encrypted_creds"] = str(encrypted_creds)
-        
+               
         # Store device
         self.devices.append(device)
-        return public_key_str
-        # return encrypted_creds
+        return device_id
 
 class WalletManager:
     def __init__(self):
         """Initialize wallet manager with in-memory cache"""
         self.wallets = {}  # In-memory cache: family_id -> Wallet object
+        self.auth = WalletAuth()
     
-    def create_wallet(self, family_id, members, crisis_id):
+    def create_wallet(self, family_id, members, crisis_id, passphrase=""):
         """
         Create a new wallet and store in database
         :param family_id: Unique family identifier
         :param members: List of member objects (each with 'name')
+        :param crisis_id: Crisis identifier (hurricane name, location-date-earthquake, for eg)
+        :param passphrase: passphrase to encrypt private key (empty for development, allows users to retrieve personal messages from blockchain from an unrecognized device)
         :return: Wallet object
         """
         # Create wallet instance
@@ -332,34 +274,41 @@ class WalletManager:
         # Add members to wallet
         for member in members:
             wallet.add_member(member['name'])
+            
+        # Generate PGP keypair for this wallet
+        keypair = self.auth.generate_keypair(passphrase)
         
-        # Save to database
+        # Encrypt private key with passphrase
+        encrypted_private_key = str(keypair)
+        public_key = str(keypair.pubkey)
+        
+        # Save wallet data and keys to database
         with db_connection() as conn:
-            # Convert members to serializable format
+            # Save lean wallet data
             serializable_members = [{
                 "id": m["id"],
                 "name": m["name"],
-                "address": m["address"],
-                "keypair_str": m["keypair"]
+                "address": m["address"]
             } for m in wallet.members]
-            # Convert devices to serializable format
-            serializable_devices = [{
-                "device_id": d["device_id"],
-                "public_key_str": d["public_key"],
-                "registered_at": d["registered_at"]
-            } for d in wallet.devices]
             
             conn.execute(
-                "INSERT INTO wallets (family_id, members, devices) VALUES (?, ?, ?)",
-                (family_id, 
-                 json.dumps(serializable_members),
-                 json.dumps(serializable_devices))
+                "INSERT INTO wallets (family_id, crisis_id, members, devices) VALUES (?, ?, ?, ?)",
+                (family_id, crisis_id, json.dumps(serializable_members), json.dumps([]))
             )
+            
+            # Save keys separately
+            conn.execute(
+                "INSERT INTO wallet_keys (family_id, encrypted_private_key, public_key) VALUES (?, ?, ?)",
+                (family_id, encrypted_private_key, public_key)
+            )
+            
             conn.commit()
         
         # Cache in memory
         self.wallets[family_id] = wallet
+        logger.info(f"Created wallet {family_id} with {len(wallet.members)} members")
         return wallet
+        
         
     def get_wallet(self, family_id):
         # First check in-memory cache
@@ -381,7 +330,6 @@ class WalletManager:
                 
                 # Reconstruct wallet from database
                 wallet = Wallet(row_dict['family_id'], row_dict['crisis_id'])
-                    
                 wallet.members = json.loads(row_dict['members'])
                 
                 # Handle devices if present
@@ -396,44 +344,62 @@ class WalletManager:
         
         return None
     
-    def add_device_to_wallet(self, family_id, device_id, public_key):
-        """
-        Register a new device for a wallet
-        :param family_id: Family identifier
-        :param device_id: Unique device identifier
-        :param public_key: Device's public key
-        :return: True if successful, False otherwise
-        """
-        wallet = self.get_wallet(family_id)
-        if not wallet:
-            return False
-        
-        # Add device to wallet
-        encrypted_creds = wallet.register_device(device_id, public_key)
-        
-        # Update database
+    def get_wallet_public_key(self, family_id):
+        """Get public key for encrypting messages to this wallet"""
         with db_connection() as conn:
-            conn.execute(
-                "UPDATE wallets SET devices = ? WHERE family_id = ?",
-                (json.dumps(wallet.devices), family_id)
+            cursor = conn.execute(
+                "SELECT public_key FROM wallet_keys WHERE family_id = ?",
+                (family_id,)
             )
-            conn.commit()
+            row = cursor.fetchone()
+            
+            if row:
+                return row['public_key']
+        return None
+    
+    def authenticate_and_get_private_key(self, family_id, passphrase):
+        """
+        Authenticate user and return decrypted private key
+        This is the ONLY server-side decryption - just for key delivery
+        """
+        with db_connection() as conn:
+            cursor = conn.execute(
+                "SELECT encrypted_private_key FROM wallet_keys WHERE family_id = ?",
+                (family_id,)
+            )
+            row = cursor.fetchone()
+            
+            if row:
+                try:
+                    # Load encrypted private key
+                    encrypted_key_str = row['encrypted_private_key']
+                    keypair = pgpy.PGPKey()
+                    keypair.parse(encrypted_key_str)
+                    
+                    # Try to unlock with provided passphrase
+                    # DEV NOTE: Using empty passphrase for development
+                    with keypair.unlock(passphrase):
+                        # Return the decrypted private key as string
+                        return str(keypair)
+                        
+                except Exception as e:
+                    logger.error(f"Authentication failed for {family_id}: {str(e)}")
+                    return None
         
-        return True
+        return None
     
     def delete_wallet(self, family_id):
-        """Delete wallet by family ID"""
+        """Delete wallet and its keys"""
         # Remove from cache
         if family_id in self.wallets:
             del self.wallets[family_id]
 
         # Delete from database
         with db_connection() as conn:
-            conn.execute(
-                "DELETE FROM wallets WHERE family_id = ?",
-                (family_id,)
-            )
+            conn.execute("DELETE FROM wallets WHERE family_id = ?", (family_id,))
+            conn.execute("DELETE FROM wallet_keys WHERE family_id = ?", (family_id,))
             conn.commit()
+    
 
 class Blockchain:
     def __init__(self, policy_system=None):
@@ -675,119 +641,21 @@ class Blockchain:
                 return False
                 
         return True
-
-
-class PGPAuth:
-    def __init__(self):
-        self.keys = {}
     
-    def generate_keypair(self, passphrase=None):
-        """Generate PGP key pair for a wallet"""
-        key = pgpy.PGPKey.new(PubKeyAlgorithm.RSAEncryptOrSign, 4096)
-        uid = pgpy.PGPUID.new('KriSYS User', comment='Auto-generated by KriSYS')
-        key.add_uid(uid, usage={KeyFlags.Sign, KeyFlags.EncryptCommunications},
-                    hashes=[HashAlgorithm.SHA256],
-                    ciphers=[SymmetricKeyAlgorithm.AES256])
-        
-        if passphrase:
-            key.protect(passphrase, SymmetricKeyAlgorithm.AES256, HashAlgorithm.SHA256)
-        
-        return key
-    
-    def sign_message(self, private_key, message, passphrase=None):
-        """Sign a message with private key"""
-        if passphrase:
-            with private_key.unlock(passphrase):
-                signature = private_key.sign(message)
-        else:
-            signature = private_key.sign(message)
-        return signature
-    
-    def verify_signature(self, public_key, message, signature):
-        """Verify message signature"""
-        return public_key.verify(message, signature)    
 
 # Wallet login to decrypt and make visible labels, messages and data related to addresses belonging to this group
 class WalletAuth:
     def __init__(self):
         self.device_registry = {}  # device_id: encrypted_credentials
     
-    def generate_keypair(self, passphrase=None):
+    # DEV NOTE: update passphrase code here, empty string only valid for development!!!!!
+    def generate_keypair(self, passphrase=""):
         """Generate PGP key pair for wallet"""
         key = pgpy.PGPKey.new(PubKeyAlgorithm.RSAEncryptOrSign, 4096)
         uid = pgpy.PGPUID.new('KriSYS Wallet', comment='Auto-generated')
         key.add_uid(uid, usage={KeyFlags.Sign, KeyFlags.EncryptCommunications},
                     hashes=[HashAlgorithm.SHA256],
                     ciphers=[SymmetricKeyAlgorithm.AES256])
-        
-        #####################
-        # DEV NOTE: empty password for now, will be the password protection for direct messages
-        key.protect("", SymmetricKeyAlgorithm.AES256, HashAlgorithm.SHA256)
-        # if passphrase:
-        #     key.protect(passphrase, SymmetricKeyAlgorithm.AES256, HashAlgorithm.SHA256)
-        #####################
-        
+              
+        key.protect(passphrase, SymmetricKeyAlgorithm.AES256, HashAlgorithm.SHA256)
         return key
-    
-    def register_device(self, device_id, public_key, encrypted_creds):
-        """Register trusted device"""
-        self.device_registry[device_id] = {
-            'public_key': public_key,
-            'creds': encrypted_creds
-        }
-    
-    def authenticate(self, challenge, signature, device_id=None):
-        """Authenticate using either device or password"""
-        if device_id and device_id in self.device_registry:
-            public_key = self.device_registry[device_id]['public_key']
-            return public_key.verify(challenge, signature)
-        return False
-    
-    def authenticate_with_password(self, password_hash):
-        """Fallback password authentication"""
-        # Compare with stored hash
-        pass
-
-######### WIP
-
-
-# PGP key-pair system for blockchain msg obfuscation and for wallets to store labels and notes
-    # Wallets to use PGP to authenticate transactions posted, and to decrypt messages received
-    
-    # sequenceDiagram
-        # participant Client
-        # participant Server
-        # participant Blockchain
-        # Client->>Server: Request challenge
-        # Server->>Client: Send nonce
-        # Client->>Client: Sign nonce with private key
-        # Client->>Server: Send signed nonce + public key fingerprint
-        # Server->>Blockchain: Retrieve public key by fingerprint
-        # Blockchain->>Server: Return public key
-        # Server->>Server: Verify signature
-        # Server->>Client: Auth token if valid
-
-
-######### WALLET DATA IMPLEMENTATION NOTES: ############
-# app.py:
-# 	- Uses blockchain.wallets.create_wallet() to create wallets
-# 	- Uses blockchain.wallets.get_wallet() to retrieve wallets
-# Blockchain:
-# 	- Contains WalletManager instance as self.wallets
-# 	- Delegates wallet operations to the wallet manager
-# WalletManager:
-# 	- Handles database persistence
-# 	- Manages in-memory cache of wallets
-# 	- Implements CRUD operations for wallets
-# Wallet:
-# 	- Represents a single family wallet
-# 	- Contains members and devices
-# 	- Handles business logic (adding members/devices)
-# WalletAuth:
-# 	- Handles authentication mechanisms
-# 	- Manages device registration and credentials
-# Database:
-# 	- Provides connection management
-# 	- Ensures proper table structure
-# 	- Handles SQL execution
-######### WALLET DATA IMPLEMENTATION NOTES: ############
