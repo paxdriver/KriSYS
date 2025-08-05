@@ -60,53 +60,249 @@ Family wallet must be protected by password for backup, but ideally the family d
 
 Need to consider default method of message verification (fingerprint or signature via PGP?) and the blockchain should have its own key pair, issuing all wallets the public key to ensure public chain does not leak personal details in any of the transactions posted by any of the users when they submit new messages.
 
-AUTH METHODS (defaults, framework overrides are an option, thank FOSS):
-1) Primary Authentication: PGP-based challenge-response for strong security
-2) Fallback Authentication: Password-based for device recovery
-3) Device Registration: For seamless access on trusted devices
 
-WALLET AUTHENTICATION FLOW
-sequenceDiagram
-    participant Client
-    participant Server
-    participant Blockchain
-    Client->>Server: Request challenge
-    Server->>Client: Send nonce
-    Client->>Client: Sign nonce with private key
-    Client->>Server: Send signed nonce + public key fingerprint
-    Server->>Blockchain: Retrieve public key by fingerprint
-    Blockchain->>Server: Return public key
-    Server->>Server: Verify signature
-    Server->>Client: Auth token if valid
-
-SECURITY ARCHITECTURE
-graph TD
-    A[User] -->|Initiate| B[Wallet Dashboard]
-    B --> C{Device Registered?}
-    C -->|Yes| D[PGP Challenge-Response]
-    C -->|No| E[Password Authentication]
-    D --> F[Access Granted]
-    E --> F
-    F --> G[Manage Wallet]
-    G --> H[Add Members]
-    G --> I[View Notifications]
-    G --> J[Generate Addresses]
-    G --> K[Register New Devices]
-
-WALLET MANAGER AND BLOCKCHAIN FLOW
-graph TD
-    A[app.py] --> B[Blockchain]
-    B --> C[WalletManager]
-    C --> D[Wallet]
-    D --> E[WalletAuth]
-    C --> F[Database]
+DATA FLOW ARCHITECTURE
+(UPDATED AUG 2 2025)
+graph LR
+    subgraph "Client Side"
+        A[User Input] --> B[React Components]
+        B --> C[API Service Layer]
+        B --> D[React Hooks/State]
+        D --> E[Local Storage/Memory]
+    end
     
-    style A fill:#f9f,stroke:#333
-    style B fill:#bbf,stroke:#333
-    style C fill:#f96,stroke:#333
-    style D fill:#6f9,stroke:#333
-    style E fill:#9cf,stroke:#333
-    style F fill:#cff,stroke:#333
+    subgraph "Network"
+        C --> F[HTTP/CORS]
+    end
+    
+    subgraph "Server Side" 
+        F --> G[Flask Routes]
+        G --> H[Blockchain Logic]
+        G --> I[Wallet Manager]
+        H --> J[Database Layer]
+        I --> J
+    end
+    
+    subgraph "Storage"
+        J --> K[SQLite Database]
+        K --> L[blocks, transactions]
+        K --> M[wallets, wallet_keys] 
+    end
+    
+    style A fill:#e1f5fe
+    style E fill:#f3e5f5
+    style K fill:#fff3e0
+
+
+===================================================
+
+DATABASE SCHEMA DESIGN
+(UPDATED: AUG 2 2025)
+erDiagram
+    blocks {
+        int id PK
+        int block_index
+        real timestamp
+        text previous_hash
+        text hash
+        int nonce
+    }
+    
+    transactions {
+        int id PK
+        int block_id FK
+        text transaction_id
+        real timestamp_created
+        real timestamp_posted
+        text station_address
+        text message_data
+        text related_addresses
+        text type_field
+        int priority_level
+    }
+    
+    wallets {
+        int id PK
+        text family_id UK
+        text members "JSON array"
+        text devices "JSON array"
+        real created_at
+        text crisis_id
+    }
+    
+    wallet_keys {
+        int id PK
+        text family_id UK FK
+        text encrypted_private_key "PGP private key"
+        text public_key "PGP public key"
+        real created_at
+    }
+    
+    crises {
+        text id PK
+        text name
+        text organization
+        text contact
+        text description
+        real created_at
+    }
+    
+    blocks ||--o{ transactions : contains
+    wallets ||--|| wallet_keys : has_keys
+    wallets }o--|| crises : belongs_to
+
+===================================================
+
+WALLET-BLOCKCHAIN SEQUENCE DIAGRM
+(UPDATED: AUG 2 2025)
+sequenceDiagram
+    participant User as User
+    participant React as React Frontend
+    participant Flask as Flask Backend
+    participant Chain as Blockchain
+    participant DB as Database
+    
+    Note over User,DB: Wallet Creation Flow
+    User->>React: Create wallet (3 members)
+    React->>Flask: POST /wallet {num_members: 3}
+    Flask->>Chain: Generate PGP keypair
+    Flask->>DB: INSERT INTO wallets (members)
+    Flask->>DB: INSERT INTO wallet_keys (encrypted_key, public_key)
+    Flask-->>React: Return wallet data (no keys)
+    React->>React: Display wallet with QR codes
+    
+    Note over User,DB: Message Sending Flow  
+    User->>React: Send message to family
+    React->>Flask: POST /transaction {message, recipient_id}
+    Flask->>DB: SELECT public_key FROM wallet_keys WHERE family_id = recipient
+    Flask->>Flask: Encrypt message with recipient's public key
+    Flask->>Chain: Add encrypted transaction to pending
+    Chain->>Chain: Mine block (3min interval)
+    Chain->>DB: Save block with encrypted transaction
+    
+    Note over User,DB: Message Reading Flow
+    User->>React: Open wallet dashboard
+    React->>Flask: GET /wallet/{id}/transactions
+    Flask-->>React: Return encrypted transactions (no decryption)
+    User->>React: Enter passphrase to unlock
+    React->>Flask: POST /auth/unlock {family_id, passphrase}
+    Flask->>DB: SELECT encrypted_private_key FROM wallet_keys
+    Flask->>Flask: Decrypt private key with passphrase
+    Flask-->>React: Return decrypted private key
+    React->>React: Store key in state, decrypt all messages
+    React->>User: Display decrypted messages
+
+===================================================
+
+BACKEND FLASK FUNCTION MAP
+(UPDATED: AUG 2 2025)
+graph TB
+    subgraph "app.py - Flask Routes"
+        A[app.py] --> B[get_crisis_info]
+        A --> C[get_wallet]
+        A --> D[get_wallet_transactions]
+        A --> E[add_transaction]
+        A --> F[get_chain]
+        A --> G[create_wallet]
+        A --> H[unlock_wallet_endpoint]
+        A --> I[admin_alert]
+        A --> J[check_in]
+    end
+    
+    subgraph "blockchain.py - Core Logic"
+        K[Blockchain] --> L[add_transaction]
+        K --> M[mine_block]
+        K --> N[validate_chain]
+        K --> O[load_chain]
+        
+        P[WalletManager] --> Q[create_wallet]
+        P --> R[get_wallet]
+        P --> S[authenticate_and_get_private_key]
+        P --> T[get_wallet_public_key]
+        
+        U[Wallet] --> V[add_member]
+        U --> W[to_dict]
+        
+        X[Transaction] --> Y[to_dict]
+        X --> Z[generate_id]
+        
+        AA[Block] --> BB[calculate_hash]
+        AA --> CC[to_dict]
+    end
+    
+    subgraph "database.py - Data Layer"
+        DD[init_db] --> EE[Create Tables]
+        FF[db_connection] --> GG[SQLite Context]
+    end
+    
+    C --> R
+    G --> Q
+    H --> S
+    E --> T
+    L --> DD
+    M --> FF
+
+
+===================================================
+
+FRONTEND REACT COMPONENT MAPgraph TB
+(UPDATED: AUG 2 2025)
+    subgraph "Pages"
+        A[app/page.js - BlockchainExplorer] --> B[BlockList]
+        A --> C[WalletCreator]
+        
+        D[app/wallet/[familyId]/page.js] --> E[WalletDashboard]
+    end
+    
+    subgraph "WalletDashboard Components"
+        E --> F[Sidebar]
+        E --> G[Overview]
+        E --> H[MembersPage]
+        E --> I[UnlockForm]
+        
+        G --> J[RecentActivity]
+        G --> K[MembersOverview]
+        
+        J --> L[TransactionItem]
+    end
+    
+    subgraph "Services & Hooks"
+        M[services/api.js] --> N[API Calls]
+        O[hooks/useWallet.js] --> P[Wallet State]
+        Q[hooks/useAuth.js] --> R[Auth State]
+    end
+    
+    subgraph "API Integration"
+        B --> M
+        C --> M
+        I --> M
+        L --> O
+        I --> Q
+    end    
+
+===================================================
+
+AUTH FLOW
+(UPDATED: AUG 2 2025)
+sequenceDiagram
+    participant User as User (React)
+    participant Frontend as React Frontend
+    participant Backend as Flask Backend
+    participant DB as SQLite Database
+    
+    User->>Frontend: Enter passphrase
+    Frontend->>Backend: POST /auth/unlock {family_id, passphrase}
+    Backend->>DB: SELECT encrypted_private_key FROM wallet_keys
+    DB-->>Backend: Return encrypted key
+    Backend->>Backend: Decrypt with passphrase (ONLY server decryption)
+    Backend-->>Frontend: Return decrypted private key
+    Frontend->>Frontend: Store private key in React state (memory only)
+    Frontend->>Frontend: Decrypt all messages client-side
+    User->>Frontend: View decrypted messages
+    Note over Frontend: Private key never persisted, lost on refresh
+
+===================================================
+
 
 
 >>> TEST WALLET MANAGER AND PGP DEFAULT AUTH
