@@ -3,18 +3,15 @@ services:
   backend:
     build: ./krisys-backend
     volumes:
-      - ./blockchain:/data
+      - ./blockchain:/app/blockchain
       - ./krisys-backend:/app  # Hot reload for development
     ports:
       - "5000:5000"
     environment:
       - BLOCKCHAIN_DB_PATH=/data/blockchain.db
-      - ADMIN_TOKEN=secure_admin_key_123
       - FLASK_DEBUG=1
       - FLASK_ENV=development
     command: python -m flask run --host=0.0.0.0 --port=5000 --reload
-    networks:
-      - krisys-network
 
   frontend:
     build: ./krisys-frontend
@@ -32,9 +29,3 @@ services:
     command: npm run dev
     depends_on:
       - backend
-    networks:
-      - krisys-network
-
-networks:
-  krisys-network:
-    driver: bridge

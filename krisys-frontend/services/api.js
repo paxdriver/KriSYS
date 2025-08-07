@@ -14,6 +14,7 @@ export const api = {
     getWalletTransactions: (familyId) => axios.get(`${API_BASE}/wallet/${familyId}/transactions`),
     getWalletQR: (familyId, address) => axios.get(`${API_BASE}/wallet/${familyId}/qr/${address}`),
         
+    // Auth endpoints
     unlockWallet: (familyId, passphrase) => 
         axios.post(`${API_BASE}/auth/unlock`, {
             family_id: familyId,
@@ -24,8 +25,7 @@ export const api = {
             throw new Error(error.response?.data?.error || "Unlock failed");
         }),
   
-    // Auth endpoints
-    unlockWallet: (familyId, passphrase) => axios.post(`${API_BASE}/auth/unlock`, { family_id: familyId, passphrase }),
+    // unlockWallet: (familyId, passphrase) => axios.post(`${API_BASE}/auth/unlock`, { family_id: familyId, passphrase }),
     
     // Transaction endpoints
     addTransaction: (transaction) => axios.post(`${API_BASE}/transaction`, transaction),

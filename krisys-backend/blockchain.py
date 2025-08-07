@@ -3,6 +3,7 @@ import hashlib
 import json
 import time
 from datetime import datetime, timedelta
+import os
 import pgpy
 from pgpy.constants import PubKeyAlgorithm, KeyFlags, HashAlgorithm, SymmetricKeyAlgorithm
 import threading
@@ -74,11 +75,11 @@ class PolicySystem:
         name: str, organization: str, 
         contact: str, description: str, 
         policy_settings: dict, policy_id: Optional[str] = None):
-        
         """
         Create a new crisis policy with custom settings
         - policy_id: Optional custom ID (auto-generated if not provided)
         - policy_settings: Partial settings (missing fields use defaults)
+        - Returns: policy_id of created policy
         """
         
         # Generate unique ID if not provided
@@ -147,8 +148,16 @@ class Transaction:
         transaction_id: Optional[str] = None,
         relay_hash: str = "",
         posted_id: str = "",
-        timestamp_posted: Optional[float] = None
-    ):
+        timestamp_posted: Optional[float] = None):
+        
+        """
+        Represents a blockchain transaction
+        - message_data: Encrypted for 'message' type transactions
+        - related_addresses: List of wallet addresses affected
+        - type_field: Transaction type (check_in, message, alert, etc)
+        - priority_level: From 1 (highest) to 5 (lowest)
+        """
+        
         self.transaction_id = transaction_id or self.generate_id(timestamp_created, station_address)
         self.timestamp_created = timestamp_created
         self.timestamp_posted = timestamp_posted or time.time()
@@ -187,6 +196,13 @@ class Block:
         previous_hash: str,
         nonce: int = 0
     ):
+        """
+        Represents a block in the blockchain
+        - transactions: List of Transaction objects
+        - previous_hash: Hash of previous block
+        - nonce: Proof-of-work value
+        - hash: Auto-calculated on initialization
+        """
         self.block_index = block_index
         self.timestamp = timestamp
         self.transactions = transactions
@@ -253,12 +269,15 @@ class Wallet:
         self.devices.append(device)
         return device_id
 
+
 class WalletManager:
-    def __init__(self):
+    def __init__(self, blockchain):
         """Initialize wallet manager with in-memory cache"""
+        self.blockchain = blockchain # reference to parent blockchain
         self.wallets = {}  # In-memory cache: family_id -> Wallet object
         self.auth = WalletAuth()
     
+    # THIS SEEMS WRONG TOO
     def create_wallet(self, family_id, members, crisis_id, passphrase=""):
         """
         Create a new wallet and store in database
@@ -279,8 +298,13 @@ class WalletManager:
         keypair = self.auth.generate_keypair(passphrase)
         
         # Encrypt private key with passphrase
-        encrypted_private_key = str(keypair)
+        user_encrypted_private_key = str(keypair)
         public_key = str(keypair.pubkey)
+        
+        
+        # Encrypt the encrypted private key with the blockchain master key, so that blockchain only returns the encrypted private key and no-one else can do this step but the blockchain that stores it. The passphrase then decrypts the response, so having the passphrase is required to unlock the wallet but the blockchain admin has no access to anyone's wallets.
+        ### DOUBLE CHECK THIS TOO PLEASE, YOURS IS DIFFERENT BUT THAT DIDN'T SEEM TO MAKE SENSE TO ME
+        master_encrypted_private_key = self.encrypt_with_master_key(user_encrypted_private_key)
         
         # Save wallet data and keys to database
         with db_connection() as conn:
@@ -299,7 +323,8 @@ class WalletManager:
             # Save keys separately
             conn.execute(
                 "INSERT INTO wallet_keys (family_id, encrypted_private_key, public_key) VALUES (?, ?, ?)",
-                (family_id, encrypted_private_key, public_key)
+                # "INSERT INTO wallet_keys (family_id, encrypted_private_key, public_key) VALUES (?, ?, ?)",
+                (family_id, master_encrypted_private_key, public_key)
             )
             
             conn.commit()
@@ -308,7 +333,50 @@ class WalletManager:
         self.wallets[family_id] = wallet
         logger.info(f"Created wallet {family_id} with {len(wallet.members)} members")
         return wallet
+
+
+    def encrypt_with_master_key(self, data):
+        """Encrypt data with blockchain's master public key"""
+        # Parse public key string to PGP object
+        pub_key = pgpy.PGPKey()
+        pub_key.parse(self.blockchain.master_public_key)
         
+        # Encrypt the data from the user for obfuscation of direct messages
+        message = pgpy.PGPMessage.new(data)
+        return str(pub_key.encrypt(message))
+
+
+    def authenticate_and_get_private_key(self, family_id, passphrase):
+        """
+        Retrieve and decrypt wallet's private key
+        1. Get doubly-encrypted key from database
+        2. Decrypt with master private key
+        3. Decrypt with user passphrase
+        """
+        with db_connection() as conn:
+            cursor = conn.execute(
+                "SELECT encrypted_private_key FROM wallet_keys WHERE family_id = ?",
+                (family_id,)
+            )
+            row = cursor.fetchone()
+            
+            if row:
+                try:
+                    # Step 1: Decrypt with master key
+                    encrypted_key = row['encrypted_private_key']
+                    # USE BLOCKCHAIN'S DECRYPTION METHOD
+                    user_encrypted_key = self.blockchain.decrypt_with_master_key(encrypted_key)
+                    
+                    # Step 2: Decrypt with user's passphrase
+                    user_key = pgpy.PGPKey()
+                    user_key.parse(user_encrypted_key)
+                    with user_key.unlock(passphrase):
+                        return str(user_key)
+                except Exception as e:
+                    logger.error(f"Authentication failed for {family_id}: {str(e)}")
+                    return None
+        return None
+
         
     def get_wallet(self, family_id):
         # First check in-memory cache
@@ -356,37 +424,7 @@ class WalletManager:
             if row:
                 return row['public_key']
         return None
-    
-    def authenticate_and_get_private_key(self, family_id, passphrase):
-        """
-        Authenticate user and return decrypted private key
-        This is the ONLY server-side decryption - just for key delivery
-        """
-        with db_connection() as conn:
-            cursor = conn.execute(
-                "SELECT encrypted_private_key FROM wallet_keys WHERE family_id = ?",
-                (family_id,)
-            )
-            row = cursor.fetchone()
-            
-            if row:
-                try:
-                    # Load encrypted private key
-                    encrypted_key_str = row['encrypted_private_key']
-                    keypair = pgpy.PGPKey()
-                    keypair.parse(encrypted_key_str)
-                    
-                    # Try to unlock with provided passphrase
-                    # DEV NOTE: Using empty passphrase for development
-                    with keypair.unlock(passphrase):
-                        # Return the decrypted private key as string
-                        return str(keypair)
-                        
-                except Exception as e:
-                    logger.error(f"Authentication failed for {family_id}: {str(e)}")
-                    return None
-        
-        return None
+
     
     def delete_wallet(self, family_id):
         """Delete wallet and its keys"""
@@ -407,13 +445,20 @@ class Blockchain:
         self.crisis_metadata = self.policy_system.get_policy()
         self.chain: List[Block] = []
         self.pending_transactions: List[Transaction] = []
-        self.wallets = WalletManager()
+        self.wallets = WalletManager(self)
         
         # Get policy values from PolicySystem
         policy_settings = self.policy_system.get_policy()['policy']
         self.block_interval = policy_settings['block_interval']
         self.max_tx_size = policy_settings['size_limit']
         self.tx_rate_limit = policy_settings['rate_limit']
+        
+        # Generate master keypair when new KriSYS Blockchain is instantiated
+        self.master_public_key = self.load_or_generate_master_key()
+        logger.info(f"Master public key: {self.master_public_key}")
+        
+        # Store public key in crisis metadata
+        self.crisis_metadata['public_key'] = str(self.master_public_key)
         
         init_db()       # Initialize database
         
@@ -423,6 +468,71 @@ class Blockchain:
         # Start automatic background miner
         self.miner_thread = threading.Thread(target=self.miner_loop, daemon=True)
         self.miner_thread.start()
+        
+    def load_or_generate_master_key(self):
+        """
+        Load existing or generate new master keypair
+        - Public key stored in blockchain/master_public_key.asc
+        - Private key stored in blockchain/master_private_key.asc
+        - Returns public key string
+        """
+        key_dir = '/data'   # Docker volume path
+        public_key_file = os.path.join(key_dir, 'master_public_key.asc')
+        private_key_file = os.path.join(key_dir, 'master_private_key.asc')
+        
+        # Ensure folder exists, or create it
+        os.makedirs(key_dir, exist_ok=True)
+        
+        if os.path.exists(public_key_file) and os.path.exists(private_key_file):
+            # Load existing public key
+            with open(public_key_file, 'r') as f:
+                return f.read()
+        else:
+            # Generate new keypair
+            key = pgpy.PGPKey.new(PubKeyAlgorithm.RSAEncryptOrSign, 4096)
+            uid = pgpy.PGPUID.new('KriSYS Blockchain', comment='Master Key')
+            key.add_uid(uid, usage={KeyFlags.EncryptCommunications},
+                        hashes=[HashAlgorithm.SHA256],
+                        ciphers=[SymmetricKeyAlgorithm.AES256])
+            
+            # Save keys
+            with open(public_key_file, 'w') as f:
+                f.write(str(key.pubkey))
+            with open(private_key_file, 'w') as f:
+                f.write(str(key))
+                logger.warning(f"MASTER PRIVATE KEY SAVED TO {private_key_file}")
+            return str(key.pubkey)
+
+
+    def decrypt_with_master_key(self, encrypted_data):
+        """
+        Decrypt data using master private key
+        - Reads private key from file on demand
+        - Does not store key in memory
+        """
+        private_key_file = os.path.join('/data', 'master_private_key.asc')
+        
+        if not os.path.exists(private_key_file):
+            logger.error("Master private key not found")
+            return None
+        
+        try:
+            # Load private key from file
+            with open(private_key_file, 'r') as f:
+                key_str = f.read()
+            
+            key = pgpy.PGPKey()
+            key.parse(key_str)
+            
+            # Decrypt the data
+            enc_message = pgpy.PGPMessage.from_blob(encrypted_data)
+            decrypted = key.decrypt(enc_message)
+            return str(decrypted.message)
+        except Exception as e:
+            logger.error(f"Decryption failed: {str(e)}")
+            return None
+    
+    
     
     def get_wallet(self, family_id):
         """Get wallet by family ID"""
@@ -616,8 +726,10 @@ class Blockchain:
                 # Only mine if we have transactions
                 if self.pending_transactions:
                     self.mine_and_save()
-                    
-                time.sleep(block_interval)        
+                
+                # Sleep for the remaining time in the block interval
+                sleep_time = block_interval - (time.time() % block_interval)
+                time.sleep(sleep_time)
             except Exception as e:
                 logger.error(f"Mining error: {str(e)}")
                 time.sleep(5)  # Wait before retrying

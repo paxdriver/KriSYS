@@ -1,33 +1,33 @@
-// components/BlockchainExplorer/BlockList.js
-import React from "react"
-
 export default function BlockList({ blocks, loading }) {
-  if (loading) {
-    return <div>Loading blockchain...</div>
-  }
+    if (loading) {
+        return <div className="loading">Loading blockchain...</div>
+    }
 
-  return (
-    <div>
-        <h2>Latest Blocks</h2>
-            <div id="blocks-container">
-            {blocks.map(block => (
-                <div key={block.block_index} className="block">
-                    <h3>Block #{block.block_index}</h3>
-                    <p><strong>Timestamp:</strong> {new Date(block.timestamp * 1000).toLocaleString()}</p>
-                    <p><strong>Hash:</strong> <code>{block.hash}</code></p>
-                    <p><strong>Transactions:</strong> {block.transactions.length}</p>
-                    
-                    {block.transactions.map(tx => (
-                        <div key={tx.transaction_id} className="transaction">
-                        <strong>TX ID:</strong> {tx.transaction_id}<br/>
-                        <strong>From:</strong> {tx.station_address}<br/>
-                        <strong>Type:</strong> {tx.type_field}<br/>
-                        <strong>Message:</strong> {tx.message_data}
+    if (!blocks || blocks.length === 0) {
+        return <div>No blocks found</div>
+    }
+
+    return (
+        <div className="card">
+            <div className="card-header">
+                <h3>Blockchain ({blocks.length} blocks)</h3>
+            </div>
+            <div className="card-body">
+                {blocks.slice().reverse().map(block => (
+                    <div key={block.block_index} className="block-item">
+                        <div className="block-header">
+                            <span className="block-index">Block #{block.block_index}</span>
+                            <span className="block-time">
+                                {new Date(block.timestamp * 1000).toLocaleString()}
+                            </span>
                         </div>
-                    ))}
-                </div>
-            ))}
+                        <div className="block-hash">{block.hash}</div>
+                        <div className="block-transactions">
+                            {block.transactions.length} transaction(s)
+                        </div>
+                    </div>
+                ))}
+            </div>
         </div>
-    </div>
-  )
+    )
 }

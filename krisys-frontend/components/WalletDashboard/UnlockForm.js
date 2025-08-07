@@ -13,20 +13,26 @@ export default function UnlockForm({ familyId, onUnlock }) {
         setError('')
 
         try {
+            console.log('🔓 Attempting unlock for family_id:', familyId)
+            console.log('🔓 Passphrase:', passphrase || '(empty)')
             
             const result = await api.unlockWallet(familyId, passphrase)
             
-            if (result.data.status === 'unlocked' && result.private_key) {
+            console.log('🔓 API Response:', result)
+            
+            if (result.status === 'unlocked') {
+                console.log('✅ Unlock successful, calling onUnlock with key:', result.private_key ? 'KEY_PRESENT' : 'NO_KEY')
                 onUnlock(result.private_key); // Pass decrypted key to parent
             } 
             else {
+                console.log('❌ Unlock failed - status:', result.status)
                 setError(result.error || 'Unlock failed')
             }
         }
         catch (error) {
-            console.error('Unlock error:', error.message)
-            console.log(error)
-            setError('Server error during unlock form submission.')
+            console.error('🚨 API Error:', error)
+            console.error('🚨 Error response:', error.response?.data)
+            setError(`Server error: ${error.message}`)
         } 
         finally {
             setLoading(false)
@@ -34,7 +40,7 @@ export default function UnlockForm({ familyId, onUnlock }) {
     }
     
     return (
-        <form onSubmit={handleSubmit} className="unlock-form">
+        <form onSubmit={handleUnlock} className="unlock-form">
         <h3>Unlock Wallet</h3>
         <label>Enter Passphrase:</label>
         <input 

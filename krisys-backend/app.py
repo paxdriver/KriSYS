@@ -1,8 +1,8 @@
 # app.py
 import hashlib
-from flask import Flask, request, jsonify, render_template, send_file
+from flask import Flask, request, jsonify
 from flask_cors import CORS
-from blockchain import Blockchain, Transaction, WalletManager, PolicySystem
+from blockchain import Blockchain, Transaction, PolicySystem
 import time
 import json
 import os
@@ -25,7 +25,7 @@ MAX_MEMBERS = 20     # DEV NOTE: THIS SHOULD BE DEFINED IN THE BLOCKCHAIN ISNTAN
 app = Flask(__name__, static_folder='static')
 ################ DEV NOTE: CHANGE ADMIN SECRETS!!!!!!!
 CORS(app, origins=['http://localhost:3000', 'http://localhost:5000'])
-app.secret_key = os.environ.get('SECRET_KEY', 'dev_secret_key_please_change_in_prod')  # PRODUCTION: Use secure random key
+# app.secret_key = os.environ.get('SECRET_KEY', 'dev_secret_key_please_change_in_prod')  # PRODUCTION: Use secure random key
 ################
 
 # CREATING CRISIS
@@ -48,20 +48,14 @@ hurricane_policy_id = policy_system.create_crisis_policy(
         },
         'types': ['check_in', 'message', 'alert', 'damage_report']
     },
-    policy_id="custom_crisis_id"
+    policy_id="Hurricane_Bobo"
 )
+
 # Activate the hurricane policy
 policy_system.current_policy = hurricane_policy_id
-##############
 
 # Create the blockchain
 blockchain = Blockchain(policy_system)
-# Create wallet manager for the new blockchain
-blockchain.wallets = WalletManager()
-
-logger.info(f"Created crisis policy: {hurricane_policy_id}")
-logger.info(f"Current policy: {policy_system.current_policy}")
-logger.info(f"Policy details: {json.dumps(policy_system.get_policy(), indent=2)}")
 
 ########### TESTING IN DEV MODE ###############
 def DEV_POLICY_CHECK():
@@ -78,21 +72,49 @@ def DEV_POLICY_CHECK():
     
 # Call policy check after the blockchain and policy are instatiated
 DEV_POLICY_CHECK()
-
-# Admin token setup : this is for the organization hosting the entire KriSYS system for a given disaster
-ADMIN_TOKEN = os.getenv('ADMIN_TOKEN', 'default_admin_token_please_change')
 ########### TESTING IN DEV MODE ###############
+
+
+#####################
+# Admin token setup : this is for the organization hosting the entire KriSYS system for a given disaster
+ADMIN_TOKEN = ""
+
+private_key_file = os.path.join('blockchain', 'master_private_key.asc')
+if not os.path.exists(private_key_file):
+    logger.critical("MASTER PRIVATE KEY FILE NOT FOUND. SHUTTING DOWN.")
+    import sys
+    sys.exit(1)
+with open(private_key_file, 'r') as f:
+    ADMIN_TOKEN = f.read()
 
 # Admin authentication decorator
 def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         auth_token = request.headers.get('X-Admin-Token')
-        if auth_token not in [ADMIN_TOKEN, "valid_admin_token"]:
+        if auth_token != ADMIN_TOKEN:
             return jsonify({"error": "UNAUTHORIZED: INVALID ADMIN TOKEN"}), 401
         return f(*args, **kwargs)
     return decorated_function
+#####################
 
+# # Create admin key file
+# admin_key_file = os.path.join('blockchain', 'admin_keys.txt')
+# try:
+#     with open(admin_key_file, 'w') as f:
+#         f.write(f"Blockchain ID: {blockchain.crisis_metadata['id']}\n")
+#         f.write(f"Master Public Key: {str(blockchain.master_keypair.pubkey)}\n")
+#         f.write(f"ADMIN_TOKEN: {os.environ['ADMIN_TOKEN']}\n")
+#         f.write("WARNING: This token decrypts all wallet keys - PROTECT IT!\n")
+#     logger.info(f"Admin key file created at {admin_key_file}")
+# except Exception as e:
+#     logger.error(f"Failed to create admin key file: {str(e)}")
+
+# logger.info(f"Created crisis policy: {hurricane_policy_id}")
+# logger.info(f"Current policy: {policy_system.current_policy}")
+# logger.info(f"Policy details: {json.dumps(policy_system.get_policy(), indent=4)}")
+
+#####################
 
 # Crisis metadata
 @app.route('/crisis', methods=['GET'])

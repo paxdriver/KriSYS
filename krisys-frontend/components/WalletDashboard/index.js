@@ -12,10 +12,10 @@ export default function WalletDashboard({ walletData, transactions, familyId, on
 
     const handleUnlock = key => {
         setPrivateKey(key)
+        setIsUnlocked(true)
     }
 
 
-    
     return (
         <div className="dashboard-container">
             <Sidebar 
@@ -28,7 +28,7 @@ export default function WalletDashboard({ walletData, transactions, familyId, on
                 {!privateKey ? (
                     <UnlockForm 
                         familyId={familyId}
-                        onUnlock={() => setIsUnlocked(true)}
+                        onUnlock={handleUnlock}
                     />) : (<>
                     
                     <div className="unlock-status">🔓 Wallet unlocked</div>
