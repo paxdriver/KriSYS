@@ -1,11 +1,24 @@
 // components/WalletDashboard/UnlockForm.js
 import { useState } from 'react'
 import { api } from '../../services/api'
+import { disasterStorage } from '../../services/localStorage'
 
 export default function UnlockForm({ familyId, onUnlock }) {
     const [passphrase, setPassphrase] = useState('')
     const [error, setError] = useState('')
     const [loading, setLoading] = useState(false)
+    
+    // CHECK FOR EXISTING LOCAL KEY ON COMPONENT LOAD
+    useState(() => {
+        console.log('🔍 Checking for existing private key in local storage...')
+        const localKey = disasterStorage.getPrivateKey(familyId)
+        if (localKey) {
+            console.log('✅ Found existing private key! Auto-unlocking wallet...')
+            onUnlock(localKey)
+            return
+        }
+        console.log('🔒 No local key found - user must unlock')
+    }, [])
     
     const handleUnlock = async (e) => {
         e.preventDefault()
@@ -13,26 +26,38 @@ export default function UnlockForm({ familyId, onUnlock }) {
         setError('')
 
         try {
-            console.log('🔓 Attempting unlock for family_id:', familyId)
-            console.log('🔓 Passphrase:', passphrase || '(empty)')
+            console.log('🌐 Attempting to fetch private key from server...')
             
             const result = await api.unlockWallet(familyId, passphrase)
             
-            console.log('🔓 API Response:', result)
-            
-            if (result.status === 'unlocked') {
-                console.log('✅ Unlock successful, calling onUnlock with key:', result.private_key ? 'KEY_PRESENT' : 'NO_KEY')
-                onUnlock(result.private_key); // Pass decrypted key to parent
-            } 
-            else {
-                console.log('❌ Unlock failed - status:', result.status)
+            if (result.status === 'unlocked' && result.private_key) {
+                console.log('✅ Server returned private key')
+                
+                // SAVE TO LOCAL STORAGE FOR OFFLINE ACCESS
+                console.log('💾 Saving private key locally for disaster communication')
+                disasterStorage.savePrivateKey(familyId, result.private_key)
+                
+                // Also save wallet data if we have it
+                // This enables offline message reading and queuing
+                
+                onUnlock(result.private_key)
+                
+            } else {
                 setError(result.error || 'Unlock failed')
             }
         }
         catch (error) {
-            console.error('🚨 API Error:', error)
-            console.error('🚨 Error response:', error.response?.data)
-            setError(`Server error: ${error.message}`)
+            console.error('🚨 Server unlock failed:', error.message)
+            
+            // TRY LOCAL STORAGE AS FALLBACK (for offline scenarios)
+            console.log('🔄 Server failed - checking local storage...')
+            const localKey = disasterStorage.getPrivateKey(familyId)
+            if (localKey) {
+                console.log('🏠 Using locally stored key (offline mode)')
+                onUnlock(localKey)
+            } else {
+                setError('Cannot unlock: No internet connection and no local key found')
+            }
         } 
         finally {
             setLoading(false)
@@ -41,24 +66,27 @@ export default function UnlockForm({ familyId, onUnlock }) {
     
     return (
         <form onSubmit={handleUnlock} className="unlock-form">
-        <h3>Unlock Wallet</h3>
-        <label>Enter Passphrase:</label>
-        <input 
-            type="password" 
-            value={passphrase}
-            onChange={(e) => setPassphrase(e.target.value)}
-            className="form-input"
-            disabled={loading}
-            placeholder="Development: leave empty"
-        />
-        <button 
-            type="submit" 
-            className="btn" 
-            disabled={loading}
-        >
-            {loading ? 'Unlocking...' : 'Unlock Wallet'}
-        </button>
-        {error && <p className="error">{error}</p>}
+            <h3>Unlock Wallet</h3>
+            <p className="unlock-hint">
+                💡 Your key will be stored locally for offline message access
+            </p>
+            <label>Enter Passphrase:</label>
+            <input 
+                type="password" 
+                value={passphrase}
+                onChange={(e) => setPassphrase(e.target.value)}
+                className="form-input"
+                disabled={loading}
+                placeholder="Development: leave empty"
+            />
+            <button 
+                type="submit" 
+                className="btn" 
+                disabled={loading}
+            >
+                {loading ? 'Unlocking...' : 'Unlock Wallet'}
+            </button>
+            {error && <p className="error">{error}</p>}
         </form>
     )
 }

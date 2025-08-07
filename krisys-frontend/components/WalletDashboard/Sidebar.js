@@ -4,6 +4,7 @@ export default function Sidebar({ walletData, currentPage, onPageChange }) {
     { id: 'overview', icon: '📊', label: 'Overview' },
     { id: 'members', icon: '👨‍👩‍👧‍👦', label: 'Family Members' },
     { id: 'notifications', icon: '🔔', label: 'Notifications' },
+    { id: 'messages', icon: '💬', label: 'Messages' }, // Add this
     { id: 'security', icon: '🔒', label: 'Security' },
     { id: 'devices', icon: '📱', label: 'Registered Devices' }
   ]

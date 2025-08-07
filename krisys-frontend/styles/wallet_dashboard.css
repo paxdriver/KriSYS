@@ -282,3 +282,300 @@ body {
         display: none;
     }
 }
+
+/* Form Styles */
+.form-group {
+    margin-bottom: 1.5rem;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+    color: var(--dark);
+}
+
+.form-input {
+    width: 100%;
+    padding: 0.75rem;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 1rem;
+    transition: border-color 0.3s ease;
+}
+
+.form-input:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+/* Message Item Styles (following your member-item pattern) */
+.message-item {
+    display: flex;
+    flex-direction: column;
+    padding: 1rem 0;
+    border-bottom: 1px solid #e5e7eb;
+}
+
+.message-item:last-child {
+    border-bottom: none;
+}
+
+.message-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.75rem;
+}
+
+.message-from {
+    font-weight: 500;
+    color: var(--dark);
+    font-size: 0.9rem;
+}
+
+.message-time {
+    font-size: 0.85rem;
+    color: var(--gray);
+}
+
+.message-content {
+    padding: 0.75rem;
+    background: var(--light);
+    border-radius: 8px;
+    border-left: 3px solid var(--primary);
+    position: relative;
+}
+
+.decrypted {
+    border-left-color: #10b981; /* Green for decrypted */
+}
+
+.encrypted-blob {
+    border-left-color: var(--gray); /* Gray for encrypted */
+    background: #f9f9f9;
+}
+
+.decrypt-status {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    font-size: 0.9rem;
+}
+
+.decrypt-error {
+    font-size: 0.8rem;
+    color: #dc2626;
+    margin-top: 0.5rem;
+}
+
+.encrypted-preview {
+    font-family: monospace;
+    font-size: 0.9rem;
+    color: var(--gray);
+}
+
+.encrypted {
+    color: var(--gray);
+    font-style: italic;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+/* Member Actions */
+.member-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.btn-icon {
+    background: none;
+    border: none;
+    padding: 0.5rem;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.3s ease;
+    font-size: 1.2rem;
+}
+
+.btn-icon:hover {
+    background: var(--light);
+}
+
+/* Status indicators */
+.unlock-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: #d1fae5;
+    color: #065f46;
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    font-weight: 500;
+    margin-bottom: 1.5rem;
+}
+
+/* Error states */
+.error {
+    color: #dc2626;
+    background: #fef2f2;
+    padding: 0.75rem;
+    border-radius: 6px;
+    border-left: 3px solid #dc2626;
+    margin-top: 1rem;
+}
+
+/* Unlock Form */
+.unlock-form {
+    max-width: 400px;
+    margin: 2rem auto;
+    background: white;
+    padding: 2rem;
+    border-radius: 12px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+}
+
+.unlock-form h3 {
+    margin-bottom: 1.5rem;
+    color: var(--dark);
+    text-align: center;
+}
+
+/* Loading states */
+.btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* Message status indicators */
+.tx-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+
+.tx-lock {
+    font-size: 1.2rem;
+}
+
+/* Dev tools spacing */
+.dashboard-container {
+    margin-top: 3rem; /* Space for dev tools */
+}
+
+/* Editable member names */
+.member-name.editable {
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 3px;
+    transition: background 0.2s ease;
+}
+
+.member-name.editable:hover {
+    background: var(--light);
+}
+
+.edit-form {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    flex: 1;
+}
+
+.form-input.small {
+    flex: 1;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.9rem;
+}
+
+.edit-actions {
+    display: flex;
+    gap: 0.25rem;
+}
+
+.btn-icon.save {
+    color: #059669;
+}
+
+.btn-icon.cancel {
+    color: #dc2626;
+}
+
+/* Contact list placeholder */
+.placeholder-content {
+    text-align: center;
+    padding: 2rem;
+    color: var(--gray);
+}
+
+.feature-list {
+    list-style: none;
+    padding: 0;
+    margin: 1rem 0;
+}
+
+.feature-list li {
+    padding: 0.5rem 0;
+    border-bottom: 1px solid #f3f4f6;
+}
+
+.feature-list li:last-child {
+    border-bottom: none;
+}
+
+/* Contact name styling */
+.contact-name {
+    display: inline-block;
+}
+
+.contact-name.locked {
+    font-family: monospace;
+    color: var(--gray);
+}
+
+.contact-name.known {
+    color: var(--primary);
+    font-weight: 500;
+}
+
+.contact-name.editable {
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 3px;
+    transition: background 0.2s ease;
+}
+
+.contact-name.editable:hover {
+    background: var(--light);
+}
+
+.edit-hint {
+    opacity: 0.6;
+    margin-left: 0.25rem;
+}
+
+.contact-edit {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.contact-input {
+    flex: 1;
+    padding: 0.25rem;
+    border: 1px solid var(--primary);
+    border-radius: 4px;
+}
+
+.contact-edit-actions {
+    display: flex;
+    gap: 0.25rem;
+}
+
+.privacy-notice {
+    font-size: 0.9rem;
+    color: var(--gray);
+}

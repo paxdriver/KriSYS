@@ -404,5 +404,23 @@ def debug_transactions():
 def debug_blockchain():
     return jsonify([block.to_dict() for block in blockchain.chain])
 
+
+@app.route('/wallet/<family_id>/public-key')
+def get_wallet_public_key(family_id):
+    """Get public key for a wallet (for encryption)"""
+    try:
+        public_key_str = blockchain.wallets.get_wallet_public_key(family_id)
+        if public_key_str:
+            return jsonify({
+                "family_id": family_id,
+                "public_key": public_key_str
+            })
+        else:
+            return jsonify({"error": "Public key not found"}), 404
+    except Exception as e:
+        logger.error(f"Error getting public key: {str(e)}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)

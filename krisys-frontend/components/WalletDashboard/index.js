@@ -4,6 +4,9 @@ import Sidebar from './Sidebar'
 import Overview from './Overview'
 import MembersPage from './MembersPage'
 import UnlockForm from './UnlockForm'
+import MessagingPage from './MessagingPage'
+import DevTools from '../DevTools'
+
 
 export default function WalletDashboard({ walletData, transactions, familyId, onRefresh }) {
     const [currentPage, setCurrentPage] = useState('overview')
@@ -16,7 +19,12 @@ export default function WalletDashboard({ walletData, transactions, familyId, on
     }
 
 
-    return (
+    return (<>
+            {/* DEV TOOLS ONLY, NOT FOR PROD */}
+            {process.env.NODE_ENV === 'development' && (
+                <DevTools onRefresh={onRefresh} />
+            )}
+    
         <div className="dashboard-container">
             <Sidebar 
                 walletData={walletData}
@@ -46,6 +54,14 @@ export default function WalletDashboard({ walletData, transactions, familyId, on
                                 transactions={transactions}
                             />
                         )}
+
+                        {currentPage === 'messages' && (
+                            <MessagingPage 
+                                walletData={walletData}
+                                transactions={transactions}
+                                privateKey={privateKey}
+                            />
+                        )}
                     
                     {/* other pages */}
                     
@@ -53,5 +69,5 @@ export default function WalletDashboard({ walletData, transactions, familyId, on
                 }
             </main>
         </div>
-    )
+    </>)
 }

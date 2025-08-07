@@ -1,0 +1,65 @@
+.dev-tools {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(90deg, #dc2626, #ea580c);
+    color: white;
+    z-index: 1000;
+    padding: 0.5rem 0;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.dev-tools-inner {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 1rem;
+}
+
+.dev-label {
+    font-weight: bold;
+    font-size: 0.9rem;
+}
+
+.dev-btn {
+    background: rgba(255,255,255,0.2);
+    border: 1px solid rgba(255,255,255,0.3);
+    color: white;
+    padding: 0.25rem 0.75rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: all 0.2s ease;
+}
+
+.dev-btn:hover {
+    background: rgba(255,255,255,0.3);
+}
+
+.dev-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.dev-btn.online {
+    background: rgba(16, 185, 129, 0.3);
+    border-color: rgba(16, 185, 129, 0.5);
+}
+
+.dev-btn.offline {
+    background: rgba(239, 68, 68, 0.3);
+    border-color: rgba(239, 68, 68, 0.5);
+}
+
+.dev-btn.danger {
+    background: rgba(220, 38, 38, 0.4);
+    border-color: rgba(220, 38, 38, 0.6);
+}
+
+/* Adjust main content to account for dev tools */
+.dashboard-container {
+    margin-top: 3rem; /* Space for dev tools */
+}

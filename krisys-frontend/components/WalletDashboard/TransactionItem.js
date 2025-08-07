@@ -1,6 +1,6 @@
 // components/WalletDashboard/TransactionItem.js
-
 import { useEffect, useState } from 'react'
+import MessageDisplay from './MessageDisplay'
 
 export default function TransactionItem({ transaction, privateKey }) {
     const [decryptedContent, setDecryptedContent] = useState('')
@@ -41,26 +41,21 @@ export default function TransactionItem({ transaction, privateKey }) {
         <div className="transaction">
             <div className="tx-header">
                 <span className="tx-type">{transaction.type_field}</span>
-                
-                {transaction.type_field === 'message' && (
-                    <span className="tx-lock">
-                        {decryptedContent ? '🔓' : '🔒'}
-                        {isDecrypting && '⏳'}
-                    </span>
-                )}
-                
                 <span className="tx-time">
                     {new Date(transaction.timestamp_posted * 1000).toLocaleTimeString()}
                 </span>
             </div>
         
-            <div className="tx-message">
-                {transaction.type_field === 'message' ? (<>
-                    {decryptedContent || transaction.message_data}
-                    {decryptError && <div className="error">{decryptError}</div>}
-                </>) : (
-                    transaction.message_data
-                )}
-            </div>
-    </div>)
+            {transaction.type_field === 'message' ? (
+                <MessageDisplay 
+                    message={transaction.message_data}
+                    privateKey={privateKey}
+                />
+            ) : (
+                <div className="tx-message">
+                    {transaction.message_data}
+                </div>
+            )}
+        </div>
+    )
 }
