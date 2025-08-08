@@ -1,10 +1,25 @@
 // components/WalletDashboard/MembersPage.js
 import { useState } from "react"
 import ContactName from "./ContactName"
-
+import { contactStorage } from "../../services/contactStorage" // Add this import
 
 export default function MembersPage({ walletData, transactions, privateKey }) {
     const isUnlocked = !!privateKey
+    const [editingAddress, setEditingAddress] = useState(null)
+    const [editName, setEditName] = useState('')
+
+    const startEditing = (address) => {
+        setEditingAddress(address)
+        setEditName(contactStorage.getDisplayName(address) || '')
+    }
+
+    const saveContact = () => {
+        if (editName.trim()) {
+            contactStorage.setContact(editingAddress, editName.trim())
+        }
+        setEditingAddress(null)
+        setEditName('')
+    }
 
     const generateQRCode = async (address, familyId) => {
         try {
@@ -55,13 +70,45 @@ export default function MembersPage({ walletData, transactions, privateKey }) {
                             </div>
                             
                             <div className="member-info">
-                                <ContactName 
-                                    address={member.address}
-                                    isUnlocked={isUnlocked}
-                                    editable={true}
-                                    className="member-name"
-                                />
-                                <div className="member-address">{member.address}</div>
+                                {editingAddress === member.address ? (
+                                    <div className="edit-form">
+                                        <input 
+                                            value={editName}
+                                            onChange={(e) => setEditName(e.target.value)}
+                                            className="form-input small"
+                                            autoFocus
+                                            onKeyPress={(e) => e.key === 'Enter' && saveContact()}
+                                        />
+                                        <div className="edit-actions">
+                                            <button 
+                                                onClick={saveContact}
+                                                className="btn-icon save"
+                                                title="Save contact"
+                                            >
+                                                ✅
+                                            </button>
+                                            <button 
+                                                onClick={() => setEditingAddress(null)}
+                                                className="btn-icon cancel"
+                                                title="Cancel"
+                                            >
+                                                ❌
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div 
+                                        className="member-name editable"
+                                        onClick={() => isUnlocked && startEditing(member.address)}
+                                        title={isUnlocked ? "Click to edit name" : "Unlock wallet to edit"}
+                                    >
+                                        <ContactName 
+                                            address={member.address}
+                                            isUnlocked={isUnlocked}
+                                        />
+                                        {isUnlocked && <span className="edit-hint">✏️</span>}
+                                    </div>
+                                )}
                             </div>
                             
                             <div className="member-actions">
@@ -91,7 +138,7 @@ function ContactManagement() {
     const [contacts, setContacts] = useState(contactStorage.getContacts())
     
     const refreshContacts = () => {
-        setContacts(contactStorage.getContacts())
+        setContacts({...contactStorage.getContacts()})
     }
 
     return (

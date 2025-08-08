@@ -1,11 +1,12 @@
 // components/WalletDashboard/index.js
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Sidebar from './Sidebar'
 import Overview from './Overview'
 import MembersPage from './MembersPage'
 import UnlockForm from './UnlockForm'
 import MessagingPage from './MessagingPage'
 import DevTools from '../DevTools'
+import '../../styles/wallet_dashboard.css'
 
 
 export default function WalletDashboard({ walletData, transactions, familyId, onRefresh }) {
@@ -13,11 +14,17 @@ export default function WalletDashboard({ walletData, transactions, familyId, on
     const [privateKey, setPrivateKey] = useState(null)
     const [isUnlocked, setIsUnlocked] = useState(false)
 
+    useEffect(() => {
+        if (privateKey) {
+            setIsUnlocked(true)
+        } else {
+            setIsUnlocked(false)
+        }
+    }, [privateKey])
+
     const handleUnlock = key => {
         setPrivateKey(key)
-        setIsUnlocked(true)
     }
-
 
     return (<>
             {/* DEV TOOLS ONLY, NOT FOR PROD */}

@@ -1,6 +1,6 @@
-import React from "react"
-import { useState } from "react"
-import { contactStorage } from "@/services/contactStorage"
+// components/WalletDashboard/ContactName.js
+import { useState } from 'react'
+import { contactStorage } from '@/services/contactStorage'
 
 export default function ContactName({ address, isUnlocked, editable = false, className = "" }) {
     const [editing, setEditing] = useState(false)
@@ -76,16 +76,22 @@ export default function ContactName({ address, isUnlocked, editable = false, cla
         )
     }
 
+// THIS FAILS EVERY TIME!!! SPANS CAN'T BE IN THIS COMPONENT IF THIS COMPONENT IS A DROP-DOWN OPTION/SELECT LIST, STOOPID... This needs to be encapsulated or abstracted in a different way, using divs instead of an option list... should have a keyboard search feature eventually anyway so doesn't matter if it's not primitive HTML, in the end it'll have to be customized probably anyway.
+
+// Question remains: how to edit contact names so address are always replaced with names in unlocked wallet contact lists. 
+
+// NOTE: public contact lists should still exist, for food, medical, journalists, etc. the people should be able to post publicly to centres to document traffic, needs, and stories as they unfold.
+
     return (
-        <div 
+        <span 
             className={`contact-name ${isKnownContact ? 'known' : 'unknown'} ${editable ? 'editable' : ''} ${className}`}
             onClick={editable ? startEditing : undefined}
             title={isKnownContact ? `Address: ${address}` : 'Click to add contact name'}
         >
             {displayName}
             {editable && isUnlocked && (
-                <div className="edit-hint">✏️</div>
+                <span className="edit-hint">✏️</span>
             )}
-        </div>
+        </span>
     )
 }

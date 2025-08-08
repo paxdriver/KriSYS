@@ -179,10 +179,13 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
                                 <option value="">Select recipient...</option>
                                 {walletData?.members?.map(member => (
                                     <option key={member.address} value={member.address}>
-                                        <ContactName 
-                                            address={member.address} 
-                                            isUnlocked={!!privateKey}
-                                        /> ({member.address})
+                                        <select>
+                                            <ContactName 
+                                                address={member.address} 
+                                                isUnlocked={!!privateKey}
+                                            /> 
+                                                {/* ({member.address}) */}
+                                        </select>
                                     </option>
                                 ))}
                             </select>

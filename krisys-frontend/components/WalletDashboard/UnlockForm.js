@@ -1,5 +1,5 @@
 // components/WalletDashboard/UnlockForm.js
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { api } from '../../services/api'
 import { disasterStorage } from '../../services/localStorage'
 
@@ -9,17 +9,16 @@ export default function UnlockForm({ familyId, onUnlock }) {
     const [loading, setLoading] = useState(false)
     
     // CHECK FOR EXISTING LOCAL KEY ON COMPONENT LOAD
-    useState(() => {
+    useEffect(() => {
         console.log('🔍 Checking for existing private key in local storage...')
         const localKey = disasterStorage.getPrivateKey(familyId)
         if (localKey) {
             console.log('✅ Found existing private key! Auto-unlocking wallet...')
-            onUnlock(localKey)
-            return
+            // Use setTimeout to defer state update
+            setTimeout(() => onUnlock(localKey), 0)
         }
-        console.log('🔒 No local key found - user must unlock')
-    }, [])
-    
+    }, [familyId, onUnlock])
+
     const handleUnlock = async (e) => {
         e.preventDefault()
         setLoading(true)
@@ -39,8 +38,8 @@ export default function UnlockForm({ familyId, onUnlock }) {
                 
                 // Also save wallet data if we have it
                 // This enables offline message reading and queuing
-                
-                onUnlock(result.private_key)
+                    // defer state update for hydration error workaround
+                setTimeout(() => onUnlock(result.private_key), 0)   
                 
             } else {
                 setError(result.error || 'Unlock failed')
