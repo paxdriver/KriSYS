@@ -1,58 +1,37 @@
 // app/page.js
 'use client'
-import { useState, useEffect } from 'react'
-import { api } from '../services/api'
-import BlockList from '../components/BlockchainExplorer/BlockList'
+import { useState } from 'react'
+import BlockchainMeta from '../components/BlockchainExplorer/BlockchainMeta'
 import WalletCreator from '../components/BlockchainExplorer/WalletCreator'
-import '../styles/blockchain.css'
+import BlockList from '../components/BlockchainExplorer/BlockList'
+import DevTools from '../components/DevTools'
+import '../styles/landing.css'
+import '../styles/wallet_dashboard.css' // For card styles
 
-export default function BlockchainExplorer() {
-  const [blocks, setBlocks] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [wallet, setWallet] = useState(null)
+export default function LandingPage() {
+    const [refreshTrigger, setRefreshTrigger] = useState(0)
 
-  const loadBlockchain = async () => {
-    try {
-      setLoading(true)
-      const response = await api.getBlockchain()
-      setBlocks(response.data)
-    } catch (error) {
-      console.error('Error loading blockchain:', error)
-    } finally {
-      setLoading(false)
+    const handleRefresh = () => {
+        setRefreshTrigger(prev => prev + 1)
     }
-  }
 
-  useEffect(() => {
-    loadBlockchain();
-    const interval = setInterval(loadBlockchain, 30000)
-    return () => clearInterval(interval)
-  }, [])
-
-  return (
-    <div>
-      <h1>KriSYS Blockchain Explorer</h1>
-      
-      <BlockList blocks={blocks} loading={loading} />
-      
-      <WalletCreator onWalletCreated={setWallet} />
-      
-      {wallet && (
-        <div id="wallet-display">
-          <h3>Your Family Wallet</h3>
-          <p><strong>Family ID:</strong> {wallet.family_id}</p>
-          <div id="member-qrs">
-            {wallet.members.map(member => (
-              <div key={member.address} className="qr-card">
-                <p><strong>{member.name}</strong></p>
-                <p style={{fontSize: '0.8em', wordBreak: 'break-all'}}>
-                  {member.address}
-                </p>
-              </div>
-            ))}
-          </div>
+    return (<>
+        {process.env.NODE_ENV === 'development' && (
+            <DevTools onRefresh={handleRefresh} />
+        )}
+        
+        <div className="landing-container">
+            <BlockchainMeta key={refreshTrigger} />
+            
+            <div className="landing-content">
+                <div className="main-section">
+                    <WalletCreator />
+                </div>
+                
+                <div className="blockchain-section">
+                    <BlockList key={refreshTrigger} />
+                </div>
+            </div>
         </div>
-      )}
-    </div>
-  )
+    </>)
 }

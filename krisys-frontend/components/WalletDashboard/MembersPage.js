@@ -1,23 +1,39 @@
-// components/WalletDashboard/MembersPage.js
+// components/WalletDashboard/MembersPage.js - CORRECTED VERSION
 import { useState } from "react"
-import ContactName from "./ContactName"
-import { contactStorage } from "../../services/contactStorage" // Add this import
+import { contactStorage } from "../../services/contactStorage"
 
 export default function MembersPage({ walletData, transactions, privateKey }) {
     const isUnlocked = !!privateKey
-    const [editingAddress, setEditingAddress] = useState(null)
+    const [editingMember, setEditingMember] = useState(null)
     const [editName, setEditName] = useState('')
 
-    const startEditing = (address) => {
-        setEditingAddress(address)
-        setEditName(contactStorage.getDisplayName(address) || '')
+    const getDisplayName = (address) => {
+        if (!isUnlocked) {
+            return address // Show full address when locked
+        }
+        
+        const savedName = contactStorage.getDisplayName(address)
+        return savedName === address ? address : savedName // Return address if no name saved, otherwise return name
     }
 
-    const saveContact = () => {
+    const hasCustomName = (address) => {
+        if (!isUnlocked) return false
+        return contactStorage.getContacts()[address] !== undefined
+    }
+
+    const startEditingMember = (member) => {
+        setEditingMember(member.address)
+        setEditName(hasCustomName(member.address) ? contactStorage.getDisplayName(member.address) : '')
+    }
+
+    const saveMemberName = () => {
         if (editName.trim()) {
-            contactStorage.setContact(editingAddress, editName.trim())
+            contactStorage.setContact(editingMember, editName.trim())
+        } else {
+            // If empty, remove the contact name
+            contactStorage.deleteContact(editingMember)
         }
-        setEditingAddress(null)
+        setEditingMember(null)
         setEditName('')
     }
 
@@ -26,12 +42,14 @@ export default function MembersPage({ walletData, transactions, privateKey }) {
             const response = await fetch(`http://localhost:5000/wallet/${familyId}/qr/${address}`)
             const data = await response.json()
             
+            const displayName = getDisplayName(address)
             const qrWindow = window.open('', '_blank', 'width=400,height=400')
             qrWindow.document.write(`
                 <html>
-                    <head><title>QR Code - ${address}</title></head>
+                    <head><title>QR Code - ${displayName}</title></head>
                     <body style="text-align:center; padding:20px;">
                         <h3>Member QR Code</h3>
+                        <p><strong>${displayName}</strong></p>
                         <img src="${data.qr_code}" alt="QR Code" />
                         <p style="word-break:break-all; font-size:12px;">${address}</p>
                     </body>
@@ -48,7 +66,7 @@ export default function MembersPage({ walletData, transactions, privateKey }) {
                 <h1 className="page-title">Family Members</h1>
                 <div className="privacy-notice">
                     {isUnlocked ? (
-                        <span>🔓 Names visible (wallet unlocked)</span>
+                        <span>🔓 Names visible - click to edit</span>
                     ) : (
                         <span>🔒 Names hidden for privacy</span>
                     )}
@@ -63,51 +81,41 @@ export default function MembersPage({ walletData, transactions, privateKey }) {
                     {walletData?.members?.map(member => (
                         <div key={member.address} className="member-item">
                             <div className="member-avatar">
-                                {isUnlocked ? 
-                                    (contactStorage.getDisplayName(member.address).charAt(0) || 'M') :
+                                {hasCustomName(member.address) ? 
+                                    contactStorage.getDisplayName(member.address).charAt(0).toUpperCase() :
                                     'M'
                                 }
                             </div>
                             
                             <div className="member-info">
-                                {editingAddress === member.address ? (
-                                    <div className="edit-form">
+                                {editingMember === member.address ? (
+                                    <div className="member-edit-form">
                                         <input 
                                             value={editName}
                                             onChange={(e) => setEditName(e.target.value)}
-                                            className="form-input small"
+                                            className="member-name-input"
+                                            placeholder="Enter member name"
                                             autoFocus
-                                            onKeyPress={(e) => e.key === 'Enter' && saveContact()}
+                                            onKeyPress={(e) => e.key === 'Enter' && saveMemberName()}
                                         />
                                         <div className="edit-actions">
-                                            <button 
-                                                onClick={saveContact}
-                                                className="btn-icon save"
-                                                title="Save contact"
-                                            >
-                                                ✅
-                                            </button>
-                                            <button 
-                                                onClick={() => setEditingAddress(null)}
-                                                className="btn-icon cancel"
-                                                title="Cancel"
-                                            >
-                                                ❌
-                                            </button>
+                                            <button onClick={saveMemberName} className="btn-save">✅</button>
+                                            <button onClick={() => setEditingMember(null)} className="btn-cancel">❌</button>
                                         </div>
                                     </div>
                                 ) : (
-                                    <div 
-                                        className="member-name editable"
-                                        onClick={() => isUnlocked && startEditing(member.address)}
-                                        title={isUnlocked ? "Click to edit name" : "Unlock wallet to edit"}
-                                    >
-                                        <ContactName 
-                                            address={member.address}
-                                            isUnlocked={isUnlocked}
-                                        />
-                                        {isUnlocked && <span className="edit-hint">✏️</span>}
-                                    </div>
+                                    <>
+                                        <div 
+                                            className={`member-name ${isUnlocked ? 'editable' : ''}`}
+                                            onClick={() => isUnlocked && startEditingMember(member)}
+                                        >
+                                            {getDisplayName(member.address)}
+                                            {isUnlocked && <span className="edit-hint">✏️</span>}
+                                        </div>
+                                        <div className="member-address">
+                                            {member.address}
+                                        </div>
+                                    </>
                                 )}
                             </div>
                             
@@ -119,49 +127,22 @@ export default function MembersPage({ walletData, transactions, privateKey }) {
                                 >
                                     📇
                                 </button>
+                                {isUnlocked && (
+                                    <button 
+                                        className="btn-icon"
+                                        title="Copy address to clipboard"
+                                        onClick={() => {
+                                            navigator.clipboard.writeText(member.address)
+                                            alert('Address copied to clipboard!')
+                                        }}
+                                    >
+                                        📋
+                                    </button>
+                                )}
                             </div>
                         </div>
                     ))}
                 </div>
-            </div>
-
-            {/* Contact Management */}
-            {isUnlocked && (
-                <ContactManagement />
-            )}
-        </div>
-    )
-}
-
-// Simple contact management component
-function ContactManagement() {
-    const [contacts, setContacts] = useState(contactStorage.getContacts())
-    
-    const refreshContacts = () => {
-        setContacts({...contactStorage.getContacts()})
-    }
-
-    return (
-        <div className="card">
-            <div className="card-header">
-                <h3 className="card-title">📞 My Contacts ({Object.keys(contacts).length})</h3>
-            </div>
-            <div className="card-body">
-                {Object.keys(contacts).length === 0 ? (
-                    <p>No contacts saved. Click the edit icon next to addresses to add names.</p>
-                ) : (
-                    <div className="contact-list">
-                        {Object.entries(contacts).map(([address, name]) => (
-                            <div key={address} className="contact-item">
-                                <ContactName 
-                                    address={address}
-                                    isUnlocked={true}
-                                    editable={true}
-                                />
-                            </div>
-                        ))}
-                    </div>
-                )}
             </div>
         </div>
     )

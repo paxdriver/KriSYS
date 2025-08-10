@@ -3,8 +3,9 @@ export default function Sidebar({ walletData, currentPage, onPageChange }) {
   const navItems = [
     { id: 'overview', icon: '📊', label: 'Overview' },
     { id: 'members', icon: '👨‍👩‍👧‍👦', label: 'Family Members' },
+    { id: 'contacts', icon: '📞', label: 'My Contacts' },
+    { id: 'messages', icon: '💬', label: 'Messages' },
     { id: 'notifications', icon: '🔔', label: 'Notifications' },
-    { id: 'messages', icon: '💬', label: 'Messages' }, // Add this
     { id: 'security', icon: '🔒', label: 'Security' },
     { id: 'devices', icon: '📱', label: 'Registered Devices' }
   ]

@@ -8,7 +8,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-DB_PATH = os.getenv('BLOCKCHAIN_DB_PATH', 'blockchain/blockchain.db')
+DB_PATH = os.getenv('BLOCKCHAIN_DB_PATH', 'data/blockchain.db')
 
 @contextmanager
 def db_connection():

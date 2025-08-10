@@ -1,6 +1,6 @@
 // app/wallet/[familyId]/page.js
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'next/navigation'
 import { api } from '../../../services/api'
 import WalletDashboard from '../../../components/WalletDashboard'
@@ -14,24 +14,26 @@ export default function WalletDashboardPage() {
   const [transactions, setTransactions] = useState([])
   const [loading, setLoading] = useState(true)
 
-  const loadWalletData = async () => {
+  const loadWalletData = useCallback (async () => {
     try {
-      setLoading(true)
+        setLoading(true)
+        
+        // Load wallet info
+        const walletResponse = await api.getWallet(familyId)
+        setWalletData(walletResponse.data)
+        
+        // Load transactions
+        const txResponse = await api.getWalletTransactions(familyId)
+        setTransactions(txResponse.data)
       
-      // Load wallet info
-      const walletResponse = await api.getWallet(familyId)
-      setWalletData(walletResponse.data)
-      
-      // Load transactions
-      const txResponse = await api.getWalletTransactions(familyId)
-      setTransactions(txResponse.data)
-      
-    } catch (error) {
-      console.error('Error loading wallet data:', error)
-    } finally {
-      setLoading(false)
+    } 
+    catch (error) {
+        console.error('Error loading wallet data:', error)
+    } 
+    finally {
+        setLoading(false)
     }
-  }
+  }, [familyId])
 
   useEffect(() => {
     if (familyId) {

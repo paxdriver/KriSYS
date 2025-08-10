@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import Sidebar from './Sidebar'
 import Overview from './Overview'
 import MembersPage from './MembersPage'
+import ContactsPage from './ContactPage'
 import UnlockForm from './UnlockForm'
 import MessagingPage from './MessagingPage'
 import DevTools from '../DevTools'
@@ -59,11 +60,20 @@ export default function WalletDashboard({ walletData, transactions, familyId, on
                             <MembersPage 
                                 walletData={walletData}
                                 transactions={transactions}
+                                privateKey={privateKey}
                             />
                         )}
 
                         {currentPage === 'messages' && (
                             <MessagingPage 
+                                walletData={walletData}
+                                transactions={transactions}
+                                privateKey={privateKey}
+                            />
+                        )}
+
+                        {currentPage === 'contacts' && (
+                            <ContactsPage 
                                 walletData={walletData}
                                 transactions={transactions}
                                 privateKey={privateKey}

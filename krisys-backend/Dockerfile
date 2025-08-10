@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsqlite3-0 libjpeg-dev zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
-ENV BLOCKCHAIN_DB_PATH=/data/blockchain.db
+ENV BLOCKCHAIN_DB_PATH=/blockchain/blockchain.db
 ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app

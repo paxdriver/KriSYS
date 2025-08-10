@@ -24,7 +24,7 @@ MAX_MEMBERS = 20     # DEV NOTE: THIS SHOULD BE DEFINED IN THE BLOCKCHAIN ISNTAN
 
 app = Flask(__name__, static_folder='static')
 ################ DEV NOTE: CHANGE ADMIN SECRETS!!!!!!!
-CORS(app, origins=['http://localhost:3000', 'http://localhost:5000'])
+CORS(app, origins=['http://localhost:3000', 'http://localhost:5000', 'http://localhost:5000/crisis'])
 # app.secret_key = os.environ.get('SECRET_KEY', 'dev_secret_key_please_change_in_prod')  # PRODUCTION: Use secure random key
 ################
 
@@ -165,6 +165,10 @@ def get_wallet_transactions(family_id):
 @app.route('/transaction', methods=['POST'])
 def add_transaction():
     data = request.json
+    
+    # Check for dev rate limit override
+    rate_limit_override = request.headers.get('X-Dev-Rate-Override') == 'true'
+    
     if data:
         if data['type_field'] == 'message':
             
@@ -191,9 +195,10 @@ def add_transaction():
                     relay_hash = data.get('relay_hash', ''),
                     posted_id = data.get('posted_id', '')
                 )
-                blockchain.add_transaction(tx)
+                # Add transaction with optional rate limit override
+                blockchain.add_transaction(tx, rate_limit_override=rate_limit_override)
                 return jsonify({"status": "success", "transaction_id": tx.transaction_id}), 201
-        
+            
             except KeyError as e:
                 return jsonify({"error": f"Missing field: {str(e)}"}), 400
         
@@ -256,6 +261,8 @@ def create_wallet():
             crisis_id=blockchain.crisis_metadata['id'],
             passphrase=""  # Empty passphrase for development
         )
+        
+        logger.info(wallet.family_id)
         
         return jsonify(wallet.to_dict()), 201
 

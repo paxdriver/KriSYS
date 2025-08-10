@@ -1,4 +1,6 @@
+// components/WalletDashboard/MessagingPage.js
 import { useState, useEffect, useMemo } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { api } from '../../services/api'
 import * as openpgp from 'openpgp'
 import MessageDisplay from './MessageDisplay'
@@ -10,14 +12,13 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
     const [messageText, setMessageText] = useState('')
     const [sending, setSending] = useState(false)
     const [error, setError] = useState('')
-    const [decryptedMessages, setDecryptedMessages] = useState({})
- 
-    // Memoize addresses to prevent unnecessary recalculations
+    const [showContactPicker, setShowContactPicker] = useState(false)
+    const searchParams = useSearchParams()
+
     const myAddresses = useMemo(() => 
         walletData?.members?.map(m => m.address) || []
     , [walletData?.members])
 
-    // Memoize filtered messages to prevent infinite loop
     const myMessages = useMemo(() => 
         transactions?.filter(tx => 
             tx.type_field === 'message' && 
@@ -25,74 +26,42 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
         ) || []
     , [transactions, myAddresses])
 
+    useEffect( ()=> {
+        const urlRecipient = searchParams.get('recipient')
+        if (urlRecipient) setSelectedRecipient(urlRecipient)
+    }, [searchParams])
+
     const encryptMessageOffline = async (messageText, recipientAddress) => {
         console.log('🔐 Starting offline message encryption...')
-        console.log('📝 Message:', messageText)
-        console.log('👤 Recipient:', recipientAddress)
         
         try {
-            // STEP 1: Extract family_id from member address
-            // Address format: "familyId-memberSuffix" (e.g., "abc123-def456")
             const familyId = recipientAddress.split('-').slice(0, -1).join('-')
-            console.log('🏠 Recipient family ID:', familyId)
             
-            // STEP 2: Try to get public key from local storage first (for offline)
             const publicKeys = disasterStorage.getPublicKeys()
             let publicKeyString = publicKeys[familyId]?.publicKey
             
-            if (publicKeyString) {
-                console.log('🏠 Found recipient public key in local storage!')
-            } else {
-                console.log('🌐 Public key not in local storage - fetching from server...')
+            if (!publicKeyString) {
+                console.log('🌐 Fetching public key from server...')
+                const keyResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'}/wallet/${familyId}/public-key`)
+                const keyData = await keyResponse.json()
+                publicKeyString = keyData.public_key
                 
-                // STEP 3: Fetch public key from server and cache it locally
-                try {
-                    const response = await api.getWallet(familyId)
-                    const walletData = response.data
-                    
-                    // Get the actual public key from wallet_keys table
-                    const keyResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'}/wallet/${familyId}/public-key`)
-                    const keyData = await keyResponse.json()
-                    
-                    publicKeyString = keyData.public_key
-                    
-                    if (publicKeyString) {
-                        // Save for future offline use
-                        console.log('💾 Caching public key locally for offline encryption')
-                        disasterStorage.savePublicKey(familyId, publicKeyString)
-                    } else {
-                        throw new Error('No public key found for recipient')
-                    }
-                    
-                } catch (fetchError) {
-                    console.error('❌ Failed to fetch public key:', fetchError)
-                    throw new Error('Cannot encrypt: Recipient public key not available offline and server unreachable')
+                if (publicKeyString) {
+                    disasterStorage.savePublicKey(familyId, publicKeyString)
+                } else {
+                    throw new Error('No public key found for recipient')
                 }
             }
             
-            // STEP 4: Parse the public key string into OpenPGP key object
-            console.log('📖 Parsing recipient public key...')
-            const publicKey = await openpgp.readKey({
-                armoredKey: publicKeyString
-            })
-            
-            // STEP 5: Create message object from plaintext
-            console.log('📝 Creating message object...')
-            const message = await openpgp.createMessage({
-                text: messageText
-            })
-            
-            // STEP 6: Encrypt message with recipient's public key
-            console.log('🔒 Encrypting message...')
+            const publicKey = await openpgp.readKey({ armoredKey: publicKeyString })
+            const message = await openpgp.createMessage({ text: messageText })
             const encryptedMessage = await openpgp.encrypt({
                 message: message,
                 encryptionKeys: publicKey,
-                format: 'armored' // Returns ASCII-armored string
+                format: 'armored'
             })
             
             console.log('✅ Message encrypted successfully!')
-            console.log('📦 Encrypted message preview:', encryptedMessage.substring(0, 100) + '...')
-            
             return encryptedMessage
             
         } catch (error) {
@@ -109,9 +78,9 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
         setError('')
 
         try {
-            // Encrypt message locally using stored public keys
             const encryptedMessage = await encryptMessageOffline(messageText, selectedRecipient)
             
+            // Create transaction
             const transaction = {
                 timestamp_created: Date.now() / 1000,
                 station_address: myAddresses[0],
@@ -121,37 +90,33 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
                 priority_level: 5
             }
 
-            // TRY TO SEND ONLINE FIRST
-            try {
+            try { // to send message
                 await api.addTransaction(transaction)
                 console.log('📡 Message sent online immediately')
                 alert('Message sent!')
-            } catch (networkError) {
-                // QUEUE FOR OFFLINE TRANSMISSION
-                console.log('📱 No connection - queueing message for later transmission')
-                disasterStorage.queueMessage(transaction)
-                alert('📱 No internet - message queued for transmission when connected')
+            } 
+            catch (error) {
+                if (error.isNetworkError) {
+                    // QUEUE FOR OFFLINE TRANSMISSION
+                    console.log('📱 No connection - queueing message for later transmission')
+                    disasterStorage.queueMessage(transaction)
+                    alert('📱 No internet - message queued for transmission when connected')
+                }
+                else {
+                    // Handle application errors differently
+                    console.error('Application error:', error.message)
+                    setError(error.message || 'Failed to send message')
+                }
             }
             
             setMessageText('')
+            setSelectedRecipient('')
             setError('')
 
         } catch (err) {
             setError(err.message || 'Failed to send message')
         } finally {
             setSending(false)
-        }
-    }
-
-    // TODO - Helper function to find wallet by member address
-    const findWalletByMemberAddress = async (memberAddress) => {
-        // Extract family_id from address (everything before the last dash)
-        const familyId = memberAddress.split('-').slice(0, -1).join('-')
-        try {
-            const response = await api.getWallet(familyId)
-            return response.data
-        } catch {
-            return null
         }
     }
 
@@ -170,25 +135,59 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
                     <form onSubmit={sendMessage}>
                         <div className="form-group">
                             <label>Send to:</label>
-                            <select 
-                                value={selectedRecipient}
-                                onChange={(e) => setSelectedRecipient(e.target.value)}
-                                className="form-input"
-                                disabled={sending}
-                            >
-                                <option value="">Select recipient...</option>
-                                {walletData?.members?.map(member => (
-                                    <option key={member.address} value={member.address}>
-                                        <select>
-                                            <ContactName 
-                                                address={member.address} 
-                                                isUnlocked={!!privateKey}
-                                            /> 
-                                                {/* ({member.address}) */}
-                                        </select>
-                                    </option>
-                                ))}
-                            </select>
+                            
+                            {/* Custom Contact Picker instead of dropdown */}
+                            <div className="contact-picker">
+                                {selectedRecipient ? (
+                                    <div className="selected-contact" onClick={() => setSelectedRecipient('')}>
+                                        <ContactName 
+                                            address={selectedRecipient} 
+                                            isUnlocked={!!privateKey}
+                                        />
+                                        <span className="remove-contact">✕</span>
+                                    </div>
+                                ) : (
+                                    <button 
+                                        type="button"
+                                        className="btn-contact-picker"
+                                        onClick={() => setShowContactPicker(!showContactPicker)}
+                                    >
+                                        Select recipient...
+                                    </button>
+                                )}
+                                
+                                {showContactPicker && (<>
+                                    <input 
+                                        type="text"
+                                        value={recipient}
+                                        onChange={(e) => setRecipient(e.target.value)}
+                                        className="form-input"
+                                        placeholder="Enter wallet address"
+                                        disabled={sending}
+                                    />
+                                    <p className="input-hint">
+                                        Paste any wallet address (e.g. familyId-memberId)
+                                    </p>
+                                    <div className="contact-list-dropdown">
+                                        {walletData?.members?.map(member => (
+                                            <div 
+                                                key={member.address}
+                                                className="contact-option"
+                                                onClick={() => {
+                                                    setSelectedRecipient(member.address)
+                                                    setShowContactPicker(false)
+                                                }}
+                                            >
+                                                <ContactName 
+                                                    address={member.address} 
+                                                    isUnlocked={!!privateKey}
+                                                />
+                                            </div>
+                                        ))}
+                                    </div>
+                                </>)}
+
+                            </div>
                         </div>
 
                         <div className="form-group">
@@ -230,20 +229,18 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
                             .map(tx => (
                                 <div key={tx.transaction_id} className="message-item">
                                     <div className="message-header">
-                                        
-                                            <span className="message-from">
-                                                From: <ContactName 
-                                                    address={tx.station_address}
-                                                    isUnlocked={!!privateKey}
-                                                    editable={true}
-                                                />
-                                            </span>
-                                        
+                                        <span className="message-from">
+                                            From: <ContactName 
+                                                address={tx.station_address}
+                                                isUnlocked={!!privateKey}
+                                                editable={true}
+                                            />
+                                        </span>
                                         <span className="message-time">
                                             {new Date(tx.timestamp_posted * 1000).toLocaleString()}
                                         </span>
                                     </div>
-                                    <MessageDisplay message={tx.message} privateKey={privateKey} />
+                                    <MessageDisplay message={tx.message_data} privateKey={privateKey} />
                                 </div>
                             ))
                     )}

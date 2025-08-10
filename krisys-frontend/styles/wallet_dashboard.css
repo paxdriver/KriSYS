@@ -1,12 +1,16 @@
-/* wallet_dashboard.css */
+/* wallet_dashboard.css - CLEANED VERSION */
 :root {
     --primary: #2563eb;
     --secondary: #3b82f6;
     --dark: #1e3a8a;
     --light: #eff6ff;
     --gray: #6b7280;
+    --success: #059669;
+    --danger: #dc2626;
+    --warning: #d97706;
 }
 
+/* RESET */
 * {
     box-sizing: border-box;
     margin: 0;
@@ -20,13 +24,14 @@ body {
     line-height: 1.6;
 }
 
+/* LAYOUT */
 .dashboard-container {
     display: grid;
     grid-template-columns: 280px 1fr;
     min-height: 100vh;
+    margin-top: 3rem; /* Space for dev tools */
 }
 
-/* Sidebar Styles */
 .sidebar {
     background: linear-gradient(180deg, var(--dark) 0%, var(--primary) 100%);
     color: white;
@@ -35,6 +40,12 @@ body {
     z-index: 10;
 }
 
+.main-content {
+    padding: 2rem;
+    overflow-y: auto;
+}
+
+/* SIDEBAR COMPONENTS */
 .wallet-header {
     display: flex;
     align-items: center;
@@ -93,12 +104,7 @@ body {
     text-align: center;
 }
 
-/* Main Content Styles */
-.main-content {
-    padding: 2rem;
-    overflow-y: auto;
-}
-
+/* MAIN CONTENT */
 .page-header {
     display: flex;
     justify-content: space-between;
@@ -112,6 +118,7 @@ body {
     color: var(--dark);
 }
 
+/* BUTTONS */
 .btn {
     background: var(--primary);
     color: white;
@@ -126,10 +133,49 @@ body {
     gap: 8px;
 }
 
-.btn:hover {
+.btn:hover:not(:disabled) {
     background: var(--dark);
 }
 
+.btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.btn-icon {
+    background: none;
+    border: none;
+    padding: 0.5rem;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.3s ease;
+    font-size: 1.2rem;
+}
+
+.btn-icon:hover {
+    background: var(--light);
+}
+
+.btn-icon.save { color: var(--success); }
+.btn-icon.cancel { color: var(--danger); }
+.btn-icon.delete { color: var(--danger); }
+
+.btn-contact-picker {
+    width: 100%;
+    padding: 0.75rem;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    background: white;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 0.3s ease;
+}
+
+.btn-contact-picker:hover {
+    border-color: var(--primary);
+}
+
+/* CARDS */
 .card-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
@@ -165,6 +211,39 @@ body {
     padding: 1.25rem;
 }
 
+/* FORMS */
+.form-group {
+    margin-bottom: 1.5rem;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+    color: var(--dark);
+}
+
+.form-input {
+    width: 100%;
+    padding: 0.75rem;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 1rem;
+    transition: border-color 0.3s ease;
+}
+
+.form-input:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.form-input.small {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.9rem;
+}
+
+/* MEMBER ITEMS */
 .member-item {
     display: flex;
     align-items: center;
@@ -203,114 +282,106 @@ body {
     word-break: break-all;
 }
 
-.notification-item {
-    padding: 1rem 0;
-    border-bottom: 1px solid #e5e7eb;
-}
-
-.notification-header {
+.member-actions {
     display: flex;
+    gap: 0.5rem;
+}
+
+/* CONTACT PICKER */
+.contact-picker {
+    position: relative;
+}
+
+.selected-contact {
+    display: flex;
+    align-items: center;
     justify-content: space-between;
-    margin-bottom: 0.5rem;
-}
-
-.notification-title {
-    font-weight: 600;
-    color: var(--dark);
-}
-
-.notification-time {
-    font-size: 0.85rem;
-    color: var(--gray);
-}
-
-.notification-content {
-    color: #4b5563;
-}
-
-/* Transaction Styles */
-.recent-transactions {
-    margin-top: 1rem;
-}
-
-.transaction {
-    padding: 0.75rem 0;
-    border-bottom: 1px solid #e5e7eb;
-}
-
-.tx-type {
-    font-weight: 600;
-    color: var(--primary);
-    text-transform: capitalize;
-}
-
-.tx-message {
-    margin: 0.25rem 0;
-}
-
-.tx-time {
-    font-size: 0.85rem;
-    color: var(--gray);
-}
-
-/* Modal Styles */
-.modal {
-    display: none;
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(0,0,0,0.5);
-    z-index: 100;
-}
-
-.modal-content {
-    background: white;
-    margin: 10% auto;
-    padding: 2rem;
-    border-radius: 8px;
-    max-width: 500px;
-}
-
-/* Responsive */
-@media (max-width: 768px) {
-    .dashboard-container {
-        grid-template-columns: 1fr;
-    }
-    .sidebar {
-        display: none;
-    }
-}
-
-/* Form Styles */
-.form-group {
-    margin-bottom: 1.5rem;
-}
-
-.form-group label {
-    display: block;
-    margin-bottom: 0.5rem;
-    font-weight: 600;
-    color: var(--dark);
-}
-
-.form-input {
-    width: 100%;
     padding: 0.75rem;
+    border: 2px solid var(--primary);
+    border-radius: 8px;
+    background: var(--light);
+    cursor: pointer;
+}
+
+.remove-contact {
+    color: var(--danger);
+    font-weight: bold;
+}
+
+.contact-list-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: white;
     border: 1px solid #d1d5db;
     border-radius: 8px;
-    font-size: 1rem;
-    transition: border-color 0.3s ease;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    z-index: 20;
+    max-height: 200px;
+    overflow-y: auto;
 }
 
-.form-input:focus {
-    outline: none;
-    border-color: var(--primary);
-    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+.contact-option {
+    padding: 0.75rem;
+    cursor: pointer;
+    border-bottom: 1px solid #f3f4f6;
+    transition: background 0.2s ease;
 }
 
-/* Message Item Styles (following your member-item pattern) */
+.contact-option:hover {
+    background: var(--light);
+}
+
+.contact-option:last-child {
+    border-bottom: none;
+}
+
+/* CONTACT NAMES */
+.contact-name {
+    display: inline-block;
+}
+
+.contact-name.locked {
+    font-family: monospace;
+    color: var(--gray);
+}
+
+.contact-name.known {
+    color: var(--primary);
+    font-weight: 500;
+}
+
+.contact-name.editable {
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 3px;
+    transition: background 0.2s ease;
+}
+
+.contact-name.editable:hover {
+    background: var(--light);
+}
+
+.edit-hint {
+    opacity: 0.6;
+    margin-left: 0.25rem;
+}
+
+.contact-edit {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.contact-input {
+    padding: 0.25rem;
+    border: 1px solid var(--primary);
+    border-radius: 4px;
+    font-size: 0.9rem;
+}
+
+/* MESSAGES */
 .message-item {
     display: flex;
     flex-direction: column;
@@ -348,12 +419,12 @@ body {
     position: relative;
 }
 
-.decrypted {
-    border-left-color: #10b981; /* Green for decrypted */
+.message-content.decrypted {
+    border-left-color: var(--success);
 }
 
-.encrypted-blob {
-    border-left-color: var(--gray); /* Gray for encrypted */
+.message-content.encrypted-blob {
+    border-left-color: var(--gray);
     background: #f9f9f9;
 }
 
@@ -366,45 +437,35 @@ body {
 
 .decrypt-error {
     font-size: 0.8rem;
-    color: #dc2626;
+    color: var(--danger);
     margin-top: 0.5rem;
 }
 
-.encrypted-preview {
-    font-family: monospace;
-    font-size: 0.9rem;
-    color: var(--gray);
+/* TRANSACTIONS */
+.transaction {
+    padding: 0.75rem 0;
+    border-bottom: 1px solid #e5e7eb;
 }
 
-.encrypted {
-    color: var(--gray);
-    font-style: italic;
+.tx-header {
     display: flex;
+    justify-content: space-between;
     align-items: center;
-    gap: 0.5rem;
+    margin-bottom: 0.5rem;
 }
 
-/* Member Actions */
-.member-actions {
-    display: flex;
-    gap: 0.5rem;
+.tx-type {
+    font-weight: 600;
+    color: var(--primary);
+    text-transform: capitalize;
 }
 
-.btn-icon {
-    background: none;
-    border: none;
-    padding: 0.5rem;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: background 0.3s ease;
-    font-size: 1.2rem;
+.tx-time {
+    font-size: 0.85rem;
+    color: var(--gray);
 }
 
-.btn-icon:hover {
-    background: var(--light);
-}
-
-/* Status indicators */
+/* STATUS INDICATORS */
 .unlock-status {
     display: inline-flex;
     align-items: center;
@@ -417,17 +478,12 @@ body {
     margin-bottom: 1.5rem;
 }
 
-/* Error states */
-.error {
-    color: #dc2626;
-    background: #fef2f2;
-    padding: 0.75rem;
-    border-radius: 6px;
-    border-left: 3px solid #dc2626;
-    margin-top: 1rem;
+.privacy-notice {
+    font-size: 0.9rem;
+    color: var(--gray);
 }
 
-/* Unlock Form */
+/* UNLOCK FORM */
 .unlock-form {
     max-width: 400px;
     margin: 2rem auto;
@@ -443,52 +499,159 @@ body {
     text-align: center;
 }
 
-/* Loading states */
-.btn:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
+.unlock-hint {
+    text-align: center;
+    color: var(--gray);
+    margin-bottom: 1rem;
 }
 
-/* Message status indicators */
-.tx-header {
+/* ERROR STATES */
+.error {
+    color: var(--danger);
+    background: #fef2f2;
+    padding: 0.75rem;
+    border-radius: 6px;
+    border-left: 3px solid var(--danger);
+    margin-top: 1rem;
+}
+
+/* RESPONSIVE */
+@media (max-width: 768px) {
+    .dashboard-container {
+        grid-template-columns: 1fr;
+    }
+    .sidebar {
+        display: none;
+    }
+    .main-content {
+        padding: 1rem;
+    }
+}
+
+/* Contacts Page Styles */
+.contacts-controls {
+    margin-bottom: 2rem;
+}
+
+.search-box {
+    position: relative;
+    max-width: 400px;
+}
+
+.search-input {
+    width: 100%;
+    padding: 0.75rem 2.5rem 0.75rem 1rem;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 1rem;
+}
+
+.search-icon {
+    position: absolute;
+    right: 1rem;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--gray);
+}
+
+.contact-item {
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    margin-bottom: 0.5rem;
+    gap: 1rem;
+    padding: 1rem 0;
+    border-bottom: 1px solid #e5e7eb;
 }
 
-.tx-lock {
+.contact-avatar {
+    width: 50px;
+    height: 50px;
+    background: var(--primary);
+    color: white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
     font-size: 1.2rem;
 }
 
-/* Dev tools spacing */
-.dashboard-container {
-    margin-top: 3rem; /* Space for dev tools */
+.contact-info {
+    flex: 1;
 }
 
-/* Editable member names */
-.member-name.editable {
+.contact-name {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--dark);
     cursor: pointer;
-    padding: 2px 4px;
-    border-radius: 3px;
-    transition: background 0.2s ease;
+    margin-bottom: 0.25rem;
 }
 
-.member-name.editable:hover {
-    background: var(--light);
+.contact-address {
+    font-size: 0.85rem;
+    color: var(--gray);
+    font-family: monospace;
+    margin-bottom: 0.25rem;
 }
 
-.edit-form {
+.contact-type {
+    font-size: 0.8rem;
+    color: var(--gray);
+}
+
+.contact-actions {
     display: flex;
     gap: 0.5rem;
-    align-items: center;
-    flex: 1;
+    flex-wrap: wrap;
 }
 
-.form-input.small {
+.btn-action {
+    background: none;
+    border: 1px solid #d1d5db;
+    padding: 0.5rem;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    position: relative;
+}
+
+.btn-action:hover {
+    background: var(--light);
+    border-color: var(--primary);
+}
+
+.btn-action.message { color: #10b981; }
+.btn-action.messages { color: var(--primary); }
+.btn-action.qr { color: var(--warning); }
+.btn-action.copy { color: var(--gray); }
+.btn-action.delete { color: var(--danger); }
+
+.message-badge {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    background: var(--danger);
+    color: white;
+    border-radius: 10px;
+    font-size: 0.7rem;
+    padding: 2px 6px;
+    min-width: 18px;
+    text-align: center;
+}
+
+/* Member editing */
+.member-edit-form {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+}
+
+.member-name-input, .contact-name-input {
     flex: 1;
-    padding: 0.25rem 0.5rem;
-    font-size: 0.9rem;
+    padding: 0.5rem;
+    border: 1px solid var(--primary);
+    border-radius: 4px;
 }
 
 .edit-actions {
@@ -496,86 +659,72 @@ body {
     gap: 0.25rem;
 }
 
-.btn-icon.save {
-    color: #059669;
+.btn-save, .btn-cancel {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1rem;
+    padding: 0.25rem;
 }
 
-.btn-icon.cancel {
-    color: #dc2626;
-}
-
-/* Contact list placeholder */
-.placeholder-content {
+.empty-contacts, .unlock-prompt {
     text-align: center;
-    padding: 2rem;
+    padding: 3rem 2rem;
     color: var(--gray);
 }
 
-.feature-list {
-    list-style: none;
-    padding: 0;
+.unlock-prompt h2 {
+    color: var(--dark);
+    margin-bottom: 1rem;
+}
+
+/* Add to wallet_dashboard.css */
+.wallet-created {
+    text-align: center;
+}
+
+.wallet-info {
+    margin: 1rem 0;
+    text-align: left;
+}
+
+.member-debug {
+    margin: 0.5rem 0;
+    font-size: 0.9rem;
+}
+
+.wallet-actions {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
     margin: 1rem 0;
 }
 
-.feature-list li {
-    padding: 0.5rem 0;
-    border-bottom: 1px solid #f3f4f6;
+.debug-info {
+    margin-top: 2rem;
+    border: 1px solid #ccc;
+    padding: 1rem;
 }
 
-.feature-list li:last-child {
-    border-bottom: none;
+.debug-info pre {
+    font-size: 0.8rem;
+    max-height: 300px;
+    overflow: auto;
 }
 
-/* Contact name styling */
-.contact-name {
-    display: inline-block;
-}
-
-.contact-name.locked {
-    font-family: monospace;
-    color: var(--gray);
-}
-
-.contact-name.known {
-    color: var(--primary);
-    font-weight: 500;
-}
-
-.contact-name.editable {
-    cursor: pointer;
-    padding: 2px 4px;
-    border-radius: 3px;
-    transition: background 0.2s ease;
-}
-
-.contact-name.editable:hover {
-    background: var(--light);
-}
-
-.edit-hint {
-    opacity: 0.6;
-    margin-left: 0.25rem;
-}
-
-.contact-edit {
+.contact-item {
     display: flex;
+    justify-content: space-between;
     align-items: center;
-    gap: 0.5rem;
+    padding: 1rem 0;
+    border-bottom: 1px solid #eee;
 }
 
-.contact-input {
-    flex: 1;
-    padding: 0.25rem;
-    border: 1px solid var(--primary);
+.contact-item button {
+    margin-left: 0.5rem;
+    background: none;
+    border: 1px solid #ccc;
+    padding: 0.5rem;
+    cursor: pointer;
     border-radius: 4px;
-}
-
-.contact-edit-actions {
-    display: flex;
-    gap: 0.25rem;
-}
-
-.privacy-notice {
-    font-size: 0.9rem;
-    color: var(--gray);
 }

@@ -1,0 +1,136 @@
+/* styles/landing.css */
+.landing-container {
+    min-height: 100vh;
+    background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%);
+    margin-top: 3rem;
+}
+
+.blockchain-meta {
+    margin-bottom: 2rem;
+}
+
+.crisis-header {
+    background: linear-gradient(135deg, var(--dark) 0%, var(--primary) 100%);
+    color: white;
+    padding: 3rem 2rem;
+    text-align: center;
+}
+
+.crisis-title {
+    font-size: 2.5rem;
+    font-weight: 700;
+    margin-bottom: 1rem;
+}
+
+.crisis-details {
+    display: flex;
+    justify-content: center;
+    gap: 2rem;
+    margin-bottom: 1.5rem;
+    opacity: 0.9;
+    flex-wrap: wrap;
+}
+
+.crisis-org, .crisis-contact {
+    font-size: 0.9rem;
+}
+
+.crisis-description {
+    max-width: 600px;
+    margin: 0 auto;
+    font-size: 1.1rem;
+    opacity: 0.9;
+    line-height: 1.6;
+}
+
+.recent-alerts {
+    margin-top: 2rem;
+    max-width: 800px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.recent-alerts h3 {
+    margin-bottom: 1rem;
+    font-size: 1.2rem;
+}
+
+.alert-item {
+    background: rgba(255, 255, 255, 0.1);
+    border-left: 4px solid #f59e0b;
+    padding: 1rem;
+    margin-bottom: 0.5rem;
+    border-radius: 0 8px 8px 0;
+    text-align: left;
+}
+
+.alert-content {
+    font-weight: 500;
+    margin-bottom: 0.5rem;
+}
+
+.alert-time {
+    font-size: 0.85rem;
+    opacity: 0.8;
+}
+
+.landing-content {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+.main-section {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+}
+
+.info-card {
+    background: white;
+    border-radius: 12px;
+    padding: 2rem;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+}
+
+.info-card h3 {
+    color: var(--dark);
+    margin-bottom: 1rem;
+    font-size: 1.3rem;
+}
+
+.feature-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.feature-list li {
+    padding: 0.75rem 0;
+    border-bottom: 1px solid #f3f4f6;
+    color: #4b5563;
+    line-height: 1.5;
+}
+
+.feature-list li:last-child {
+    border-bottom: none;
+}
+
+@media (max-width: 768px) {
+    .landing-content {
+        grid-template-columns: 1fr;
+        padding: 1rem;
+    }
+    
+    .crisis-details {
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+    
+    .crisis-title {
+        font-size: 2rem;
+    }
+}

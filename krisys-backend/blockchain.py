@@ -476,7 +476,7 @@ class Blockchain:
         - Private key stored in blockchain/master_private_key.asc
         - Returns public key string
         """
-        key_dir = '/data'   # Docker volume path
+        key_dir = '/app/blockchain'   # Docker volume path
         public_key_file = os.path.join(key_dir, 'master_public_key.asc')
         private_key_file = os.path.join(key_dir, 'master_private_key.asc')
         
@@ -510,7 +510,7 @@ class Blockchain:
         - Reads private key from file on demand
         - Does not store key in memory
         """
-        private_key_file = os.path.join('/data', 'master_private_key.asc')
+        private_key_file = os.path.join('/app/blockchain', 'master_private_key.asc')
         
         if not os.path.exists(private_key_file):
             logger.error("Master private key not found")
@@ -538,7 +538,7 @@ class Blockchain:
         """Get wallet by family ID"""
         return self.wallets.get_wallet(family_id)
     
-    def add_transaction(self, transaction: Transaction):
+    def add_transaction(self, transaction: Transaction, rate_limit_override: bool = False):
         """Add transaction with policy enforcement"""
         
         # Get current policy settings
@@ -566,15 +566,16 @@ class Blockchain:
             raise ValueError("Duplicate transaction ID")
         
         # 4. Rate limiting
-        recent_txs = [
-            tx for tx in self.pending_transactions 
-            if tx.station_address == transaction.station_address
-            and (time.time() - tx.timestamp_created) < policy_config['rate_limit']
-        ]
-        if recent_txs:
-            raise ValueError(
-                f"Only one transaction per station every {policy_config['rate_limit']} seconds"
-            )
+        if not rate_limit_override:
+            recent_txs = [
+                tx for tx in self.pending_transactions 
+                if tx.station_address == transaction.station_address
+                and (time.time() - tx.timestamp_created) < policy_config['rate_limit']
+            ]
+            if recent_txs:
+                raise ValueError(
+                    f"Only one transaction per station every {policy_config['rate_limit']} seconds"
+                )
         
         self.pending_transactions.append(transaction)
         logger.info(f"Added transaction: {transaction.transaction_id} to blockchain.pending_transactions")
