@@ -159,8 +159,8 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
                                 {showContactPicker && (<>
                                     <input 
                                         type="text"
-                                        value={recipient}
-                                        onChange={(e) => setRecipient(e.target.value)}
+                                        value={selectedRecipient}
+                                        onChange={(e) => setSelectedRecipient(e.target.value)}
                                         className="form-input"
                                         placeholder="Enter wallet address"
                                         disabled={sending}

@@ -34,7 +34,12 @@ export const api = {
     getCurrentPolicy: () => apiClient.get('/policy'),
   
     // Wallet endpoints
-    createWallet: (numMembers) => axios.post(`${API_BASE}/wallet`, { num_members: numMembers }),
+    // createWallet: (numMembers) => axios.post(`${API_BASE}/wallet`, { num_members: numMembers }),
+    createWallet: (numMembers, passphrase) => 
+        axios.post(`${API_BASE}/wallet`, { 
+            num_members: numMembers,
+            passphrase: passphrase 
+        }),
     getWallet: (familyId) => axios.get(`${API_BASE}/wallet/${familyId}`),
     getWalletTransactions: (familyId) => axios.get(`${API_BASE}/wallet/${familyId}/transactions`),
     getWalletQR: (familyId, address) => axios.get(`${API_BASE}/wallet/${familyId}/qr/${address}`),

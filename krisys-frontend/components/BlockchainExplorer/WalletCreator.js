@@ -1,20 +1,39 @@
-// components/BlockchainExplorer/WalletCreator.js - FIXED
+// components/BlockchainExplorer/WalletCreator.js
 import { useState } from 'react'
 import { api } from '../../services/api'
+import { useRouter } from 'next/navigation'
+import '../../styles/landing.css'
+
+const MIN_PASSPHRASE_LENGTH = 1
 
 export default function WalletCreator() {
     const [numMembers, setNumMembers] = useState(3)
+    const [passphrase, setPassphrase] = useState('')
+    const [confirmPassphrase, setConfirmPassphrase] = useState('')
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState('')
     const [createdWallet, setCreatedWallet] = useState(null)
     const [debugInfo, setDebugInfo] = useState(null)
 
+    const router = useRouter()
+
     const createWallet = async () => {
+        // Validate passphrase
+        if (!passphrase || passphrase.length < MIN_PASSPHRASE_LENGTH) {
+            setError('Passphrase must be at least 8 characters')
+            return
+        }
+        
+        if (passphrase !== confirmPassphrase) {
+            setError('Passphrases do not match')
+            return
+        }
+        
         setLoading(true)
         setError('')
         
         try {
-            const response = await api.createWallet(numMembers)
+            const response = await api.createWallet(numMembers, passphrase)
             const wallet = response.data
             
             setCreatedWallet(wallet)
@@ -49,7 +68,7 @@ export default function WalletCreator() {
 
     const goToWallet = () => {
         if (createdWallet) {
-            window.location.href = `/wallet/${createdWallet.family_id}`
+            router.push(`/wallet/${createdWallet.family_id}`)
         }
     }
 
@@ -74,19 +93,62 @@ export default function WalletCreator() {
                             />
                         </div>
                         
+                        <div className="form-group">
+                            <label>Wallet Passphrase:</label>
+                            <input 
+                                type="password"
+                                value={passphrase}
+                                onChange={(e) => setPassphrase(e.target.value)}
+                                placeholder="At least 8 characters"
+                                className="form-input"
+                                disabled={loading}
+                                required
+                            />
+                            <small className="form-hint">
+                                💡 This passphrase protects your private messages. Write it down!
+                            </small>
+                        </div>
+                        
+                        <div className="form-group">
+                            <label>Confirm Passphrase:</label>
+                            <input 
+                                type="password"
+                                value={confirmPassphrase}
+                                onChange={(e) => setConfirmPassphrase(e.target.value)}
+                                placeholder="Re-enter passphrase"
+                                className="form-input"
+                                disabled={loading}
+                                required
+                            />
+                        </div>
+                        
                         <button 
                             onClick={createWallet}
                             className="btn"
-                            disabled={loading}
+                            disabled={loading || !passphrase || !confirmPassphrase}
                         >
                             {loading ? 'Creating...' : 'Create Wallet'}
                         </button>
                         
                         {error && <p className="error">{error}</p>}
+                        
+                        <div className="security-info">
+                            <h4>🔐 Security Features:</h4>
+                            <ul>
+                                <li>✅ Your passphrase encrypts your private key</li>
+                                <li>✅ Messages are encrypted end-to-end</li>
+                                <li>✅ Keys stored locally for offline access</li>
+                                <li>✅ Blockchain admin cannot read your messages</li>
+                            </ul>
+                        </div>
                     </>
                 ) : (
                     <div className="wallet-created">
                         <h4>✅ Wallet Created!</h4>
+                        <div className="security-reminder">
+                            <p>🔒 <strong>Important:</strong> Keep your passphrase safe! You will need it to unlock your wallet and read messages.</p>
+                        </div>
+                        
                         <div className="wallet-info">
                             <div>
                                 <strong>Family ID:</strong> 
@@ -117,6 +179,8 @@ export default function WalletCreator() {
                                 onClick={() => {
                                     setCreatedWallet(null)
                                     setDebugInfo(null)
+                                    setPassphrase('')
+                                    setConfirmPassphrase('')
                                 }} 
                                 className="btn"
                             >

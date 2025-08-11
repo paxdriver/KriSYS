@@ -8,6 +8,8 @@
   2. Queue new messages for later transmission  
   3. Sync blockchain data with other nearby devices
   4. Relay messages for strangers when they get connectivity
+
+  NOTE: FOR ACTUAL ENCRYPTION users can create their own keypair and use that extra private keypair as the passphrase, so that the decrypted response still needs to be decrypted once more by them manually to get the actual private key from the blockchain. then they can take messages from the blockchain, copy it to Kleopatra or whatever, and decrypt their messages manually without any chance of their private_key being unlocked by just the passphrase alone (but this is not the regular use case, just an option to upgrade from obfuscation to secure)
  */
 
 class DisasterStorage {
@@ -15,11 +17,16 @@ class DisasterStorage {
         this.STORAGE_KEYS = {
             PRIVATE_KEY: 'krisys_private_key',
             WALLET_DATA: 'krisys_wallet_data', 
-            BLOCKCHAIN: 'krisys_blockchain',
-            MESSAGE_QUEUE: 'krisys_message_queue',
-            PUBLIC_KEYS: 'krisys_public_keys', // Other people's keys for encryption
+            BLOCKCHAIN: 'krisys_blockchain',        // DEV NOTE: This should be pruned based on lastest timestamp or something down the road
+            MESSAGE_QUEUE: 'krisys_message_queue',  // For message relaying when offline
+            PUBLIC_KEYS: 'krisys_public_keys',      // Other people's keys for encryption
             SYNC_STATUS: 'krisys_sync_status'
         }
+    }
+
+    deletePrivateKey(familyId) { // DEV NOTE: familyId might be needed if one device shared by a few families, but NOT at public device stations where users log in to public devices.
+        console.log('Deleting invalid private key from localStorage')
+        localStorage.removeItem(this.STORAGE_KEYS.PRIVATE_KEY)
     }
 
     // PRIVATE KEY MANAGEMENT - Store locally for offline access

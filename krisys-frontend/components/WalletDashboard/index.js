@@ -1,5 +1,6 @@
 // components/WalletDashboard/index.js
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import Sidebar from './Sidebar'
 import Overview from './Overview'
 import MembersPage from './MembersPage'
@@ -13,7 +14,24 @@ import '../../styles/wallet_dashboard.css'
 export default function WalletDashboard({ walletData, transactions, familyId, onRefresh }) {
     const [currentPage, setCurrentPage] = useState('overview')
     const [privateKey, setPrivateKey] = useState(null)
-    const [isUnlocked, setIsUnlocked] = useState(false)
+    const [isUnlocked, setIsUnlocked] = useState(false) 
+    const searchParams = useSearchParams()
+
+
+    // Listen for URL changes from any component Page and update currentPage to perform the route
+    useEffect(() => {
+        const urlPage = searchParams.get('page')
+
+        // SEND MESSAGE BUTTON FROM OUTSIDE OF THE MESSAGE PAGE (ie: quick launch from contacts list)
+        if (urlPage && urlPage === 'messages') {
+            // url will look like this:
+                // http://localhost:3000/wallet/851c525350bc2a4c47ec7a54?page=messages&recipient=3e591eb7e9cf56dea7a9f11c, 
+            // ... having both recipient address and message
+            setCurrentPage(urlPage)
+        }
+    }, [searchParams])
+
+    
 
     useEffect(() => {
         if (privateKey) {

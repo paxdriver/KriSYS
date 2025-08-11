@@ -21,6 +21,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 MAX_MEMBERS = 20     # DEV NOTE: THIS SHOULD BE DEFINED IN THE BLOCKCHAIN ISNTANTIATION POLICY BY ADMIN
+MIN_PASSPHRASE_LENGTH = 1   # set small limit, just for obfuscation not security
 
 app = Flask(__name__, static_folder='static')
 ################ DEV NOTE: CHANGE ADMIN SECRETS!!!!!!!
@@ -240,35 +241,62 @@ def mine_block():
         logger.error(f"Mining error: {str(e)}")
         return jsonify({"error": "Mining failed"}), 500
 
-# Wallet management endpoints
+# Wallet management endpoints - with passphrase encryption
 @app.route('/wallet', methods=['POST'])
 def create_wallet():
     """Create a new family wallet with keys stored separately"""
     try: 
         data = request.json
         num_members = int(data.get('num_members', 1))
+        passphrase = data.get('passphrase', '')  # Get passphrase from request
         
+        if not passphrase or len(passphrase) < MIN_PASSPHRASE_LENGTH:
+            return jsonify({"error": f"Passphrase must be at least {MIN_PASSPHRASE_LENGTH} characters"}), 400
+
         if num_members < 1 or num_members > MAX_MEMBERS:
             return jsonify({"error": "Number of members must be between 1-20"}), 400
 
-        # Create members list with default names
         members = [{"name": f"Member {i+1}"} for i in range(num_members)]
         
-        # Use WalletManager to create wallet (keys stored in wallet_keys table)
         wallet = blockchain.wallets.create_wallet(
             family_id=hashlib.sha256(secrets.token_bytes(32)).hexdigest()[:24],
             members=members,
             crisis_id=blockchain.crisis_metadata['id'],
-            passphrase=""  # Empty passphrase for development
+            passphrase=passphrase   # Passphrase deciphers private_key stored by blockchain host in wallet_keys, which is encrypted value by blockchain host's public/private keys to never store user's private key, but to allow simple passphrase for user to retrieve their private_key by memory
         )
-        
-        logger.info(wallet.family_id)
         
         return jsonify(wallet.to_dict()), 201
 
     except Exception as e:
         logger.error(f"Wallet creation error: {str(e)}")
         return jsonify({"error": "Wallet creation failed"}), 500
+    ########### OLD
+    # try: 
+    #     data = request.json
+    #     num_members = int(data.get('num_members', 1))
+        
+    #     if num_members < 1 or num_members > MAX_MEMBERS:
+    #         return jsonify({"error": "Number of members must be between 1-20"}), 400
+
+    #     # Create members list with default names
+    #     members = [{"name": f"Member {i+1}"} for i in range(num_members)]
+        
+    #     # Use WalletManager to create wallet (keys stored in wallet_keys table)
+    #     wallet = blockchain.wallets.create_wallet(
+    #         family_id=hashlib.sha256(secrets.token_bytes(32)).hexdigest()[:24],
+    #         members=members,
+    #         crisis_id=blockchain.crisis_metadata['id'],
+    #         passphrase=""  # Empty passphrase for development
+    #     )
+        
+    #     logger.info(wallet.family_id)
+        
+    #     return jsonify(wallet.to_dict()), 201
+
+    # except Exception as e:
+    #     logger.error(f"Wallet creation error: {str(e)}")
+    #     return jsonify({"error": "Wallet creation failed"}), 500
+    ########### OLD
 
 @app.route('/admin/alert', methods=['POST'])
 @admin_required

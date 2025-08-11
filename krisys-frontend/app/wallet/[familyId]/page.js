@@ -25,29 +25,28 @@ export default function WalletDashboardPage() {
         // Load transactions
         const txResponse = await api.getWalletTransactions(familyId)
         setTransactions(txResponse.data)
-      
-    } 
-    catch (error) {
+        
+      } 
+      catch (error) {
         console.error('Error loading wallet data:', error)
-    } 
-    finally {
+      } 
+      finally {
         setLoading(false)
-    }
+      }
   }, [familyId])
 
-  useEffect(() => {
-    if (familyId) {
-      loadWalletData()
-    }
-  }, [familyId])
-
+    useEffect(() => {
+    loadWalletData()
+  }, [loadWalletData])
+    
   if (loading) {
-    return <div>Loading wallet...</div>
+    return <div className="loading-page">Loading wallet data...</div>
   }
 
   if (!walletData) {
-    return <div>Wallet not found</div>
+    return <div className="error-page">Wallet not found</div>
   }
+
 
   return (
     <WalletDashboard 

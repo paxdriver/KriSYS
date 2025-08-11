@@ -476,7 +476,7 @@ class Blockchain:
         - Private key stored in blockchain/master_private_key.asc
         - Returns public key string
         """
-        key_dir = '/app/blockchain'   # Docker volume path
+        key_dir = 'blockchain'   # Docker volume path, /app is already the working dir
         public_key_file = os.path.join(key_dir, 'master_public_key.asc')
         private_key_file = os.path.join(key_dir, 'master_private_key.asc')
         
@@ -510,7 +510,8 @@ class Blockchain:
         - Reads private key from file on demand
         - Does not store key in memory
         """
-        private_key_file = os.path.join('/app/blockchain', 'master_private_key.asc')
+        key_dir = "blockchain"  # "/app" is already the working directory
+        private_key_file = os.path.join(key_dir, 'master_private_key.asc')
         
         if not os.path.exists(private_key_file):
             logger.error("Master private key not found")
