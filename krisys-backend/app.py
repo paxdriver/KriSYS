@@ -6,6 +6,7 @@ from blockchain import Blockchain, Transaction, PolicySystem
 import time
 import json
 import os
+import base64
 from functools import wraps
 from database import db_connection
 import pgpy
@@ -93,8 +94,18 @@ def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         auth_token = request.headers.get('X-Admin-Token')
-        if auth_token != ADMIN_TOKEN:
-            return jsonify({"error": "UNAUTHORIZED: INVALID ADMIN TOKEN"}), 401
+        
+        if not auth_token:
+            return jsonify({"error": "UNAUTHORIZED: MISSING ADMIN TOKEN"}), 401        
+        
+        try:
+            # Decode the base64-encoded token
+            decoded_token = base64.b64decode(auth_token).decode('utf8')
+            if decoded_token != ADMIN_TOKEN:
+                return jsonify({"error": "UNAUTHORIZED: INVALID ADMIN TOKEN"}), 401
+        except Exception as e:
+            logger.error(f"Token decoding error: {str(e)}")
+            return jsonify({"error": "UNAUTHORIZED: INVALID TOKEN FORMAT"}), 401    
         return f(*args, **kwargs)
     return decorated_function
 #####################

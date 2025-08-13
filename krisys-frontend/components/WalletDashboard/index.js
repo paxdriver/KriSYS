@@ -1,4 +1,5 @@
 // components/WalletDashboard/index.js
+'use client'
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Sidebar from './Sidebar'

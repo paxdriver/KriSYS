@@ -1,4 +1,5 @@
-// components/WalletDashboard/MembersPage.js - CORRECTED VERSION
+// components/WalletDashboard/MembersPage.js
+'use client'
 import { useState } from "react"
 import { contactStorage } from "../../services/contactStorage"
 

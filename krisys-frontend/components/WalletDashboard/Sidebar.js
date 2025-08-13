@@ -1,4 +1,5 @@
 // components/WalletDashboard/Sidebar.js
+'use client'
 export default function Sidebar({ walletData, currentPage, onPageChange }) {
   const navItems = [
     { id: 'overview', icon: '📊', label: 'Overview' },

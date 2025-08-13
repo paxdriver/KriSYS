@@ -1,4 +1,5 @@
 // components/WalletDashboard/Overview.js
+'use client'
 import RecentActivity from './RecentActivity'
 import MembersOverview from './MembersOverview'
 

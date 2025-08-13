@@ -27,6 +27,18 @@ apiClient.interceptors.request.use((config) => {
     return config
 })
 
+// Add response interceptor for better error handling
+apiClient.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        // Check if it's a network error
+        if (!error.response && (error.code === 'ECONNREFUSED' || error.message === 'Simulated offline mode' || error.message.includes('Network Error'))) {
+            error.isNetworkError = true
+        }
+        return Promise.reject(error)
+    }
+)
+
 export const api = {
     // Blockchain endpoints
     getBlockchain: () => axios.get(`${API_BASE}/blockchain`),

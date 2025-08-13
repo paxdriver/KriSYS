@@ -412,6 +412,7 @@ class WalletManager:
         
         return None
     
+    # To obfuscate p2p messages, recipient's public_key is retrieved to encryt message prior to posting to blockchain
     def get_wallet_public_key(self, family_id):
         """Get public key for encrypting messages to this wallet"""
         with db_connection() as conn:

@@ -19,6 +19,7 @@ services:
       - ./krisys-frontend:/app
       - /app/node_modules
       - /app/.next
+      - ./blockchain:/app/blockchain # DEV ONLY!!! for admin panel controls
     ports:
       - "3000:3000"
     environment:

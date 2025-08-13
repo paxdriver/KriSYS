@@ -1,4 +1,5 @@
 // components/WalletDashboard/ContactsPage.js
+'use client'
 import { useState, useEffect } from 'react'
 import { contactStorage } from '../../services/contactStorage'
 import { useRouter } from 'next/navigation'

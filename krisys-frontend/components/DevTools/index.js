@@ -1,4 +1,5 @@
 // components/DevTools/index.js
+'use client'
 import { useState, useEffect } from "react"
 import { api } from "@/services/api"
 import { disasterStorage } from "@/services/localStorage"

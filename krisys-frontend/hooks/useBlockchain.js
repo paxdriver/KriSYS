@@ -1,4 +1,5 @@
 // hooks/useBlockchain.js
+'use client'
 import { useState, useEffect } from 'react'
 import { api } from '../services/api'
 

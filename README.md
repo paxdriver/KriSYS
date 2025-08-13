@@ -9,8 +9,12 @@ Core Concept:
 - Aid organizations host dedicated blockchains for specific crises
 - Families receive wallet addresses via QR codes
 - Messages and check-ins are recorded as blockchain transactions
-- Offline devices sync via WiFi when in proximity
+- Using blockchain for offline message/alert relaying
+- Offline devices sync via WiFi when in proximity 
 - Global family tracking through blockchain explorer
+- Ad Hoc inventory / needs analysis data for supplies
+- Immediate updates for journalists, public, court evidence
+
 
 Current Status (August 5 2025)
 

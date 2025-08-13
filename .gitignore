@@ -4,3 +4,5 @@
 **/node_modules/
 DEV\ -\ prompt*
 .env*
+NEW_PROMPT.py
+DELETE.txt

@@ -1,4 +1,5 @@
 // components/WalletDashboard/UnlockForm.js
+'use client'
 import { useState, useEffect } from 'react'
 import { KeyManager } from '../../services/keyManager'
 

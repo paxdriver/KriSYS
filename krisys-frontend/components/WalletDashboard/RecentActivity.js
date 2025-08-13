@@ -1,4 +1,5 @@
 // components/WalletDashboard/RecentActivity.js
+'use client'
 import TransactionItem from './TransactionItem'
 
 export default function RecentActivity({ transactions, walletData, limit }) {

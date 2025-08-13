@@ -1,4 +1,5 @@
 // components/WalletDashboard/MembersOverview.js
+'use client'
 export default function MembersOverview({ members }) {
   if (!members || members.length === 0) {
     return <p>No members found</p>

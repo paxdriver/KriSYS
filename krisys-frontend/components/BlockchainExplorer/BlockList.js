@@ -1,3 +1,4 @@
+'use client'
 export default function BlockList({ blocks, loading }) {
     if (loading) {
         return <div className="loading">Loading blockchain...</div>
