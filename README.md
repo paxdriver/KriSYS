@@ -59,7 +59,9 @@ Frontend (React/Next.js - Port 3000)
 - Contact Management: Privacy-first local address book
 
 
-Project Structure
+## Project Structure
+
+```
 krisys/
 ├── docker-compose.yml              # Development environment
 ├── blockchain/                     # Shared database volume
@@ -91,6 +93,8 @@ krisys/
 │   │   ├── localStorage.js       # Disaster-specific offline storage
 │   │   └── contactStorage.js     # Privacy-first contact management
 │   └── styles/                   # Custom CSS (no frameworks)
+```
+
 
 
 PGP Implementation Details
