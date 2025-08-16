@@ -156,6 +156,7 @@ License: MIT - Attribute: Kristopher Driver krisdriver.com @paxdriver on social 
 
 
 NOTES: current file structure while under development
+```
 /krisys-project
 ├── docker-compose.yml
 ├── Dockerfile
@@ -168,7 +169,7 @@ NOTES: current file structure while under development
     └── templates/
         ├── index.html
         └── scanner.html
-
+```
 Test routes as of July 22 2025:
 - http://localhost:5000 - Blockchain explorer
 - http://localhost:5000/scanner - QR scanner interface
@@ -183,6 +184,7 @@ Test routes as of July 22 2025:
 
 
 Final structure to look more similar to this:
+```
 krisys/
 ├── backend/
 │   ├── blockchain/
@@ -204,3 +206,4 @@ krisys/
 │   └── css/
 │       └── style.css
 └── requirements.txt
+```
