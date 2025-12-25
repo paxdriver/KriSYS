@@ -37,15 +37,21 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 
         setSending(true)
         setError('')
-
+        
         try {
             // Extract family ID from recipient address
             let familyId = selectedRecipient.includes('-') 
-                ? selectedRecipient.split('-').slice(0, -1).join('-')
-                : selectedRecipient
-
+            ? selectedRecipient.split('-').slice(0, -1).join('-')
+            : selectedRecipient
+            
             // Use KeyManager for encryption
             const encryptedMessage = await KeyManager.encryptMessage(messageText, familyId)
+
+            // Create a stable per-message ID for offline relay
+            const relayHash = (typeof window !== 'undefined' &&
+                    window.crypto &&
+                    window.crypto.randomUUID &&
+                    window.crypto.randomUUID()) || `${Date.now()}_${Math.random().toString(36).slice(2)}`
             
             // Create transaction
             const transaction = {
@@ -54,7 +60,9 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
                 message_data: encryptedMessage,
                 related_addresses: [selectedRecipient],
                 type_field: 'message',
-                priority_level: 5
+                priority_level: 5,
+                relay_hash: relayHash,                          // <- used for offline relay & confirmation
+                origin_device: disasterStorage.getDeviceId()    // <- extra metadata, server ignores
             }
 
             // Send or queue
