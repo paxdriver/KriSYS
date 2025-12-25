@@ -191,6 +191,39 @@ export default function DevTools({ onRefresh }) {
         }
     }
 
+    // DEV Utilities ->
+    
+    const handleExportSync = () => {
+            try {
+                const payload = disasterStorage.exportSyncPayload()
+                console.log('KriSYS sync payload (object):', payload)
+                console.log(
+                    'KriSYS sync payload (JSON):',
+                    JSON.stringify(payload, null, 2)
+                )
+                alert('Sync payload exported to console (see DevTools).')
+            } catch (error) {
+                console.error('Failed to export sync payload:', error)
+                alert(`Failed to export sync payload: ${error.message}`)
+            }
+        }
+
+    const handleImportSync = () => {
+        const input = window.prompt('Paste sync payload JSON:')
+        if (!input) return
+
+        try {
+            const payload = JSON.parse(input)
+            console.log('Importing KriSYS sync payload:', payload)
+            disasterStorage.importSyncPayload(payload)
+            alert('Sync payload imported. Local queue and confirmations updated.')
+            if (onRefresh) onRefresh()
+        } catch (error) {
+            console.error('Failed to import sync payload:', error)
+            alert('Invalid JSON or import failed. See console for details.')
+        }
+    }
+
     const sendTestAlert = async () => {
         try {
             await api.adminAlert('TEST ALERT: Development emergency broadcast test', 1)
@@ -200,6 +233,7 @@ export default function DevTools({ onRefresh }) {
             alert(`Test alert failed: ${error.message}`)
         }
     }
+    // <-- DEV Utilities
 
     const clearStorage = () => {
         if (confirm('🗑️ Clear all local storage? This will log you out and clear all offline data.')) {
@@ -250,6 +284,22 @@ export default function DevTools({ onRefresh }) {
                     title="Send all queued messages (when back online)"
                 >
                     {sending ? '⏳' : '📤'} Queue ({queuedMessages})
+                </button>
+
+                <button
+                    className="dev-btn"
+                    onClick={handleExportSync}
+                    title="Log sync payload (queued + confirmed) to console"
+                >
+                    Export Sync
+                </button>
+
+                <button
+                    className="dev-btn"
+                    onClick={handleImportSync}
+                    title="Import sync payload from pasted JSON"
+                >
+                    Import Sync
                 </button>
 
                 <button 

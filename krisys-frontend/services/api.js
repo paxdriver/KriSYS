@@ -11,6 +11,17 @@ const apiClient = axios.create({
 // blockchain's private_key
 const ADMIN_TOKEN = process.env.NEXT_PUBLIC_ADMIN_TOKEN // this should be taken from blockchain/master_private_key.asc
 
+// TODO - remove simulated offline before production
+// Block all Axios requests when in offline-dev mode
+apiClient.interceptors.request.use(config => {
+  if (typeof window !== 'undefined' && window.KRISYS_OFFLINE_MODE) {
+    // Simulate network down
+    return Promise.reject(new Error('Simulated offline mode'))
+  }
+  return config
+})
+// SIMULATED OFFLINE MODE FOR DEVELOPMENT ONLINE
+
 // Add request interceptor to include dev headers
 apiClient.interceptors.request.use((config) => {
     // Add rate limit override header if enabled

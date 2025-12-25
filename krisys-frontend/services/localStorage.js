@@ -208,6 +208,143 @@ class DisasterStorage {
         }
     }
 
+    /*  Build a payload to sync with another device.
+        Includes:
+            - this device's ID
+            - unconfirmed, pending queued messages
+            - full confirmed-relays map
+
+        TODO - via a simple JSON payload we're only defining the data model and merge logic here; actually transmitting it (QR / file / WebRTC / etc.) comes later.
+    */
+    exportSyncPayload() {
+        const queue = this.getMessageQueue()
+        const confirmed = this.getConfirmedRelays()
+
+        // Only pending messages that are not already confirmed
+        const queuedForSync = queue.filter(
+            (msg) =>
+                msg.status === 'pending' &&
+                !this.isMessageConfirmed(msg.relay_hash)
+        )
+
+        return {
+            deviceId: this.getDeviceId(),
+            generatedAt: Date.now(),
+            queued: queuedForSync,
+            confirmed
+        }
+    }
+    /*  Merge another device's sync payload into local storage.
+            - Incorporates their confirmed relays
+            - Adds any new, unconfirmed queued messages we don't already have
+            - Then prunes any messages that are now confirmed
+        
+        TODO - via a simple JSON payload we're only defining the data model and merge logic here; actually transmitting it (QR / file / WebRTC / etc.) comes later.
+    */
+    importSyncPayload(payload) {
+        if (!payload || typeof payload !== 'object') {
+            return
+        }
+
+        const incomingQueued = Array.isArray(payload.queued)
+            ? payload.queued
+            : []
+        const incomingConfirmed =
+            (payload.confirmed && typeof payload.confirmed === 'object')
+                ? payload.confirmed
+                : {}
+
+        /* 1) Merge confirmed-relay map
+            - Takes the incoming confirmed object.
+            - For each relayHash:
+            - If you have no local entry, you store theirs.
+         	- If you both have entries and both have confirmedAt, you keep the one with the earlier confirmedAt (not strictly required, but keeps deterministic-ish data).
+        */
+        // - Writes back the merged CONFIRMED_RELAYS if anything changed.
+        const localConfirmed = this.getConfirmedRelays()
+        let confirmedChanged = false
+
+        for (const [relayHash, info] of Object.entries(incomingConfirmed)) {
+            if (!relayHash) continue
+
+            const existing = localConfirmed[relayHash]
+            if (!existing) {
+                // No local entry yet: just take incoming
+                localConfirmed[relayHash] = info
+                confirmedChanged = true
+            } else {
+                // If both have entries, keep the earlier confirmedAt if provided
+                const existingTime = existing.confirmedAt || Infinity
+                const incomingTime = info.confirmedAt || existingTime
+                if (incomingTime < existingTime) {
+                    localConfirmed[relayHash] = {
+                        ...existing,
+                        ...info
+                    }
+                    confirmedChanged = true
+                }
+            }
+        }
+
+        if (confirmedChanged) {
+            localStorage.setItem(
+                this.STORAGE_KEYS.CONFIRMED_RELAYS,
+                JSON.stringify(localConfirmed)
+            )
+        }
+
+        /* 2) Merge incoming queued messages
+            - Takes payload.queued (list of messages).
+            - For each incoming message:
+                - Skips if no relay_hash.
+                - Skips if that relay_hash is now confirmed locally.
+                - Skips if there is already a message in your queue with that relay_hash.
+                - Otherwise, normalizes some fields (status, attempts, queuedAt) and appends it to your queue.
+            - Saves updated queue if anything changed.
+        */
+        let queue = this.getMessageQueue()
+        let queueChanged = false
+
+        for (const msg of incomingQueued) {
+            const relayHash = msg.relay_hash
+            if (!relayHash) continue
+
+            // Skip if already confirmed (locally or after merge above)
+            if (this.isMessageConfirmed(relayHash)) {
+                continue
+            }
+
+            // Skip if we already have this relay in our queue
+            const already = queue.find(
+                (existing) => existing.relay_hash === relayHash
+            )
+            if (already) {
+                continue
+            }
+
+            const normalized = {
+                ...msg,
+                status: msg.status || 'pending',
+                attempts:
+                    typeof msg.attempts === 'number' ? msg.attempts : 0,
+                queuedAt: msg.queuedAt || Date.now()
+            }
+
+            queue.push(normalized)
+            queueChanged = true
+        }
+
+        if (queueChanged) {
+            localStorage.setItem(
+                this.STORAGE_KEYS.MESSAGE_QUEUE,
+                JSON.stringify(queue)
+            )
+        }
+
+        // 3) Final cleanup: remove any now-confirmed items from queue
+        this.pruneConfirmedFromQueue()
+    }
+
     // UTILITY - Clear all data (for testing/reset)
     clearAll() {
         Object.values(this.STORAGE_KEYS).forEach(key => {
