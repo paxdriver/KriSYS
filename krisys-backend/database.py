@@ -28,7 +28,8 @@ def init_db():
             timestamp REAL NOT NULL,
             previous_hash TEXT NOT NULL,
             hash TEXT NOT NULL,
-            nonce INTEGER DEFAULT 0
+            nonce INTEGER DEFAULT 0,
+            signature TEXT
         )
         ''')
         

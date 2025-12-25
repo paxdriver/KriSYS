@@ -103,6 +103,7 @@ class PolicySystem:
             "contact": contact,
             "description": description,
             "policy": full_policy,
+            "created_at": datetime.now().isoformat(),
         }
         
         # Store the policy in the system
@@ -194,7 +195,9 @@ class Block:
         timestamp: float,
         transactions: List[Transaction],
         previous_hash: str,
-        nonce: int = 0
+        nonce: int = 0,
+            # NOTE: blockchain's public key is also the signature for signing blocks! If compromised, terminate entire blockchain and start a new one, freezing the old blockchain entirely.
+        signature: Optional[str] = None     
     ):
         """
         Represents a block in the blockchain
@@ -209,6 +212,7 @@ class Block:
         self.previous_hash = previous_hash
         self.nonce = nonce
         self.hash = self.calculate_hash()
+        self.signature = signature  # Server PGP signing of blocks so users can validate blocks relayed from other users. 
 
     def calculate_hash(self) -> str:
         block_data = json.dumps({
@@ -227,7 +231,8 @@ class Block:
             "transactions": [tx.to_dict() for tx in self.transactions],
             "previous_hash": self.previous_hash,
             "hash": self.hash,
-            "nonce": self.nonce
+            "nonce": self.nonce,
+            "signature": self.signature,
         }
         
 class Wallet:
@@ -242,7 +247,7 @@ class Wallet:
             "family_id": self.family_id,
             "crisis_id": self.crisis_id,
             "members": self.members,
-            "devices": self.devices
+            "devices": self.devices,
         }
     
     def add_member(self, name):
@@ -470,6 +475,7 @@ class Blockchain:
         self.miner_thread = threading.Thread(target=self.miner_loop, daemon=True)
         self.miner_thread.start()
         
+
     def load_or_generate_master_key(self):
         """
         Load existing or generate new master keypair
@@ -623,7 +629,8 @@ class Blockchain:
                         timestamp=db_block['timestamp'],
                         transactions=transactions,
                         previous_hash=db_block['previous_hash'],
-                        nonce=db_block['nonce']
+                        nonce=db_block['nonce'],
+                        signature=db_block['signature'],
                     )
                     # Override calculated hash with stored hash
                     block.hash = db_block['hash']
@@ -638,6 +645,10 @@ class Blockchain:
 
     def save_block(self, block: Block):
         """Save block to database"""
+        # Ensure block has a signature
+        if not block.signature:
+            block.signature = self.sign_block(block)
+        
         with db_connection() as conn:
             # Save block
             cur = conn.execute(
@@ -651,7 +662,8 @@ class Blockchain:
                     block.timestamp,
                     block.previous_hash,
                     block.hash,
-                    block.nonce
+                    block.nonce,
+                    block.signature,
                 )
             )
             block_id = cur.lastrowid
@@ -683,17 +695,51 @@ class Blockchain:
             conn.commit()
             logger.info(f"Saved block #{block.block_index} to database")
 
+    # def create_genesis_block(self):
+    #     """Create and save the genesis block"""
+    #     genesis = Block(
+    #         block_index=0,
+    #         timestamp=time.time(),
+    #         transactions=[],
+    #         previous_hash="0"
+    #     )
+    #     self.chain.append(genesis)
+    #     self.save_block(genesis)
+    #     logger.info("Created genesis block")
     def create_genesis_block(self):
-        """Create and save the genesis block"""
+        """Create and save the genesis block with crisis metadata"""
+
+        # Build metadata payload for the first transaction
+        metadata_payload = {
+            "type": "crisis_metadata",
+            "crisis_id": self.crisis_metadata["id"],
+            "name": self.crisis_metadata["name"],
+            "organization": self.crisis_metadata["organization"],
+            "contact": self.crisis_metadata["contact"],
+            "description": self.crisis_metadata["description"],
+            "created_at": self.crisis_metadata["created_at"],
+            "block_public_key": self.crisis_metadata["public_key"],
+        }
+
+        meta_tx = Transaction(
+            timestamp_created=time.time(),
+            station_address="SYSTEM",  # synthetic origin for metadata, not pertinent to any code of functionality right now
+            message_data=json.dumps(metadata_payload),
+            related_addresses=[],
+            type_field="metadata",
+            priority_level=1,
+        )
+
         genesis = Block(
             block_index=0,
             timestamp=time.time(),
-            transactions=[],
-            previous_hash="0"
+            transactions=[meta_tx],
+            previous_hash="0",
         )
+
         self.chain.append(genesis)
         self.save_block(genesis)
-        logger.info("Created genesis block")
+        logger.info("Created genesis block with crisis metadata")
 
     def mine_block(self) -> Block:
         """Create new block with pending transactions"""
@@ -756,6 +802,48 @@ class Blockchain:
                 return False
                 
         return True
+    
+    # For signing official mined blocks, to validate data relayed between offline users without using the server
+    def sign_block(self, block:Block) -> str:
+        """
+        Sign a block using the master private PGP key.
+
+        For simplicity, we sign a canonical JSON header containing:
+        - block_index
+        - previous_hash
+        - hash
+
+        The signature is ASCII-armored PGP.
+        """
+        key_dir = "blockchain"
+        private_key_file = os.path.join(key_dir, "master_private_key.asc")
+
+        if not os.path.exists(private_key_file):
+            logger.error("Master private key not found for block signing")
+            raise RuntimeError("Missing master private key")
+
+        try:
+            with open(private_key_file, "r") as f:
+                key_str = f.read()
+
+            key = pgpy.PGPKey()
+            key.parse(key_str)
+
+            header = json.dumps(
+                {
+                    "block_index": block.block_index,
+                    "previous_hash": block.previous_hash,
+                    "hash": block.hash,
+                },
+                sort_keys=True,
+            )
+
+            message = pgpy.PGPMessage.new(header)
+            sig = key.sign(message)
+            return str(sig)
+        except Exception as e:
+            logger.error(f"Block signing failed: {str(e)}")
+            raise 
     
 
 # Wallet login to decrypt and make visible labels, messages and data related to addresses belonging to this group

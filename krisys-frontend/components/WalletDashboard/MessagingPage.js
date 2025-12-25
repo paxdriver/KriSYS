@@ -212,6 +212,7 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
                                     transaction={tx}
                                     privateKey={privateKey}
                                     familyId={walletData.family_id}
+                                    isConfirmed={true}  // TODO: when blocks are signed by server or unconfirmed, in queue for offline messages waiting to be posted to the blockchain
                                 />
                             ))
                     )}

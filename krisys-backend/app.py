@@ -137,7 +137,8 @@ def get_crisis_info():
         "organization": blockchain.crisis_metadata['organization'],
         "contact": blockchain.crisis_metadata['contact'],
         "description": blockchain.crisis_metadata['description'],
-        "created_at": blockchain.crisis_metadata['created_at']
+        "created_at": blockchain.crisis_metadata['created_at'],
+        "block_public_key": blockchain.crisis_metadata['public_key'],
     })
 
 # Wallet info - NO KEYS INCLUDED

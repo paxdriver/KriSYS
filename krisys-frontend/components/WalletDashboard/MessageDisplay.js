@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { KeyManager } from '@/services/keyManager'
 
-export default function MessageDisplay({ message, privateKey, family_id, className = "" }) {
+export default function MessageDisplay({ message, privateKey, family_id, className = "", isConfirmed = true }) {
     const [decryptedText, setDecryptedText] = useState('')
     const [decrypting, setDecrypting] = useState(false)
     const [decryptError, setDecryptError] = useState(null)
@@ -54,7 +54,14 @@ export default function MessageDisplay({ message, privateKey, family_id, classNa
         return (
             <div className={`message-content decrypted ${className}`}>
                 {decryptedText}
-                <span className="decrypt-status">🔓</span>
+                
+                {/* Notification on messages to know whether message is confirmed on the blockchain, or relayed from offline users. This is determined by public key signature of blocks, which relayed queued messages won't have. */}
+                <span
+                    className={`decrypt-status ${
+                        isConfirmed ? 'confirmed' : 'unconfirmed'
+                    }`}
+                > {isConfirmed ? 'Confirmed' : 'Unconfirmed'} - 🔓
+                </span>
             </div>
         )
     }

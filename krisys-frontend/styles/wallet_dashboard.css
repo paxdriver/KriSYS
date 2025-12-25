@@ -513,6 +513,16 @@ body {
     margin-top: 0.5rem;
 }
 
+/* Messages on block or from unconfirmed queue relayed from strangers? */
+.message-item.confirmed {
+    border-left: 3px solid #2e7d32; /* green */
+}
+.message-item.unconfirmed {
+    border-left: 3px solid #f9a825; /* amber */
+    background-color: #fff8e1; /* light yellow */
+}
+
+
 /* TRANSACTIONS */
 .transaction {
     padding: 0.75rem 0;
