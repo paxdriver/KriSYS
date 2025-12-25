@@ -20,7 +20,8 @@ class DisasterStorage {
             BLOCKCHAIN: 'krisys_blockchain',        // DEV NOTE: This should be pruned based on lastest timestamp or something down the road
             MESSAGE_QUEUE: 'krisys_message_queue',  // For message relaying when offline
             PUBLIC_KEYS: 'krisys_public_keys',      // Other people's keys for encryption
-            SYNC_STATUS: 'krisys_sync_status'
+            SYNC_STATUS: 'krisys_sync_status',
+            CONFIRMED_RELAYS: 'krisys_confirmed_relays' // relay_hash for offline message queues / confirmations
         }
     }
 
@@ -31,7 +32,7 @@ class DisasterStorage {
 
     // PRIVATE KEY MANAGEMENT - Store locally for offline access
     savePrivateKey(familyId, privateKey) {
-        console.log('💾 Storing private key locally for offline access')
+        console.log('Storing private key locally for offline access')
         const keyData = {
             familyId: familyId,
             privateKey: privateKey,
@@ -41,29 +42,29 @@ class DisasterStorage {
         }
         
         localStorage.setItem(this.STORAGE_KEYS.PRIVATE_KEY, JSON.stringify(keyData))
-        console.log('✅ Private key stored locally - user can read messages offline!')
+        console.log('Private key stored locally - user can read messages offline!')
     }
 
     getPrivateKey(familyId) {
         const stored = localStorage.getItem(this.STORAGE_KEYS.PRIVATE_KEY)
         if (!stored) {
-            console.log('🔍 No private key found in local storage')
+            console.log('No private key found in local storage')
             return null
         }
 
         const keyData = JSON.parse(stored)
         if (keyData.familyId !== familyId) {
-            console.log('⚠️ Stored key is for different family')
+            console.log('Stored key is for different family')
             return null
         }
 
-        console.log('🔑 Retrieved private key from local storage')
+        console.log('Retrieved private key from local storage')
         return keyData.privateKey
     }
 
     // BLOCKCHAIN STORAGE - Store entire blockchain locally
     saveBlockchain(blockchain) {
-        console.log('⛓️ Storing blockchain locally for offline access')
+        console.log('Storing blockchain locally for offline access')
         localStorage.setItem(this.STORAGE_KEYS.BLOCKCHAIN, JSON.stringify({
             blocks: blockchain,
             lastUpdated: Date.now()
@@ -77,7 +78,7 @@ class DisasterStorage {
 
     // MESSAGE QUEUE - Store messages to send when connectivity returns
     queueMessage(message) {
-        console.log('📤 Queueing message for transmission when online')
+        console.log('Queueing message for transmission when online')
         const queue = this.getMessageQueue()
         queue.push({
             ...message,
@@ -119,12 +120,100 @@ class DisasterStorage {
         return deviceId
     }
 
+    // CONFIRMED MESSAGES (by relay_hash) -----------------------------
+    getConfirmedRelays() {
+        const stored = localStorage.getItem(
+            this.STORAGE_KEYS.CONFIRMED_RELAYS
+        )
+        return stored ? JSON.parse(stored) : {}
+    }
+
+    isMessageConfirmed(relayHash) {
+        if (!relayHash) return false
+        const confirmed = this.getConfirmedRelays()
+        return !!confirmed[relayHash]
+    }
+
+    markMessageConfirmed(relayHash, info = {}) {
+        if (!relayHash) return
+        const confirmed = this.getConfirmedRelays()
+        confirmed[relayHash] = {
+            confirmedAt: Date.now(),
+            ...info
+        }
+        localStorage.setItem(
+            this.STORAGE_KEYS.CONFIRMED_RELAYS,
+            JSON.stringify(confirmed)
+        )
+        console.log(`Marked relay as confirmed: ${relayHash}`)
+    }
+    
+    // Remove from the local queue any messages whose relay_hash has been marked as confirmed. Returns the new queue array. 
+    pruneConfirmedFromQueue() {
+        const queue = this.getMessageQueue()
+        const confirmed = this.getConfirmedRelays()
+
+        if (!queue.length || !Object.keys(confirmed).length) {
+            return queue
+        }
+
+        const filtered = queue.filter(msg => {
+            const rh = msg.relay_hash
+            if (!rh) return true // keep items without relay_hash
+            return !confirmed[rh]
+        })
+
+        localStorage.setItem(
+            this.STORAGE_KEYS.MESSAGE_QUEUE,
+            JSON.stringify(filtered)
+        )
+
+        console.log(
+            `Pruned ${
+                queue.length - filtered.length
+            } confirmed messages from queue`
+        )
+
+        return filtered
+    }
+    // Syncing messages between blockchain diffs, used with pruneConfirmedFromQueue
+    syncConfirmedFromTransactions(transactions) {
+        if (!Array.isArray(transactions) || transactions.length === 0) {
+            return
+        }
+
+        const confirmed = this.getConfirmedRelays()
+        let updated = false
+
+        for (const tx of transactions) {
+            const relayHash = tx.relay_hash
+            if (!relayHash || confirmed[relayHash]) {
+                continue
+            }
+
+            confirmed[relayHash] = {
+                confirmedAt: Date.now(),
+                txId: tx.transaction_id,
+                timestampPosted: tx.timestamp_posted
+            }
+            updated = true
+        }
+
+        if (updated) {
+            localStorage.setItem(
+                this.STORAGE_KEYS.CONFIRMED_RELAYS,
+                JSON.stringify(confirmed)
+            )
+            this.pruneConfirmedFromQueue()
+        }
+    }
+
     // UTILITY - Clear all data (for testing/reset)
     clearAll() {
         Object.values(this.STORAGE_KEYS).forEach(key => {
             localStorage.removeItem(key)
         })
-        console.log('🗑️ Cleared all local storage')
+        console.log('Cleared all local storage')
     }
 }
 

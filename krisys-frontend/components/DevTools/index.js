@@ -48,13 +48,13 @@ export default function DevTools({ onRefresh }) {
         try {
             const result = await adminProxy('mine')
             if (result.message) {
-                alert(`✅ ${result.message}`)
+                alert(`${result.message}`)
             } else {
-                alert(`❌ ${result.error}`)
+                alert(`${result.error}`)
             }
             if (onRefresh) onRefresh()
         } catch (error) {
-            alert(`❌ Mining failed: ${error.message}`)
+            alert(`Mining failed: ${error.message}`)
         } finally {
             setMining(false)
         }
@@ -74,13 +74,13 @@ export default function DevTools({ onRefresh }) {
             })
             
             if (result.status === 'success') {
-                alert('✅ Emergency alert sent!')
+                alert('Emergency alert sent!')
             if (onRefresh) onRefresh()
             } else {
-                alert(`❌ Failed to send alert: ${result.error}`)
+                alert(`Failed to send alert: ${result.error}`)
             }
         } catch (error) {
-                alert(`❌ Failed to send alert: ${error.message}`)
+                alert(`Failed to send alert: ${error.message}`)
         }
     }
 
@@ -95,7 +95,7 @@ export default function DevTools({ onRefresh }) {
                 delete window.originalFetch
             }
             delete window.KRISYS_OFFLINE_MODE
-            alert('📡 Network RESTORED - API calls will work normally')
+            alert('Network RESTORED - API calls will work normally')
         } 
         else {
             // Going offline - intercept fetch calls (only override if not already overridden)
@@ -122,19 +122,25 @@ export default function DevTools({ onRefresh }) {
         // Also set it for API calls to pick up
         if (newOverride) {
             localStorage.setItem('dev_bypass_rate_limit', 'true')
-            alert('🚀 Rate limiting DISABLED for rapid testing')
+            alert('Rate limiting DISABLED for rapid testing')
         } else {
             localStorage.removeItem('dev_bypass_rate_limit')
-            alert('⏱️ Rate limiting ENABLED (normal 10min intervals)')
+            alert('Rate limiting ENABLED (normal 10min intervals)')
         }
     }
 
     const processQueue = async () => {
         const queue = disasterStorage.getMessageQueue()
-        const pending = queue.filter(msg => msg.status === 'pending')
+
+        // Only pending and not already confirmed
+        const pending = queue.filter(
+            (msg) =>
+                msg.status === 'pending' &&
+                !disasterStorage.isMessageConfirmed(msg.relay_hash)
+        )
         
         if (pending.length === 0) {
-            alert('📭 No messages in queue')
+            alert('No messages in queue')
             return
         }
 
@@ -147,6 +153,14 @@ export default function DevTools({ onRefresh }) {
                     msg.status = 'sent'
                     msg.sentAt = Date.now()
                     sent++
+
+                    // Mark this relay as confirmed on this device
+                    if (msg.relay_hash) {
+                        disasterStorage.markMessageConfirmed(msg.relay_hash, {
+                            source: 'processQueue',
+                            sentAt: msg.sentAt
+                        })
+                    }
                 } catch (error) {
                     console.error('Failed to send queued message:', error)
                     // Don't break the loop, try to send remaining messages
@@ -155,18 +169,23 @@ export default function DevTools({ onRefresh }) {
             
             // Update queue in storage
             localStorage.setItem('krisys_message_queue', JSON.stringify(queue))
-            setQueuedMessages(pending.length - sent)
-            
+
+            // Remove any now-confirmed messages from the queue
+            const newQueue = disasterStorage.pruneConfirmedFromQueue()
+            setQueuedMessages(
+                newQueue.filter((msg) => msg.status === 'pending').length
+            )
+
             if (sent === pending.length) {
-                alert(`📤 Successfully sent all ${sent} queued messages!`)
+                alert(`Successfully sent all ${sent} queued messages!`)
             } else {
-                alert(`📤 Sent ${sent}/${pending.length} messages. ${pending.length - sent} failed.`)
+                alert(`Sent ${sent}/${pending.length} messages. ${pending.length - sent} failed.`)
             }
             
             if (onRefresh) onRefresh()
             
         } catch (error) {
-            alert(`❌ Queue processing failed: ${error.message}`)
+            alert(`Queue processing failed: ${error.message}`)
         } finally {
             setSending(false)
         }
@@ -174,11 +193,11 @@ export default function DevTools({ onRefresh }) {
 
     const sendTestAlert = async () => {
         try {
-            await api.adminAlert('🚨 TEST ALERT: Development emergency broadcast test', 1)
-            alert('✅ Test emergency alert sent!')
+            await api.adminAlert('TEST ALERT: Development emergency broadcast test', 1)
+            alert('Test emergency alert sent!')
             if (onRefresh) onRefresh()
         } catch (error) {
-            alert(`❌ Test alert failed: ${error.message}`)
+            alert(`Test alert failed: ${error.message}`)
         }
     }
 
@@ -213,7 +232,7 @@ export default function DevTools({ onRefresh }) {
                     onClick={toggleNetworkStatus}
                     title="Simulate network connection/disconnection"
                 >
-                    {isOnline ? '📱 Go Offline' : '📡 Go Online'}
+                    {isOnline ? 'Go Offline' : 'Go Online'}
                 </button>
 
                 <button 
@@ -221,7 +240,7 @@ export default function DevTools({ onRefresh }) {
                     onClick={toggleRateLimitOverride}
                     title="Override 10-minute rate limiting for rapid testing"
                 >
-                    {rateLimitOverride ? '🚀 Rate Override ON' : '⏱️ Rate Limit ON'}
+                    {rateLimitOverride ? 'Rate Override ON' : 'Rate Limit ON'}
                 </button>
 
                 <button 
@@ -254,7 +273,7 @@ export default function DevTools({ onRefresh }) {
                     onClick={onRefresh}
                     title="Refresh all wallet data and transactions"
                 >
-                    🔄 Refresh
+                    Refresh
                 </button>
 
                 <button 
@@ -262,7 +281,7 @@ export default function DevTools({ onRefresh }) {
                     onClick={clearStorage}
                     title="Clear all local data and reload page"
                 >
-                    🗑️ Reset All
+                    Reset All
                 </button>
             </div>
         </div>
