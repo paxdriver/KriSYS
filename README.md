@@ -1,69 +1,76 @@
-# KriSYS - Crisis Communication Blockchain System
+# KriSYS – Crisis Communication Blockchain System
 
+A humanitarian blockchain system enabling crisis organizations to coordinate aid, reunite families, and maintain communication during disasters when traditional infrastructure fails.
 
-## A humanitarian blockchain system enabling crisis organizations to coordinate aid, reunite families, and maintain communication during disasters when traditional infrastructure fails.
-
-#### System designed for humanitarian crises - prioritizing reliability, privacy, and simplicity for people operating under extreme stress with limited technical resources.
-
-<br>
-
-# Primary Use Cases
-
-- Crisis Organization Resource Management: Real-time coordination of supplies, personnel, and aid distribution
-- Reuniting Missing Persons: Family tracking and check-in system with QR code identification
-- Inventory & Aid Distribution: Supply chain tracking and resource allocation management
-- Offline Message Delivery: Encrypted personal communications and emergency alerts without internet
-- QR Code Check-in Stations: Simple identification system using bracelets, necklaces, or printed codes
-<br>
+System designed for humanitarian crises – prioritizing reliability, privacy, and simplicity for people operating under extreme stress with limited technical resources.
 
 ---
-## [***Current Status: Phase 2.5 Complete***]
 
-### ✅ Completed Features:
-- Flask backend API with custom blockchain implementation
-- React frontend with component-based architecture
-- PGP key management system with KeyManager abstraction
-- Client-side message encryption/decryption
-- Docker containerized development environment
-- Real-time blockchain explorer
-- Family wallet management with passphrase protection
-- QR code generation for member identification
-- Offline message queuing system
-- Admin controls for mining and emergency alerts
+## Primary Use Cases
 
+- Crisis organization resource management: real-time coordination of supplies, personnel, and aid distribution  
+- Reuniting missing persons: family tracking and check-in system with QR code identification  
+- Inventory and aid distribution: supply chain tracking and resource allocation management  
+- Offline message delivery: encrypted personal communications and emergency alerts without internet  
+- QR code check-in stations: simple identification using bracelets, necklaces, or printed codes  
 
-### 🔄 In Progress:
-- QR scanner implementation for check-in stations
-- Advanced contact management features
-- Mobile-responsive optimizations
+---
 
+## **Current Status: Phase 2.5 Complete**
 
-### 📋 Next Phase:
-- Peer-to-peer WiFi sync for offline device communication
-- Enhanced station templates and check-in types
-- Message threading and reply chains
-<br>
-<br>
+### ✅ Completed Features
+- Flask backend API with custom blockchain implementation  
+- React/Next.js frontend with component-based architecture  
+- PGP key management system with KeyManager abstraction  
+- Client-side message encryption and decryption  
+- Docker containerized development environment  
+- Real-time blockchain explorer  
+- Family wallet management with passphrase protection  
+- QR code generation for member identification  
+- Offline message queuing system  
+- Local relay/confirmation tracking (relay_hash per message)  
+- DevTools for:  
+  - manual mining  
+  - admin alerts  
+  - simulated offline mode  
+  - processing offline message queue  
+  - experimental sync payload export/import  
+
+### 🔄 In Progress
+- QR scanner implementation for check-in stations  
+- Advanced contact management features  
+- Mobile-responsive optimizations  
+- Refinement of offline sync UX (beyond dev-only JSON copy/paste)  
+
+### 📋 Next Phase
+- Peer-to-peer WiFi or local-network sync for offline device communication  
+- Enhanced station templates and check-in types  
+- Message threading and reply chains  
+- Optional embedding of public keys in QR codes to reduce server lookups  
+
+---
 
 # Architecture Overview
 
-## Backend (Flask - Port 5000)
+## Backend (Flask – port 5000)
+- Custom blockchain with configurable block intervals and automatic background mining thread  
+- Transaction types: `check_in`, `message`, `alert`, `damage_report`  
+- Policy system with crisis-specific configurations, transaction size limits, rate limiting, and allowed transaction types  
+- PGP key management with 4096-bit RSA master keypair per crisis  
+- SQLite database with separate tables for blocks, transactions, wallets, crises, and wallet keys  
 
-- Custom Blockchain: 3-minute block intervals with admin validation
-- Transaction Types: check_in, message, alert, damage_report
-- Policy System: Crisis-specific configurations and rate limiting
-- PGP Key Management: Secure key storage with dual-layer encryption
-- SQLite Database: Optimized with separate key storage tables
+## Frontend (React/Next.js – port 3000)
+- Modular component architecture  
+- Client-side decryption (all message decryption happens in browser)  
+- KeyManager abstraction for crypto operations  
+- Offline storage (`disasterStorage`)  
+  - Blockchain snapshot  
+  - Message queue  
+  - Public key cache  
+  - Confirmed-relay map for deduplication  
+- Privacy-first contact storage (`contactStorage`)  
 
-## Frontend (React/Next.js - Port 3000)
-
-- Component Architecture: Modular wallet dashboard with pages
-- Client-side Decryption: All message reading happens on user device
-- KeyManager Service: Abstracted crypto operations
-- Offline Storage: Message queuing and public key caching
-- Contact Management: Privacy-first local address book
-<br>
-<br>
+---
 
 # Project Structure
 
@@ -104,64 +111,62 @@ krisys/
 <br>
 
 ---
+---
 
-# PGP Implementation Details
+# PGP and Key Management
 
-## Blockchain Admin Authentication
-The system uses a dual-layer admin authentication approach:
+## Master Key and Admin Authentication
+- 4096-bit RSA master keypair generated on initialization:  
+  - `master_public_key.asc` stored publicly  
+  - `master_private_key.asc` stored securely  
+- Public key encrypts user wallet keys before storing in DB  
+- Private key decrypts those wallet keys on `/auth/unlock` requests  
+- Development admin access uses `X-Admin-Token` header containing base64-encoded master private key  
 
-1. Master Keypair Generation: When blockchain initializes, generates 4096-bit RSA keypair
-	- Public Key: Stored in blockchain/master_public_key.asc
-	- Private Key: Stored in blockchain/master_private_key.asc
-	- Used for admin API authentication and wallet key encryption
+---
 
-2. Admin API Access: Development admin requests use base64-encoded master private key
-<br>
+## Wallet Key Storage (Dual-Layer)
+1. Generate user PGP keypair with passphrase  
+2. Serialize passphrase-protected private key  
+3. Encrypt that result again with blockchain master public key  
+4. Store only encrypted private key and user’s public key  
 
-## Backend validates by decoding and comparing full key
-decoded_token = base64.b64decode(auth_token).decode('utf8')
-if decoded_token != ADMIN_TOKEN: # ADMIN_TOKEN is full PGP private key
+Wallet unlock process:
+1. Server decrypts the outer layer with master private key  
+2. Returns still passphrase-protected private key to client  
+3. Client decrypts with passphrase locally for message reading  
 
-User Wallet Encryption (Dual-Layer Security)
+Server never stores decrypted private keys; all decryption happens on client.
 
-The wallet system implements dual-layer encryption to protect user messages while allowing simple passphrase recovery:
-<br>
+---
 
-## Wallet Creation Process:
+## Message Encryption and Delivery
+- Client encrypts with recipient’s public key using KeyManager  
+- Server stores encrypted payload only (message_data field)  
+- Recipient decrypts with their private key (protected by passphrase)  
 
-a. Generate user PGP keypair with user's passphrase
-user_keypair = generate_keypair(user_passphrase)<br>
-b. User's private key is encrypted with their passphrase
-user_encrypted_key = str(user_keypair)  # Already encrypted by PGP<br>
-c. Encrypt the encrypted key again with blockchain master key
-master_encrypted_key = master_public_key.encrypt(user_encrypted_key)<br>
-d. Store only the double-encrypted key
-database.store(family_id, master_encrypted_key, user_keypair.pubkey)
-<br>
+First contact requires being online once to fetch recipient public key via `/wallet/{family_id}/public-key`.  
+After that, it is cached in localStorage and usable offline.  
 
-## Wallet Unlock Process:
-a. Server decrypts with master private key (never stores result)
-user_encrypted_key = master_private_key.decrypt(stored_key)
+---
 
-b. Send encrypted key to client
-return user_encrypted_key  # Still encrypted with user passphrase
+# Offline Queue, Relay, and Sync Design
 
-c. Client decrypts with passphrase for message reading
-actual_private_key = decrypt_with_passphrase(user_encrypted_key, passphrase)
-<br>
+- Each outgoing message has a unique `relay_hash` used for deduplication and confirmation.
+- Local queue (`MESSAGE_QUEUE`) holds unsent messages while offline.
+- Confirmed messages stored in `CONFIRMED_RELAYS` and automatically pruned.
+- Export/import sync payload allows two devices to share:
+  - unconfirmed queued messages
+  - confirmed relay list
 
-## Message Encryption Flow:
-- Sending: Client encrypts with recipient's public key using KeyManager
-- Receiving: Client decrypts with own private key (unlocked with passphrase)
-- Server Role: Only stores/delivers encrypted content, never decrypts messages
-
-This design ensures:
-- Admin Access: Blockchain admin can decrypt wallet keys for recovery but cannot read messages
-- User Privacy: Only user's passphrase can decrypt their messages
-- Simple Recovery: Users only need to remember one passphrase
-- Offline Capability: Private keys cached locally after first unlock
-<br>
-<br />
+## Example Sync Payload
+### These payloads can be copy/pasted using DevTools Export/Import to simulate peer-to-peer sync.
+{
+	"deviceId": "device_123456_xyz",
+	"queued": [ ... message objects ... ],
+	"confirmed": { "relay_hash": { "confirmedAt": 1234567890 } }
+}
+<br><br>
 ---
 
 # Quick Start
@@ -170,148 +175,132 @@ This design ensures:
 a) git clone <repo-url> <br>
 b) cd krisys<br>
 c) docker-compose up --build<br>
-d) React Frontend: http://localhost:3000<br>
-(Flask API: http://localhost:5000))
 
-### Development workflow
-a. Create a family wallet with passphrase<br>
-b. Unlock wallet to enable message decryption<br>
-c. Send encrypted messages between family members<br>
-d. Use DevTools to manually mine blocks<br>
-e. View messages decrypt in real-time<br>
+React Frontend: http://localhost:3000<br>
+Flask Backend: http://localhost:5000
 
----
+Frontend: http://localhost:3000  
+Backend: http://localhost:5000  
 
-## Development Phases & Progress
-
-### ✅ PHASE 1: Core Infrastructure (Complete)
-- Custom blockchain with admin validation
-- Transaction types: check_in, message, alert, damage_report
-- SQLite persistence with optimized schema
-- Policy system framework for crisis-specific configurations
-- Basic web interface with blockchain explorer
-<br /> 
-<br /> 
-
-### ✅ PHASE 2: Wallet System (Complete)
-
-- Family wallet creation with PGP keypair generation
-- Individual member addresses within family wallets
-- QR code generation for member identification
-- Passphrase-protected wallet unlocking
-- Enhanced web interface with wallet dashboard
-<br /> 
-<br /> 
-
-### ✅ PHASE 2.5: Messaging System (Complete)
-
-- End-to-end encrypted messaging between wallets
-- Client-side decryption with KeyManager abstraction
-- Message queue system for offline scenarios
-- Contact management with privacy protection
-- Real-time message display and transaction handling
-<br /> 
-<br /> 
-
-### 🔄 PHASE 3: Offline Sync (In Progress)
-
-- Device-to-device WiFi communication
-- Peer discovery and message queue sharing
-- Duplicate detection and transaction confirmation
-- Mobile background sync capabilities
-<br /> 
-<br /> 
-
-### 📋 PHASE 4: Advanced Features (Planned)
-
-- Multiple check-in station types (medical, food, shelter)
-- Enhanced policy system with priority hierarchies
-- Message threading and group communications
-- Image/voice attachment capability
-- Chain pruning and storage optimization
+### Testing Workflow
+1. Create two wallets (A and B).  
+2. Unlock both wallets.  
+3. Send message A → B while online (to cache B’s public key).  
+4. Go offline in wallet A and send another message.  
+5. Come back online and use “Queue” in DevTools to send queued message.  
+6. Mine a block (wallet B’s DevTools) to confirm it.  
 
 ---
 
-## Core API Endpoints
+# Development Phases
 
-### Public Endpoints
+### **Phase 1 – Core Infrastructure**
+- Blockchain, transactions, SQLite persistence, policy system.
 
-- GET /blockchain - Full blockchain data
-- GET /crisis - Current crisis information
-- POST /wallet - Create family wallet
-- POST /transaction - Submit transaction
-- POST /checkin - QR code check-in
+### **Phase 2 – Wallet System**
+- Family wallets, members, QR codes, passphrase-protected keys.
 
-### Wallet Management
+### **Phase 2.5 – Messaging System**
+- End-to-end encryption.
+- Offline queue.
+- Contact management.
+- Real-time message display.
 
-- GET /wallet/{family_id} - Wallet info (no keys)
-- GET /wallet/{family_id}/transactions - Transaction history
-- GET /wallet/{family_id}/public-key - Public key for encryption
-- POST /auth/unlock - Authenticate and retrieve private key
+### **Phase 2.7 – Offline Sync (Current)**
+- `relay_hash` deduplication.
+- Confirmed relay tracking.
+- Export/import sync payload JSON.
 
-### Admin Controls
+### **Phase 3 - Peer Discovery and WiFi sync**
+- Implement connections between offline devices
+- Handle queue clearing and confirmation checks
+- Implement downloading and diff of blockchain between offline devices
 
-- POST /admin/mine - Manual block mining
-- POST /admin/alert - Broadcast emergency alert
-- POST /admin/policy - Update crisis policy
+### **Phase 4 – Advanced Features (Planned)**
+- Multiple station types (medical, food, shelter).
+- Message threading, attachments.
+- Chain pruning optimization.
 
 ---
 
-## Security Model
+# Core API Endpoints
 
-### Development Environment
+### Public
+- `GET /blockchain` – full blockchain data  
+- `GET /crisis` – crisis metadata and current policy  
+- `GET /policy` – current crisis policy config  
+- `POST /wallet` – create family wallet  
+- `POST /transaction` – submit message or check-in  
+- `POST /checkin` – process QR check-in  
 
-- Empty passphrases accepted for rapid testing
-- CORS enabled for localhost development
-- Base64-encoded admin tokens
-- Rate limiting can be disabled via DevTools
+### Wallet
+- `GET /wallet/{family_id}` – wallet metadata  
+- `GET /wallet/{family_id}/transactions` – transaction list  
+- `GET /wallet/{family_id}/public-key` – get wallet public key  
+- `GET /wallet/{family_id}/qr/{address}` – get member QR image  
+- `POST /auth/unlock` – unlock wallet with passphrase  
+
+### Admin (Development)
+- `POST /admin/mine` – mine pending transactions  
+- `POST /admin/alert` – broadcast alert  
+- `POST /admin/policy` – change current crisis policy  
+
+---
+
+# Security and Privacy Model
+
+### Development
+- Allows blank passphrases for testing  
+- Admin auth via base64-encoded master private key  
+- Rate limiting can be disabled via DevTools  
+- Simulated offline mode through request interceptor  
 
 ### Production Considerations
+- Require strong passphrase (8+ chars)  
+- HTTPS/TLS encryption  
+- Master key rotation and secure storage  
+- Key revocation support  
+- Strict rate limit enforcement  
 
-- Passphrase Requirements: Minimum 8+ character requirement
-- HTTPS/TLS: All API communication encrypted
-- Admin Key Rotation: Secure master key management
-- Rate Limiting: Transaction frequency controls
-- Key Revocation: Mechanism for compromised key recovery
+### Privacy
+- No PII stored on blockchain  
+- Names and contacts stored only locally  
+- All personal messages encrypted client-side  
 
-### Privacy Protection
+---
 
-- No PII on Blockchain: Only addresses and encrypted content
-- Local Contact Storage: Names stored only on user device
-- Wallet Locking: Contact names hidden when wallet locked
-- Message Obfuscation: All personal communications encrypted
+# Technology Stack
 
-## Technology Stack
+**Backend**
+- Python 3.11 / Flask  
+- SQLite  
+- PGP via `pgpy`  
+- QR generation via `qrcode`  
 
-- Backend: Python 3.11, Flask, SQLite, pgpy (PGP), QR code generation
-- Frontend: React 18, Next.js 14, OpenPGP.js, Custom CSS
-- Deployment: Docker containers with shared volume
-- Development: No TypeScript, no CSS frameworks for simplicity
+**Frontend**
+- React 18 / Next.js 14  
+- OpenPGP.js  
+- Plain CSS (no frameworks)  
 
-### Crisis Response Workflow
+**Deployment**
+- Docker containers with shared volume for blockchain data  
 
-1. Crisis Setup: Aid organization deploys KriSYS instance with crisis-specific policy
-2. Family Registration: Families create wallets, receive QR codes for members
-3. Deployment: QR scanners installed at aid stations, shelters, medical facilities
-4. Active Response:
-	- Families check in via QR codes at various locations
-	- Emergency alerts broadcast to all registered families
-	- Private coordination via encrypted family messages
-	- Resource tracking and supply distribution management
-5. Recovery Phase: Damage assessment reports and long-term coordination
+---
 
-<br><br>
+# Crisis Response Workflow
+
+1. Crisis setup – deploy KriSYS instance with crisis policy and master keypair.  
+2. Family registration – create wallets and distribute QR codes.  
+3. Deploy stations – setup check-in scanners at aid hubs.  
+4. Active response – families check-in, exchange encrypted messages, receive alerts.  
+5. Recovery – assess data and coordinate resources based on recorded transactions.  
 
 ---
 
 # License & Contact
 
-
-License: MIT
-Author: Kristopher Driver
-Website: krisdriver.com
-Social: @paxdriver
-Email: kris@krisdriver.com
-
-
----
+**License:** MIT  
+**Author:** Kristopher Driver  
+**Website:** [https://krisdriver.com](https://krisdriver.com)  
+**Social:** @paxdriver  
+**Email:** kris@krisdriver.com
