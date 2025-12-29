@@ -159,7 +159,13 @@ class DisasterStorage {
 
         const filtered = queue.filter(msg => {
             const rh = msg.relay_hash
+
+            // Legacy/sent entries without relay_hash can be safely dropped
+            if (!rh && msg.status === 'sent') return false
+            
+            // Normal path: to drop queued messages if this messaged was successfully relayed to blockchain
             if (!rh) return true // keep items without relay_hash
+            
             return !confirmed[rh]
         })
 
@@ -168,11 +174,8 @@ class DisasterStorage {
             JSON.stringify(filtered)
         )
 
-        console.log(
-            `Pruned ${
-                queue.length - filtered.length
-            } confirmed messages from queue`
-        )
+        // DEV LOG
+        console.log(`Pruned ${ queue.length - filtered.length } confirmed messages from queue`)
 
         return filtered
     }

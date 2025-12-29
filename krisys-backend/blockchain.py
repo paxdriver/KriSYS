@@ -33,11 +33,6 @@ logger = logging.getLogger(__name__)
 
 # PRODUCTION: Implement proper session storage for private keys
 
-# PRODUCTION: Add key revocation mechanism
-
-# PRODUCTION: Implement key rotation
-
-
 # Policy system for setting up a new KriSYS blockchain
 class PolicySystem:
     # Required policy fields with default values
@@ -498,9 +493,10 @@ class Blockchain:
             # Generate new keypair
             key = pgpy.PGPKey.new(PubKeyAlgorithm.RSAEncryptOrSign, 4096)
             uid = pgpy.PGPUID.new('KriSYS Blockchain', comment='Master Key')
-            key.add_uid(uid, usage={KeyFlags.EncryptCommunications},
-                        hashes=[HashAlgorithm.SHA256],
-                        ciphers=[SymmetricKeyAlgorithm.AES256])
+            key.add_uid(uid, 
+                usage={KeyFlags.Sign, KeyFlags.EncryptCommunications},
+                hashes=[HashAlgorithm.SHA256],
+                ciphers=[SymmetricKeyAlgorithm.AES256])
             
             # Save keys
             with open(public_key_file, 'w') as f:
@@ -654,8 +650,8 @@ class Blockchain:
             cur = conn.execute(
                 '''
                 INSERT INTO blocks 
-                (block_index, timestamp, previous_hash, hash, nonce) 
-                VALUES (?, ?, ?, ?, ?)
+                (block_index, timestamp, previous_hash, hash, nonce, signature) 
+                VALUES (?, ?, ?, ?, ?, ?)
                 ''',
                 (
                     block.block_index,
