@@ -15,6 +15,13 @@ import qrcode
 import base64
 from io import BytesIO
 
+###############
+# TODO: For each block loaded: Wrap up Phase 2
+# - Reconstruct the signed header (block_index, previous_hash, hash).
+# - Verify block.signature with the public key.
+# - Only treat blocks with valid signatures as canonical.
+###############
+
 # DEV NOTE: logging for development only
 import logging
 # Configure logging
