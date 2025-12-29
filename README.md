@@ -169,6 +169,177 @@ After that, it is cached in localStorage and usable offline.
 <br><br>
 ---
 
+# CHECK-IN STATION AUTH FLOW
+Check-in and Station Authentication
+===================================
+
+Overview
+--------
+Aid stations (e.g. hospitals, food distribution points, registration tents) act
+as "check-in" points for victims and families. Each station has a human-readable
+station ID (e.g. "HOSPITAL_SE_001") and is responsible for scanning victim/family
+QR codes and submitting check-in transactions to the crisis blockchain.
+
+The KriSYS system treats stations as special, authenticated senders of
+check-in data. Stations DO NOT sign blocks (only the crisis master key signs
+blocks), but stations must authenticate themselves in order to post check-ins.
+
+This avoids trivial spoofing of station activity (e.g. a malicious client
+claiming to be "HOSPITAL_SE_001") while keeping the deployment and UX simple
+for non-technical aid workers.
+
+Station Data Model
+------------------
+Each station is stored in the backend database in a "stations" table, keyed by:
+
+- crisis_id           : ID of the crisis/blockchain instance
+- station_id          : human-readable identifier, e.g. "HOSPITAL_SE_001"
+- name                : descriptive name, e.g. "Southeast Field Hospital"
+- type                : "hospital", "shelter", "food", etc.
+- location            : optional descriptive location
+- registration_code_hash : hash of a one-time activation code (future use)
+- api_key_hash        : hash of the station's long-term API key
+- status              : "pending", "active", or "revoked"
+- created_at          : timestamp of creation
+
+Important design points:
+
+- Stations are referenced by `station_id` in transactions. This remains
+  human-readable and is visible in on-chain data.
+- The ability to USE a station_id is gated by `api_key_hash` and `status`,
+  not by the station_id string alone.
+- KriSYS does NOT rely on station secrets to protect the entire blockchain.
+  Canonical chain integrity is guaranteed by a separate crisis master key
+  that signs blocks. Station keys only authenticate the origin of check-ins.
+
+One-Time Station Registration (Design)
+--------------------------------------
+In the final design, each station will go through a one-time activation process:
+
+1. Crisis admin creates a station:
+
+   - Picks a station_id, name, type, and location.
+   - KriSYS generates a random one-time registration code.
+   - The server stores hash(registration_code) in `registration_code_hash`.
+   - The station is initially `status = "pending"`.
+
+2. The registration code is delivered to the station admin out-of-band
+   (e.g. printed on paper or as a QR code), separate from the physical device.
+
+3. In the field, when the station device (e.g. a Raspberry Pi kiosk) is first
+   powered on and connected, it runs in "unregistered" mode:
+
+   - Prompts the user to enter the station_id and registration code,
+     or scan a QR containing them.
+
+4. The device sends a registration request to the backend:
+
+   - `{ station_id, registration_code }`.
+
+5. The server validates:
+
+   - There is a station row for this crisis_id + station_id.
+   - status == "pending".
+   - hash(registration_code) matches `registration_code_hash`.
+
+   If valid:
+
+   - The server generates a long random API key.
+   - Stores hash(api_key) in `api_key_hash`.
+   - Clears `registration_code_hash`.
+   - Sets status = "active".
+   - Returns the plain API key ONCE to the device.
+
+6. The device stores the API key locally (e.g. on disk) and switches into
+   normal "scanning" mode. Operators never need to remember passwords.
+
+If someone intercepts the device image before activation:
+
+- The SD card image itself contains no API key.
+- They would also need the registration code.
+- Once the real station successfully activates with that code, the code is
+  invalidated. Any later attempts with the same station_id/code are rejected.
+
+If the device is stolen AFTER activation:
+
+- The thief gains the station's API key and can impersonate that station until
+  the crisis admin revokes it (status = "revoked") or rotates to a new station.
+
+Day-to-Day Operation: Authenticated Check-ins
+---------------------------------------------
+Once a station is active, all check-in requests it sends must be authenticated
+with its API key.
+
+For each /checkin request, the station device sends:
+
+- JSON body:
+  - address    : victim/family address scanned from QR code
+  - station_id : station_id string (e.g. "HOSPITAL_SE_001")
+
+- HTTP header:
+  - X-Station-API-Key: <long random API key>
+
+The backend /checkin handler enforces:
+
+1. station_id must exist in the stations table for the current crisis_id.
+2. status for that station must be "active".
+3. hash(provided_api_key) must match `api_key_hash` for that station.
+
+Only then does the server create a `check_in` transaction with:
+
+- type_field      : "check_in"
+- related_addresses : [address]
+- station_address : station_id
+- timestamp_created : now
+- priority_level  : appropriate value (often highest or high priority)
+
+These transactions are then subject to the usual rules:
+
+- They are unconfirmed until included in a crisis master-key-signed block.
+- Once in a signed block, they become canonical and can be trusted as
+  "station-verified check-ins" for families and aid coordinators.
+
+Relationship to Block Signatures
+--------------------------------
+Station authentication (API keys) and crisis block signatures serve different
+but complementary purposes:
+
+- Station API keys:
+  - Prove that a given check-in originated from a specific, approved station
+    (as long as that station's device/secret is not compromised).
+  - Prevent trivial spoofing of station IDs by random clients.
+
+- Crisis block signature (block_public_key):
+  - Proves that a block and all its transactions have been accepted by the
+    crisis authority (aid organization) and fixed into the canonical history.
+  - Prevents malicious peers from forging or modifying blocks, regardless of
+    station behavior.
+
+Clients and offline devices should treat:
+
+- Station-authenticated but unconfirmed check-ins as "unconfirmed reports"
+  that may still be pending inclusion.
+- Check-ins in validly signed blocks as fully confirmed facts.
+
+Current Implementation Status
+-----------------------------
+At this stage of KriSYS development:
+
+- The database schema includes fields for registration_code_hash, api_key_hash,
+  and station status.
+- Station auth for /checkin requests uses the stored api_key_hash and status
+  to accept or reject check-ins.
+- In development, stations may be pre-provisioned with API keys (generated at
+  startup and logged for testing) instead of going through the full one-time
+  registration flow.
+
+The one-time registration workflow described above is planned but not yet
+implemented in full. The data model and auth checks are designed so that this
+workflow can be wired in later without changing the core check-in semantics
+or the blockchain trust model.
+
+----------
+
 # Quick Start
 
 ### Clone repository

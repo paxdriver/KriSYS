@@ -85,6 +85,20 @@ def init_db():
         )
         ''')
         
+        # Add stations table for verified check-in stations like food trucks, hospitals, etc.
+        conn.execute('''
+        CREATE TABLE IF NOT EXISTS stations (
+            id INTEGER PRIMARY KEY,
+            crisis_id TEXT NOT NULL,
+            station_id TEXT NOT NULL,
+            name TEXT,
+            type TEXT,
+            location TEXT,
+            created_at REAL DEFAULT (strftime('%s', 'now')),
+            UNIQUE(crisis_id, station_id)
+        )
+        ''')
+        
         
 if __name__ == "__main__":
     raise RuntimeError('This script should never be called directly, it offers helper functions to be imported by other scripts in this project.')

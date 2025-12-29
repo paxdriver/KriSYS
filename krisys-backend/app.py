@@ -81,6 +81,54 @@ def DEV_POLICY_CHECK():
     
 # Call policy check after the blockchain and policy are instatiated
 DEV_POLICY_CHECK()
+
+
+def ensure_station(crisis_id: str, station_id: str, name: str, stype: str, location: str | None = None):
+    """
+    Ensure a station record exists for this crisis.
+    If it already exists, do nothing.
+    """
+    from database import db_connection  # already imported at top, but safe here too
+
+    with db_connection() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM stations WHERE crisis_id = ? AND station_id = ?",
+            (crisis_id, station_id),
+        ).fetchone()
+
+        if row:
+            logger.info(f"Station {station_id} already exists for crisis {crisis_id}")
+            return
+
+        conn.execute(
+            '''
+            INSERT INTO stations (crisis_id, station_id, name, type, location)
+            VALUES (?, ?, ?, ?, ?)
+            ''',
+            (crisis_id, station_id, name, stype, location),
+        )
+        conn.commit()
+        logger.info(f"Created station {station_id} ({name}) for crisis {crisis_id}")
+
+# DEV NOTE: SIMULATED VERIFIED STATION FOR DEMO
+crisis_id = blockchain.crisis_metadata['id']
+ensure_station(
+    crisis_id=crisis_id,
+    station_id="HOSPITAL_SE_001",
+    name="Southeast Field Hospital",
+    stype="hospital",
+    location="Sector SE"
+)
+
+# Optional: keep the existing default station_id usable
+ensure_station(
+    crisis_id=crisis_id,
+    station_id="STATION_001",
+    name="Default Check-in Station",
+    stype="generic",
+    location=None
+)
+
 ########### TESTING IN DEV MODE ###############
 
 
@@ -116,6 +164,34 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated_function
 #####################
+
+# Ensure only verified check-in stations count (plain text and public) for hospitals, camps, food trucks, etc. sanctioned by server
+def ensure_station(crisis_id: str, station_id: str, name: str, stype: str, location: str | None = None):
+    """
+    Ensure a station record exists for this crisis.
+    If it already exists, do nothing.
+    """
+    from database import db_connection  # already imported at top, but safe here too
+
+    with db_connection() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM stations WHERE crisis_id = ? AND station_id = ?",
+            (crisis_id, station_id),
+        ).fetchone()
+
+        if row:
+            logger.info(f"Station {station_id} already exists for crisis {crisis_id}")
+            return
+
+        conn.execute(
+            '''
+            INSERT INTO stations (crisis_id, station_id, name, type, location)
+            VALUES (?, ?, ?, ?, ?)
+            ''',
+            (crisis_id, station_id, name, stype, location),
+        )
+        conn.commit()
+        logger.info(f"Created station {station_id} ({name}) for crisis {crisis_id}")
 
 # # Create admin key file
 # admin_key_file = os.path.join('blockchain', 'admin_keys.txt')
@@ -338,6 +414,7 @@ def admin_alert():
         logger.error(f"Admin alert error: {str(e)}")
         return jsonify({"error": "Internal server error"}), 500
 
+
 @app.route('/wallet/<family_id>/qr/<address>')
 def get_address_qr(family_id: str, address: str):
     """Generate QR code for a specific address"""
@@ -355,10 +432,12 @@ def get_address_qr(family_id: str, address: str):
         logger.error(f"QR generation error: {str(e)}")
         return jsonify({"error": "QR generation failed"}), 500
 
+
 @app.route('/policy', methods=['GET'])
 def get_current_policy():
     policy = blockchain.policy_system.get_policy()
     return jsonify(policy)
+
 
 @app.route('/admin/policy', methods=['POST'])
 @admin_required
@@ -370,6 +449,8 @@ def set_policy():
         return jsonify({"status": "success", "policy": policy_id})
     return jsonify({"error": "Invalid Policy ID provided"}), 400
 
+
+# Verified check-in stations like camp office, food truck, hospital, etc.
 @app.route('/checkin', methods=['POST'])
 def check_in():
     """Process QR code scan and create check-in transaction"""
@@ -377,10 +458,25 @@ def check_in():
         data = request.json
         address = data.get('address')
         station_id = data.get('station_id', 'STATION_001')
-        
+
         if not address:
             return jsonify({"error": "Missing address"}), 400
-        
+
+        # Ensure station is registered for this crisis
+        crisis_id = blockchain.crisis_metadata['id']
+        with db_connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM stations WHERE crisis_id = ? AND station_id = ?",
+                (crisis_id, station_id),
+            ).fetchone()
+
+        if not row:
+            logger.warning(
+                f"Check-in attempt from unknown station_id={station_id} "
+                f"for crisis={crisis_id}"
+            )
+            return jsonify({"error": "Unknown station_id"}), 400
+
         # Create check-in transaction
         tx = Transaction(
             timestamp_created=time.time(),
@@ -388,21 +484,24 @@ def check_in():
             message_data="Check-in",
             related_addresses=[address],
             type_field="check_in",
-            priority_level=1
+            priority_level=1,
         )
-        
+
         blockchain.add_transaction(tx)
-        return jsonify({
-            "status": "success",
-            "transaction_id": tx.transaction_id,
-            "message": f"Checked in {address} at station {station_id}"
-        }), 201
-        
+        return jsonify(
+            {
+                "status": "success",
+                "transaction_id": tx.transaction_id,
+                "message": f"Checked in {address} at station {station_id}",
+            }
+        ), 201
+
     except Exception as e:
         logger.error(f"Check-in error: {str(e)}")
         return jsonify({"error": str(e)}), 400
 
-# NEW: Authentication endpoint that returns private key for client-side decryption
+
+# Authentication endpoint that returns private key for client-side decryption
 @app.route('/auth/unlock', methods=['POST'])
 def unlock_wallet_endpoint():
     """
@@ -474,6 +573,8 @@ def get_wallet_public_key(family_id):
     except Exception as e:
         logger.error(f"Error getting public key: {str(e)}")
         return jsonify({"error": "Internal server error"}), 500
+
+
 
 
 if __name__ == '__main__':
