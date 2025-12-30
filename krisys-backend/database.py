@@ -94,6 +94,9 @@ def init_db():
             name TEXT,
             type TEXT,
             location TEXT,
+            registration_code_hash TEXT,  -- hash of one-time activation code (future)
+            api_key_hash TEXT,            -- hash of long-term API key
+            status TEXT DEFAULT 'pending',
             created_at REAL DEFAULT (strftime('%s', 'now')),
             UNIQUE(crisis_id, station_id)
         )

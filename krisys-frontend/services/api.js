@@ -80,7 +80,19 @@ export const api = {
 
     // Transaction endpoints
     addTransaction: (transaction) => apiClient.post('/transaction', transaction),
-    checkin: (address, stationId = 'MEDICAL_TENT_05') => axios.post(`${API_BASE}/checkin`, { address, station_id: stationId }),
+    
+    // CHECKING IN FROM A VERIFIED STATION USING LOCALLY STORED API KEY PROVIDED BY THE BLOCKCHAIN PROVIDER EXCLUSIVELY 
+    // (replaces passphrase protection that the typical wallets would use and does not pgp encrypt its messages, all plain text)
+    checkin: (address, stationId = 'STATION_001', stationApiKey) =>
+    axios.post(
+        `${API_BASE}/checkin`,
+        { address, station_id: stationId },
+        {
+        headers: stationApiKey
+            ? { 'X-Station-API-Key': stationApiKey }
+            : {}
+        }
+    ),
     
     // Admin endpoints (you can add headers for admin token later)
     adminMine: () => {

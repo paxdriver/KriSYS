@@ -3,7 +3,8 @@
 import { useState, useEffect } from 'react'
 import { api } from '../../services/api'
 import { filterCanonicalBlocks } from '@/services/blockVerifier'
-import '@/blockchain-explorer.css'
+import '@/app/explorer/blockchain-explorer.css'
+// import '@/blockchain-explorer.css'
 
 export default function BlockchainExplorer() {
     const [crisis, setCrisis] = useState(null)

@@ -61,26 +61,81 @@ export default function DevTools({ onRefresh }) {
     }
 
     const createAlert = async () => {
+        const mode = prompt(
+            'Select action:\n1 = Broadcast emergency alert\n2 = Test station check-in',
+            '1'
+        )
+        if (!mode) return
+
+        // MODE 2: station check-in test (DEVELOPMENT obviously)
+        if (mode === '2') {
+            const address = prompt('Enter wallet address to check in:')
+            if (!address) return
+
+            const stationChoice = prompt(
+                'Select station:\n1 = STATION_001\n2 = HOSPITAL_SE_001',
+                '1'
+            )
+            if (!stationChoice) return
+
+            let stationId
+            if (stationChoice === '1') {
+                stationId = 'STATION_001'
+            } else if (stationChoice === '2') {
+                stationId = 'HOSPITAL_SE_001'
+            } else {
+                alert('Unknown station selection')
+                return
+            }
+
+            const apiKey = prompt(
+                `Enter API key for ${stationId} (DEV ONLY, from backend logs):`
+            )
+            if (!apiKey) return
+
+            try {
+                const result = await api.checkin(address, stationId, apiKey)
+                const data = result.data || result
+
+                if (data.status === 'success') {
+                    alert(
+                        `Check-in OK:\n${data.message}\ntransaction_id: ${data.transaction_id}`
+                    )
+                    if (onRefresh) onRefresh()
+                } else {
+                    alert(
+                        `Check-in failed: ${
+                            data.error || JSON.stringify(data)
+                        }`
+                    )
+                }
+            } catch (error) {
+                alert(`Check-in failed: ${error.message}`)
+            }
+
+            return
+        }
+        // DEFAULT: broadcast emergency alert (existing behavior)
         const message = prompt('Enter emergency alert message:')
         if (!message) return
-        
+
         const priority = prompt('Enter priority (1=highest, 5=lowest):', '1')
         if (!priority) return
-        
+
         try {
-            const result = await adminProxy('alert', 'POST', { 
-                message, 
-                priority: parseInt(priority) 
+            const result = await adminProxy('alert', 'POST', {
+                message,
+                priority: parseInt(priority, 10),
             })
-            
+
             if (result.status === 'success') {
                 alert('Emergency alert sent!')
-            if (onRefresh) onRefresh()
+                if (onRefresh) onRefresh()
             } else {
                 alert(`Failed to send alert: ${result.error}`)
             }
         } catch (error) {
-                alert(`Failed to send alert: ${error.message}`)
+            alert(`Failed to send alert: ${error.message}`)
         }
     }
 
@@ -313,16 +368,19 @@ export default function DevTools({ onRefresh }) {
                 <button 
                     className="dev-btn alert"
                     onClick={createAlert}
-                    title="Create emergency alert"
+                    title="Create emergency alert or test station check-in"
                 >
-                    🚨 Create Alert
+                    🚨 Check-in
                 </button>
+
+                <br /><span style={{margin:'auto'}}>
+
 
                 <button 
                     className="dev-btn"
                     onClick={onRefresh}
                     title="Refresh all wallet data and transactions"
-                >
+                    >
                     Refresh
                 </button>
 
@@ -330,9 +388,10 @@ export default function DevTools({ onRefresh }) {
                     className="dev-btn danger"
                     onClick={clearStorage}
                     title="Clear all local data and reload page"
-                >
+                    >
                     Reset All
                 </button>
+                </span>
             </div>
         </div>
     )

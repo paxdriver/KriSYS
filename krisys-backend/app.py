@@ -10,9 +10,9 @@ import base64
 from functools import wraps
 from database import db_connection
 import pgpy
+import hmac
 import secrets
 import qrcode
-import base64
 from io import BytesIO
 
 ###############
@@ -82,14 +82,15 @@ def DEV_POLICY_CHECK():
 # Call policy check after the blockchain and policy are instatiated
 DEV_POLICY_CHECK()
 
-
+# Ensure only verified check-in stations count (plain text and public) for hospitals, camps, food trucks, etc. sanctioned by server
 def ensure_station(crisis_id: str, station_id: str, name: str, stype: str, location: str | None = None):
     """
     Ensure a station record exists for this crisis.
     If it already exists, do nothing.
-    """
-    from database import db_connection  # already imported at top, but safe here too
 
+    NOTE: This only creates the metadata row. Authentication
+    (api_key_hash, status) is handled separately.
+    """
     with db_connection() as conn:
         row = conn.execute(
             "SELECT 1 FROM stations WHERE crisis_id = ? AND station_id = ?",
@@ -110,6 +111,44 @@ def ensure_station(crisis_id: str, station_id: str, name: str, stype: str, locat
         conn.commit()
         logger.info(f"Created station {station_id} ({name}) for crisis {crisis_id}")
 
+# Auth for registered stations, rather than passphrase to unlock one-time set-up stores an api key registered remotely by the sys admin
+def provision_dev_station_api_key(crisis_id: str, station_id: str) -> None:
+    """
+    DEV ONLY: Generate and store a long random API key for a station,
+    mark it active, and log the key once.
+
+    In production, this will be replaced by the one-time registration flow.
+    """
+    api_key = secrets.token_urlsafe(32)
+    api_key_hash = hashlib.sha256(api_key.encode('utf-8')).hexdigest()
+
+    with db_connection() as conn:
+        cur = conn.execute(
+            '''
+            UPDATE stations
+            SET api_key_hash = ?, status = 'active'
+            WHERE crisis_id = ? AND station_id = ?
+            ''',
+            (api_key_hash, crisis_id, station_id),
+        )
+        conn.commit()
+
+    if cur.rowcount == 0:
+        logger.error(
+            f"DEV station provisioning failed: station {station_id} not found for crisis {crisis_id}"
+        )
+    else:
+        logger.warning(
+            "DEV ONLY: API key for station %s (crisis %s): %s",
+            station_id,
+            crisis_id,
+            api_key,
+        )
+        logger.warning(
+            "DEV ONLY: store this key securely on the station device; "
+            "do NOT log or expose it like this in production."
+        )
+
 # DEV NOTE: SIMULATED VERIFIED STATION FOR DEMO
 crisis_id = blockchain.crisis_metadata['id']
 ensure_station(
@@ -119,8 +158,9 @@ ensure_station(
     stype="hospital",
     location="Sector SE"
 )
+provision_dev_station_api_key(crisis_id, "HOSPITAL_SE_001")
 
-# Optional: keep the existing default station_id usable
+# DEV NOTE: SECOND SIMULATED VERIFIED STATION FOR DEMO
 ensure_station(
     crisis_id=crisis_id,
     station_id="STATION_001",
@@ -128,6 +168,7 @@ ensure_station(
     stype="generic",
     location=None
 )
+provision_dev_station_api_key(crisis_id, "STATION_001")
 
 ########### TESTING IN DEV MODE ###############
 
@@ -164,34 +205,6 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated_function
 #####################
-
-# Ensure only verified check-in stations count (plain text and public) for hospitals, camps, food trucks, etc. sanctioned by server
-def ensure_station(crisis_id: str, station_id: str, name: str, stype: str, location: str | None = None):
-    """
-    Ensure a station record exists for this crisis.
-    If it already exists, do nothing.
-    """
-    from database import db_connection  # already imported at top, but safe here too
-
-    with db_connection() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM stations WHERE crisis_id = ? AND station_id = ?",
-            (crisis_id, station_id),
-        ).fetchone()
-
-        if row:
-            logger.info(f"Station {station_id} already exists for crisis {crisis_id}")
-            return
-
-        conn.execute(
-            '''
-            INSERT INTO stations (crisis_id, station_id, name, type, location)
-            VALUES (?, ?, ?, ?, ?)
-            ''',
-            (crisis_id, station_id, name, stype, location),
-        )
-        conn.commit()
-        logger.info(f"Created station {station_id} ({name}) for crisis {crisis_id}")
 
 # # Create admin key file
 # admin_key_file = os.path.join('blockchain', 'admin_keys.txt')
@@ -451,6 +464,12 @@ def set_policy():
 
 
 # Verified check-in stations like camp office, food truck, hospital, etc.
+# DEV NOTE:
+#   -If X-Station-API-Key is missing → 401.
+#   -If station_id isn’t in stations for this crisis_id → 400.
+#   -If status != 'active' or api_key_hash missing → 403.
+#   -If SHA-256(api_key) does not match api_key_hash (with hmac.compare_digest) → 401.
+#   -Only then do we accept and add the check_in transaction.
 @app.route('/checkin', methods=['POST'])
 def check_in():
     """Process QR code scan and create check-in transaction"""
@@ -458,15 +477,24 @@ def check_in():
         data = request.json
         address = data.get('address')
         station_id = data.get('station_id', 'STATION_001')
+        api_key = request.headers.get('X-Station-API-Key')  # Registered station api key, established by admin remotely before distributing station scanners
 
         if not address:
             return jsonify({"error": "Missing address"}), 400
 
-        # Ensure station is registered for this crisis
+        if not api_key:
+            return jsonify({"error": "Missing station API key"}), 401
+
         crisis_id = blockchain.crisis_metadata['id']
+
+        # Look up station auth info
         with db_connection() as conn:
             row = conn.execute(
-                "SELECT 1 FROM stations WHERE crisis_id = ? AND station_id = ?",
+                '''
+                SELECT api_key_hash, status
+                FROM stations
+                WHERE crisis_id = ? AND station_id = ?
+                ''',
                 (crisis_id, station_id),
             ).fetchone()
 
@@ -477,6 +505,21 @@ def check_in():
             )
             return jsonify({"error": "Unknown station_id"}), 400
 
+        if row['status'] != 'active' or not row['api_key_hash']:
+            logger.warning(
+                f"Check-in attempt from inactive station_id={station_id} "
+                f"for crisis={crisis_id}, status={row['status']}"
+            )
+            return jsonify({"error": "Station not active"}), 403
+
+        # Verify API key
+        provided_hash = hashlib.sha256(api_key.encode('utf-8')).hexdigest()
+        if not hmac.compare_digest(provided_hash, row['api_key_hash']):
+            logger.warning(
+                f"Invalid API key for station_id={station_id} crisis={crisis_id}"
+            )
+            return jsonify({"error": "Invalid station API key"}), 401
+
         # Create check-in transaction
         tx = Transaction(
             timestamp_created=time.time(),
@@ -484,7 +527,7 @@ def check_in():
             message_data="Check-in",
             related_addresses=[address],
             type_field="check_in",
-            priority_level=1,
+            priority_level=1,  # TODO: prioritize check-ins and alerts when mining blocks
         )
 
         blockchain.add_transaction(tx)
@@ -499,6 +542,133 @@ def check_in():
     except Exception as e:
         logger.error(f"Check-in error: {str(e)}")
         return jsonify({"error": str(e)}), 400
+    
+    # TEST LIKE THIS OR use the devtools and the api key in the docker server logs with the DevTools button "Check-in":
+    # curl -X POST http://localhost:5000/checkin \
+    #     -H "Content-Type: application/json" \
+    #     -H "X-Station-API-Key: <PASTE_HOSPITAL_SE_001_KEY_HERE>" \
+    #     -d '{"address": "some-wallet-address", "station_id": "HOSPITAL_SE_001"}'
+    
+    # ---------------------------------------------------------------------------
+    # CHECK-IN ENDPOINT (station-authenticated)
+    # ---------------------------------------------------------------------------
+    #
+    # Purpose
+    # -------
+    # This endpoint is used by *verified stations* (e.g. hospitals, camp offices,
+    # food trucks) to submit "check-in" events for victim/family wallet addresses.
+    #
+    # Design goals:
+    # - Only pre-approved stations may create check-in transactions.
+    # - Each station has a human-readable ID (station_id) that appears on-chain.
+    # - Each station is *authenticated* by a secret API key that never appears
+    #   on-chain or in the UI.
+    # - The crisis master key still signs blocks; station keys authenticate
+    #   *origin*, not consensus.
+    #
+    # Data model (stations table)
+    # ---------------------------
+    # stations (
+    #   id                    INTEGER PRIMARY KEY,
+    #   crisis_id             TEXT NOT NULL,   -- which crisis/blockchain
+    #   station_id            TEXT NOT NULL,   -- e.g. "HOSPITAL_SE_001"
+    #   name                  TEXT,            -- human readable name
+    #   type                  TEXT,            -- "hospital", "shelter", etc.
+    #   location              TEXT,            -- optional free text
+    #   registration_code_hash TEXT,           -- FUTURE: one-time activation code
+    #   api_key_hash          TEXT,            -- SHA-256 of long-term API key
+    #   status                TEXT DEFAULT 'pending',  -- "pending", "active", "revoked"
+    #   created_at            REAL DEFAULT (strftime('%s', 'now')),
+    #   UNIQUE(crisis_id, station_id)
+    # )
+    #
+    # In development:
+    # - stations are created by ensure_station(...)
+    # - API keys are provisioned by provision_dev_station_api_key(...):
+    #     - generates a random token_urlsafe(32) key,
+    #     - stores SHA-256(key) in api_key_hash,
+    #     - sets status = "active",
+    #     - logs the *plain* key once for manual testing.
+    #
+    # In production (FUTURE work):
+    # - stations will be created in "pending" with a registration_code_hash.
+    # - on first boot, a station device will send:
+    #       { station_id, registration_code }
+    #   to a dedicated registration endpoint.
+    # - server verifies the registration code, then:
+    #     - generates the API key,
+    #     - stores api_key_hash,
+    #     - sets status = "active",
+    #     - clears registration_code_hash,
+    #     - returns the plain API key once to the device.
+    # - device stores the key locally; operators never type passwords.
+    #
+    # Request requirements (current endpoint)
+    # --------------------------------------
+    # - JSON body must include:
+    #     { "address": "<wallet address>", ... }
+    # - JSON body may include:
+    #     { "station_id": "<station id>" }
+    #   If missing, station_id defaults to "STATION_001".
+    #
+    # - HTTP headers must include:
+    #     X-Station-API-Key: <station's long random API key>
+    #
+    # Authorization logic
+    # -------------------
+    # 1) address must be present → otherwise 400 "Missing address".
+    # 2) X-Station-API-Key must be present → otherwise 401 "Missing station API key".
+    # 3) Look up station row by (crisis_id, station_id):
+    #       SELECT api_key_hash, status FROM stations
+    #       WHERE crisis_id = ? AND station_id = ?
+    #
+    #    - If no row → 400 "Unknown station_id".
+    # 4) Station must be active and have an api_key_hash:
+    #    - If status != "active" or api_key_hash is NULL/empty →
+    #         403 "Station not active".
+    # 5) Verify API key:
+    #    - Compute provided_hash = SHA-256(api_key_from_header).
+    #    - Compare with stored api_key_hash using hmac.compare_digest to avoid
+    #      timing leaks.
+    #    - If mismatch → 401 "Invalid station API key".
+    #
+    # Only after all of the above passes do we:
+    # - Construct a Transaction(...) with:
+    #     type_field      = "check_in"
+    #     station_address = station_id        (appears on-chain)
+    #     related_addresses = [address]       (the wallet being checked in)
+    #     message_data    = "Check-in"
+    #     priority_level  = 1                 (high priority for mining)
+    # - Add the transaction to blockchain.pending_transactions.
+    #
+    # Mining and verification
+    # -----------------------
+    # - The background miner (or /admin/mine) picks up pending transactions and
+    #   builds a new Block, which is then:
+    #     - hashed,
+    #     - signed by the crisis master key (sign_block),
+    #     - saved to the DB.
+    #
+    # - Clients (frontend) fetch blocks via /blockchain and /crisis, reconstruct the
+    #   signed header (block_index, hash, previous_hash) and verify block.signature
+    #   with block_public_key. Only verified blocks are treated as canonical.
+    #
+    # - A check-in is therefore:
+    #   - station-authenticated at the transaction level (API key),
+    #   - and chain-authorized at the block level (crisis master key signature).
+    #
+    # Future integration notes
+    # ------------------------
+    # - The ONLY part that will change when we add the full registration flow is
+    #   *how* api_key_hash and status are set:
+    #     - today: via provision_dev_station_api_key(...) in app startup (dev only).
+    #     - future: via a dedicated registration endpoint using registration_code.
+    #
+    # - The logic inside /checkin (address + station_id + API key → transaction)
+    #   should stay the same, so any changes to registration do NOT require
+    #   rewriting this endpoint.
+    #
+    # ---------------------------------------------------------------------------
 
 
 # Authentication endpoint that returns private key for client-side decryption
