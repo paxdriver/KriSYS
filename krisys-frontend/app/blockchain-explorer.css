@@ -1,0 +1,281 @@
+/* app/blockchain-explorer.css */
+
+.explorer-container {
+  max-width: 1200px;
+  margin: 2rem auto;
+  padding: 0 1rem 2rem;
+}
+
+.explorer-header {
+  border-bottom: 1px solid #e5e7eb;
+  padding-bottom: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.explorer-header h1 {
+  font-size: 1.8rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+
+.crisis-info h2 {
+  font-size: 1.3rem;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.crisis-info p {
+  margin: 0.15rem 0;
+  color: #4b5563;
+}
+
+.crisis-info a {
+  color: #2563eb;
+  text-decoration: none;
+}
+
+.crisis-info a:hover {
+  text-decoration: underline;
+}
+
+.explorer-content {
+  margin-top: 1rem;
+}
+
+/* Search bar */
+
+.explorer-search {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  align-items: center;
+}
+
+.explorer-input {
+  flex: 1;
+  min-width: 180px;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 0.95rem;
+}
+
+.explorer-input:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+
+.explorer-select {
+  padding: 0.5rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  background: white;
+}
+
+.explorer-btn {
+  padding: 0.5rem 0.9rem;
+  border-radius: 6px;
+  border: none;
+  background: #2563eb;
+  color: white;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.explorer-btn.secondary {
+  background: #6b7280;
+}
+
+.explorer-btn.small {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+.explorer-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.explorer-btn:not(:disabled):hover {
+  background: #1e3a8a;
+}
+
+/* Controls and summary */
+
+.explorer-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+  font-size: 0.9rem;
+  color: #4b5563;
+}
+
+.explorer-controls-buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* Card + block list */
+
+.explorer-card {
+  margin-top: 0.5rem;
+}
+
+.explorer-block {
+  padding: 0.75rem 0;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.explorer-block:last-child {
+  border-bottom: none;
+}
+
+.block-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.4rem;
+}
+
+.block-main {
+  display: flex;
+  flex-direction: column;
+}
+
+.block-index {
+  font-weight: 600;
+  color: #111827;
+}
+
+.block-time {
+  font-size: 0.8rem;
+  color: #6b7280;
+}
+
+.block-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.25rem;
+}
+
+.block-transactions {
+  font-size: 0.85rem;
+  color: #4b5563;
+}
+
+.block-hash {
+  font-size: 0.8rem;
+  color: #374151;
+  margin: 0.1rem 0;
+}
+
+.block-hash code {
+  font-family: monospace;
+  font-size: 0.8rem;
+  background: #f3f4f6;
+  padding: 0.1rem 0.25rem;
+  border-radius: 3px;
+}
+
+.block-hash .label {
+  font-weight: 500;
+  color: #111827;
+}
+
+/* Transactions inside a block */
+
+.block-transactions-list {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed #e5e7eb;
+}
+
+.transaction-item {
+  padding: 0.4rem 0;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.transaction-item:last-child {
+  border-bottom: none;
+}
+
+.tx-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  margin-bottom: 0.2rem;
+}
+
+.tx-id {
+  font-family: monospace;
+  color: #4b5563;
+}
+
+.tx-type {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #2563eb;
+}
+
+.tx-body {
+  font-size: 0.8rem;
+  color: #374151;
+}
+
+.tx-body code {
+  font-family: monospace;
+  background: #f3f4f6;
+  padding: 0.05rem 0.2rem;
+  border-radius: 3px;
+}
+
+.tx-address {
+  margin-right: 0.25rem;
+}
+
+/* Generic states */
+
+.loading,
+.error {
+  margin: 0.5rem 0;
+  font-size: 0.9rem;
+}
+
+.error {
+  color: #b91c1c;
+}
+
+/* Responsive */
+
+@media (max-width: 768px) {
+  .explorer-container {
+    margin: 1rem auto;
+  }
+
+  .block-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
+  }
+
+  .block-meta {
+    align-items: flex-start;
+  }
+
+  .explorer-search {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .explorer-controls {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
+  }
+}

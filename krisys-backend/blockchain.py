@@ -832,10 +832,11 @@ class Blockchain:
                     "hash": block.hash,
                 },
                 sort_keys=True,
+                separators=(',', ':'),  # match JSON.stringify (no spaces)
             )
 
             message = pgpy.PGPMessage.new(header)
-            sig = key.sign(message)
+            sig = key.sign(message, detached=True)
             return str(sig)
         except Exception as e:
             logger.error(f"Block signing failed: {str(e)}")
