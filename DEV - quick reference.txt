@@ -1,0 +1,36 @@
+<!-- send test alert -->
+curl -X POST http://localhost:5000/admin/alert \
+  -H "X-Admin-Token: valid_admin_token" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Test alert", "priority": 1}'
+
+<!-- send test message to blockchain -->
+curl -X POST http://localhost:5000/transaction \
+  -H "Content-Type: application/json" \
+  -d '{
+    "timestamp_created": 1234567890,
+    "station_address": "test_sender",
+    "message_data": "Test message",
+    "related_addresses": ["2176bc19271e2ff51612ed8f-fe002447"],
+    "type_field": "message",
+    "priority_level": 5
+  }'
+
+<!-- force mining a block -->
+curl -X POST -H "X-Admin-Token: valid_admin_token" http://localhost:5000/admin/mine
+
+<!-- check a transaction status by id (tx) -->
+sqlite3 ../blockchain/blockchain.db "SELECT * FROM transactions WHERE transaction_id = 'ac55bc1dc4321f7f69764fc6e39b81d0cbf85a5cad72edfe407aa955bea9a510';"
+
+<!-- check pending transactions inside of the container -->
+docker exec -it krisys_blockchain_1 bash
+from app import blockchain
+print([tx.transaction_id for tx in blockchain.pending_transactions])
+
+<!-- copy python script to container -->
+docker cp test_private_message.py krisys_blockchain_1:/app/
+<!-- run python script contained inside container -->
+docker exec -it krisys_blockchain_1 python test_private_message.py
+
+
+

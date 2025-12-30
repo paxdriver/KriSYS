@@ -1,0 +1,114 @@
+/* components/DevTools/devtools.css */
+.dev-tools {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(90deg, #dc2626, #ea580c);
+    color: white;
+    z-index: 1000;
+    padding: 0.5rem 0;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.dev-tools-inner {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 1rem;
+    flex-wrap: wrap;
+}
+
+.dev-label {
+    font-weight: bold;
+    font-size: 0.9rem;
+    margin-right: 0.5rem;
+}
+
+.network-status {
+    font-size: 0.8rem;
+    padding: 0.2rem 0.6rem;
+    border-radius: 12px;
+    font-weight: 600;
+    border: 1px solid;
+}
+
+.network-status.online {
+    background: rgba(16, 185, 129, 0.2);
+    border-color: #10b981;
+    color: #d1fae5;
+}
+
+.network-status.offline {
+    background: rgba(239, 68, 68, 0.2);
+    border-color: #ef4444;
+    color: #fee2e2;
+}
+
+.dev-btn {
+    background: rgba(255,255,255,0.15);
+    border: 1px solid rgba(255,255,255,0.3);
+    color: white;
+    padding: 0.3rem 0.7rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.dev-btn:hover:not(:disabled) {
+    background: rgba(255,255,255,0.25);
+    transform: translateY(-1px);
+}
+
+.dev-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.dev-btn.online {
+    background: rgba(16, 185, 129, 0.2);
+    border-color: rgba(16, 185, 129, 0.4);
+}
+
+.dev-btn.offline {
+    background: rgba(239, 68, 68, 0.2);
+    border-color: rgba(239, 68, 68, 0.4);
+}
+
+.dev-btn.active {
+    background: rgba(16, 185, 129, 0.3);
+    border-color: rgba(16, 185, 129, 0.6);
+    color: #d1fae5;
+}
+
+.dev-btn.test {
+    background: rgba(245, 158, 11, 0.2);
+    border-color: rgba(245, 158, 11, 0.4);
+}
+
+.dev-btn.danger {
+    background: rgba(220, 38, 38, 0.3);
+    border-color: rgba(220, 38, 38, 0.5);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .dev-tools-inner {
+        gap: 0.5rem;
+        font-size: 0.8rem;
+    }
+    
+    .dev-btn {
+        padding: 0.25rem 0.5rem;
+        font-size: 0.8rem;
+    }
+}
+
+/* Adjust main content to account for dev tools */
+.dashboard-container {
+    margin-top: 3rem;
+}

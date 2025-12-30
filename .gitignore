@@ -1,3 +1,8 @@
-__pycache__
-.pytest_cache
-blockchain/blockchain.db
+**/__pycache__/
+**/.pytest_cache/
+**/blockchain/
+**/node_modules/
+DEV\ -\ prompt*
+.env*
+NEW_PROMPT.py
+DELETE.txt

@@ -1,11 +1,32 @@
 version: '3.8'
 services:
-  blockchain:
-    build: .
+  backend:
+    build: ./krisys-backend
     volumes:
-      - ./blockchain:/data  # Persistent storage for DB
+      - ./blockchain:/app/blockchain
+      - ./krisys-backend:/app  # Hot reload for development
     ports:
       - "5000:5000"
     environment:
-      - BLOCKCHAIN_DB_PATH=/data/blockchain.db
-      - ADMIN_TOKEN=secure_admin_key_123  # Change in production
+      - BLOCKCHAIN_DB_PATH=/app/blockchain.db
+      - FLASK_DEBUG=1
+      - FLASK_ENV=development
+    command: python -m flask run --host=0.0.0.0 --port=5000 --reload
+
+  frontend:
+    build: ./krisys-frontend
+    volumes:
+      - ./krisys-frontend:/app
+      - /app/node_modules
+      - /app/.next
+      - ./blockchain:/app/blockchain # DEV ONLY!!! for admin panel controls
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:5000
+    # Development command with hot reload
+    # command: npm start
+    # For production, comment above and uncomment below:
+    command: npm run dev
+    depends_on:
+      - backend

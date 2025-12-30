@@ -1,0 +1,359 @@
+==============================================================
+July 30, 2025 - KriSYS project status. The current state includes:
+
+****************************
+Note on Admin Alerts vs. User Messages:
+    - Admin Alerts: These are sent by the admin (via a station) and are not encrypted. They are meant to be broadcasted to everyone and should be stored in plaintext on the blockchain.
+    
+    - User Messages: These are sent between users (via their wallets) and are encrypted using PGP. Only the intended recipient should be able to decrypt them.
+****************************
+
+1. Blockchain Implementation: A custom blockchain in Python with:
+	- Block creation every 3 minutes (configurable per crisis policy)
+	- Transaction structure supporting multiple types (check-in, message, alert, damage_report)
+	- Wallet system for families and individuals
+	- Policy system allowing crisis-specific configurations
+
+2. Crisis Policy: We have created a hurricane crisis policy with:
+	- Block interval: 180 seconds
+	- Max transaction size: 10 KB
+	- Rate limit: 600 seconds between messages per station
+	- Priority levels: evacuation (1), medical (2), shelter (3), supplies (4), personal (5)
+	- Transaction types: check_in, message, alert, damage_report
+
+3. API Endpoints:
+	- Blockchain explorer (GET /blockchain)
+	- Address-based transaction lookup (GET /address/<address>)
+	- Wallet management (POST /wallet, GET /wallet/<family_id>)
+	- Transaction submission (POST /transaction)
+	- Authentication endpoints for wallet access
+	- Admin endpoints for manual mining and policy changes (admin token protected)
+	- Crisis metadata endpoint (GET /crisis)
+
+4. Database: SQLite database with tables for blocks, transactions, wallets, and crises.
+
+5. Frontend: Basic HTML/JS interfaces for blockchain exploration and QR code scanning (to be expanded).
+
+Next Steps:
+1. Testing: Write tests to verify the system, especially for the new crisis policy and transaction types.
+2. Wallet Messaging: Implement PGP encryption for wallet-to-wallet messages.
+3. Admin Alerts: Implement plaintext alert broadcasting by admin (to be readable by all).
+4. Check-in Stations: Implement station functionality (check-in, alerts, warnings).
+5. Frontend Expansion: Build out the wallet interface and admin panel.
+
+
+
+==============================================================
+
+Encrypted Label Storage:
+	- Use family's public key to encrypt labels
+	- Store encrypted labels in wallets table
+	- Decrypt client-side with private key derived from password
+
+IDEA OF WALLET AND ADDRESS MANAGEMENT SYSTEM FEATURES:
+
+The idea is addresses related to a wallet (family/group) should be able to label addresses of that group so that each can be easily associated with members of the group, but we don't want that information to be visible to anyone on the blockchain, only the family themselves. Other people can add individuals to their wallets and label those people themselves and that would be encrypted on that other person's contact list, whether the information they enter is right or wrong is irrelevent, the lable is stored as a transaction type and encrypted allowing only the person/group who entered the label to read it in plain english.
+
+Family/Group wallets should be able to add new members, label them with names, view notifications for all transactions matching family wallet address, and select specific addresses for transactions registered including that individual's address. Group messages display in the individual's dashboard as well as the family dashboard.
+
+Family wallet must be protected by password for backup, but ideally the family devices can register their TPM (Trusted Platform Module) built into their devices to decrypt messages and labels, provide access to the dashboard, and to allow offline/online transactions to get posted from their address and signatures. PGP key pairs with the blockchain provider issuing a public key to all users on the network is ideal to safeguard message data and prevent "LOG4J" brand of attacks via sql injection or other similar security situations requiring input sanitization at the server's API.
+
+Need to consider default method of message verification (fingerprint or signature via PGP?) and the blockchain should have its own key pair, issuing all wallets the public key to ensure public chain does not leak personal details in any of the transactions posted by any of the users when they submit new messages.
+
+
+DATA FLOW ARCHITECTURE
+(UPDATED AUG 2 2025)
+graph LR
+    subgraph "Client Side"
+        A[User Input] --> B[React Components]
+        B --> C[API Service Layer]
+        B --> D[React Hooks/State]
+        D --> E[Local Storage/Memory]
+    end
+    
+    subgraph "Network"
+        C --> F[HTTP/CORS]
+    end
+    
+    subgraph "Server Side" 
+        F --> G[Flask Routes]
+        G --> H[Blockchain Logic]
+        G --> I[Wallet Manager]
+        H --> J[Database Layer]
+        I --> J
+    end
+    
+    subgraph "Storage"
+        J --> K[SQLite Database]
+        K --> L[blocks, transactions]
+        K --> M[wallets, wallet_keys] 
+    end
+    
+    style A fill:#e1f5fe
+    style E fill:#f3e5f5
+    style K fill:#fff3e0
+
+
+===================================================
+
+DATABASE SCHEMA DESIGN
+(UPDATED: AUG 2 2025)
+erDiagram
+    blocks {
+        int id PK
+        int block_index
+        real timestamp
+        text previous_hash
+        text hash
+        int nonce
+    }
+    
+    transactions {
+        int id PK
+        int block_id FK
+        text transaction_id
+        real timestamp_created
+        real timestamp_posted
+        text station_address
+        text message_data
+        text related_addresses
+        text type_field
+        int priority_level
+    }
+    
+    wallets {
+        int id PK
+        text family_id UK
+        text members "JSON array"
+        text devices "JSON array"
+        real created_at
+        text crisis_id
+    }
+    
+    wallet_keys {
+        int id PK
+        text family_id UK FK
+        text encrypted_private_key "PGP private key"
+        text public_key "PGP public key"
+        real created_at
+    }
+    
+    crises {
+        text id PK
+        text name
+        text organization
+        text contact
+        text description
+        real created_at
+    }
+    
+    blocks ||--o{ transactions : contains
+    wallets ||--|| wallet_keys : has_keys
+    wallets }o--|| crises : belongs_to
+
+===================================================
+
+WALLET-BLOCKCHAIN SEQUENCE DIAGRM
+(UPDATED: AUG 2 2025)
+sequenceDiagram
+    participant User as User
+    participant React as React Frontend
+    participant Flask as Flask Backend
+    participant Chain as Blockchain
+    participant DB as Database
+    
+    Note over User,DB: Wallet Creation Flow
+    User->>React: Create wallet (3 members)
+    React->>Flask: POST /wallet {num_members: 3}
+    Flask->>Chain: Generate PGP keypair
+    Flask->>DB: INSERT INTO wallets (members)
+    Flask->>DB: INSERT INTO wallet_keys (encrypted_key, public_key)
+    Flask-->>React: Return wallet data (no keys)
+    React->>React: Display wallet with QR codes
+    
+    Note over User,DB: Message Sending Flow  
+    User->>React: Send message to family
+    React->>Flask: POST /transaction {message, recipient_id}
+    Flask->>DB: SELECT public_key FROM wallet_keys WHERE family_id = recipient
+    Flask->>Flask: Encrypt message with recipient's public key
+    Flask->>Chain: Add encrypted transaction to pending
+    Chain->>Chain: Mine block (3min interval)
+    Chain->>DB: Save block with encrypted transaction
+    
+    Note over User,DB: Message Reading Flow
+    User->>React: Open wallet dashboard
+    React->>Flask: GET /wallet/{id}/transactions
+    Flask-->>React: Return encrypted transactions (no decryption)
+    User->>React: Enter passphrase to unlock
+    React->>Flask: POST /auth/unlock {family_id, passphrase}
+    Flask->>DB: SELECT encrypted_private_key FROM wallet_keys
+    Flask->>Flask: Decrypt private key with passphrase
+    Flask-->>React: Return decrypted private key
+    React->>React: Store key in state, decrypt all messages
+    React->>User: Display decrypted messages
+
+===================================================
+
+BACKEND FLASK FUNCTION MAP
+(UPDATED: AUG 2 2025)
+graph TB
+    subgraph "app.py - Flask Routes"
+        A[app.py] --> B[get_crisis_info]
+        A --> C[get_wallet]
+        A --> D[get_wallet_transactions]
+        A --> E[add_transaction]
+        A --> F[get_chain]
+        A --> G[create_wallet]
+        A --> H[unlock_wallet_endpoint]
+        A --> I[admin_alert]
+        A --> J[check_in]
+    end
+    
+    subgraph "blockchain.py - Core Logic"
+        K[Blockchain] --> L[add_transaction]
+        K --> M[mine_block]
+        K --> N[validate_chain]
+        K --> O[load_chain]
+        
+        P[WalletManager] --> Q[create_wallet]
+        P --> R[get_wallet]
+        P --> S[authenticate_and_get_private_key]
+        P --> T[get_wallet_public_key]
+        
+        U[Wallet] --> V[add_member]
+        U --> W[to_dict]
+        
+        X[Transaction] --> Y[to_dict]
+        X --> Z[generate_id]
+        
+        AA[Block] --> BB[calculate_hash]
+        AA --> CC[to_dict]
+    end
+    
+    subgraph "database.py - Data Layer"
+        DD[init_db] --> EE[Create Tables]
+        FF[db_connection] --> GG[SQLite Context]
+    end
+    
+    C --> R
+    G --> Q
+    H --> S
+    E --> T
+    L --> DD
+    M --> FF
+
+
+===================================================
+
+FRONTEND REACT COMPONENT MAPgraph TB
+(UPDATED: AUG 2 2025)
+    subgraph "Pages"
+        A[app/page.js - BlockchainExplorer] --> B[BlockList]
+        A --> C[WalletCreator]
+        
+        D[app/wallet/[familyId]/page.js] --> E[WalletDashboard]
+    end
+    
+    subgraph "WalletDashboard Components"
+        E --> F[Sidebar]
+        E --> G[Overview]
+        E --> H[MembersPage]
+        E --> I[UnlockForm]
+        
+        G --> J[RecentActivity]
+        G --> K[MembersOverview]
+        
+        J --> L[TransactionItem]
+    end
+    
+    subgraph "Services & Hooks"
+        M[services/api.js] --> N[API Calls]
+        O[hooks/useWallet.js] --> P[Wallet State]
+        Q[hooks/useAuth.js] --> R[Auth State]
+    end
+    
+    subgraph "API Integration"
+        B --> M
+        C --> M
+        I --> M
+        L --> O
+        I --> Q
+    end    
+
+===================================================
+
+AUTH FLOW
+(UPDATED: AUG 2 2025)
+sequenceDiagram
+    participant User as User (React)
+    participant Frontend as React Frontend
+    participant Backend as Flask Backend
+    participant DB as SQLite Database
+    
+    User->>Frontend: Enter passphrase
+    Frontend->>Backend: POST /auth/unlock {family_id, passphrase}
+    Backend->>DB: SELECT encrypted_private_key FROM wallet_keys
+    DB-->>Backend: Return encrypted key
+    Backend->>Backend: Decrypt with passphrase (ONLY server decryption)
+    Backend-->>Frontend: Return decrypted private key
+    Frontend->>Frontend: Store private key in React state (memory only)
+    Frontend->>Frontend: Decrypt all messages client-side
+    User->>Frontend: View decrypted messages
+    Note over Frontend: Private key never persisted, lost on refresh
+
+===================================================
+
+
+
+>>> TEST WALLET MANAGER AND PGP DEFAULT AUTH
+
+-create wallet
+wallet = blockchain.wallets.create_wallet("fam_123", [{"name": "John Doe"}])
+
+-get wallet
+wallet = blockchain.wallets.get_wallet("fam_123")
+
+-add device
+blockchain.wallets.add_device_to_wallet("fam_123", "device_456", public_key)
+
+
+# Example: Load a public key from string
+from pgpy import PGPKey
+
+public_key = PGPKey()
+public_key.parse(wallet.members[0]["keypair_str"])
+
+<<< TEST WALLET MANAGER AND PGP DEFAULT AUTH
+
+DATABASE AND CRISIS BLOCKCHAIN CREATION - POLICIES (configs/admin setup)
+
+
+
+
+
+PHASE 2.1 - DEVELOPMENT ROADMAP
+
+Core Dashboard UI (2 days)
+	- Complete all page templates
+	- Implement navigation and basic styling
+	- Mock data integration
+ 
+Authentication System (1 day)
+	- Password-based login
+	- Device registration flow
+	- Session management
+
+Member Management (1 day)
+	- Add/remove members
+	- Edit labels (with offline support)
+	- Generate new addresses
+ 
+Notifications System (1 day)
+	- Real-time transaction monitoring
+	- Filtering by type and member
+	- Individual profile views
+ 
+Offline Capabilities (2 days)
+	- Service worker implementation
+	- Local data persistence
+	- Background sync

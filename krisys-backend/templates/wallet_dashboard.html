@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KriSYS Family Wallet</title>
+    <link rel="stylesheet" href="/static/css/wallet_dashboard.css">
+    <script>
+        // Pass data from Flask to JavaScript
+        const walletData = {{ wallet | tojson | safe }};
+        const transactions = {{ transactions | tojson
+         | safe }};
+        const familyId = "{{ family_id }}"
+
+        // Unlocked status added to walletData
+        walletData.unlocked = {{ 'true' if wallet.private_key else 'false' }};
+    </script>
+</head>
+<body>
+    <div class="dashboard-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="wallet-header">
+                <div class="wallet-icon">F</div>
+                <div class="wallet-info">
+                    <h2>Family Wallet</h2>
+                    <div class="wallet-id" id="wallet-id-display">Loading...</div>
+                </div>
+            </div>
+            
+            <ul class="nav-menu">
+                <li class="nav-item">
+                    <a href="#" class="nav-link active" data-page="overview">
+                        <span class="nav-icon">📊</span>
+                        <span>Overview</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="#" class="nav-link" data-page="members">
+                        <span class="nav-icon">👨‍👩‍👧‍👦</span>
+                        <span>Family Members</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="#" class="nav-link" data-page="notifications">
+                        <span class="nav-icon">🔔</span>
+                        <span>Notifications</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="#" class="nav-link" data-page="security">
+                        <span class="nav-icon">🔒</span>
+                        <span>Security</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="#" class="nav-link" data-page="devices">
+                        <span class="nav-icon">📱</span>
+                        <span>Registered Devices</span>
+                    </a>
+                </li>
+            </ul>
+        </aside>
+        
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Overview Page -->
+            <div id="overview-page" class="page">
+                <div class="page-header">
+                    <h1 class="page-title">Family Overview</h1>
+                    <button class="btn" id="refresh-btn">
+                        <span>🔄</span> Refresh
+                    </button>
+                </div>
+                
+                <div class="card-grid">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">Family Members</h3>
+                        </div>
+                        <div class="card-body" id="members-overview">
+                            <!-- Dynamically populated -->
+                        </div>
+                    </div>
+                    
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">Recent Activity</h3>
+                        </div>
+                        <div class="card-body" id="recent-activity">
+                            <!-- Dynamically populated -->
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">All Notifications</h3>
+                    </div>
+                    <div class="card-body" id="all-notifications">
+                        <!-- Dynamically populated -->
+                    </div>
+                </div>
+            </div>
+
+            
+            <!-- Filter Members -->
+            <div class="member-filter">
+                <select id="member-filter">
+                    <option value="all">All Family Members</option>
+                    {% for member in wallet.members %}
+                    <option value="{{ member.address }}">{{ member.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            
+            <!-- Members Page -->
+            <div id="members-page" class="page" style="display:none;">
+                <div id="unlock-status" style="display: none; margin: 10px 0; padding: 5px; background: #f0f0f0;">
+                🔒 Wallet locked
+                </div>
+                <div class="page-header">
+                    <h1 class="page-title">Family Members</h1>
+                    <button class="btn" id="add-member-btn">
+                        <span>➕</span> Add Member
+                    </button>
+                </div>
+                
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Current Members</h3>
+                    </div>
+                    <div class="card-body" id="members-list">
+                        <!-- Dynamically populated -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Authentication Modal -->
+            <div id="auth-modal" class="modal">
+                <!-- DEVELOPMENT - Add unlock status indicator -->
+                <div id="unlock-status" class="unlock-status">
+                    {% if session.get('wallet_' + family_id + '_unlocked') %}
+                        🔓 Wallet unlocked
+                    {% else %}
+                        🔒 Wallet locked
+                    {% endif %}
+                </div>
+                <!-- DEVELOPMENT - UNLOCK WITH PASSWORD FORM (SESSION MANAGEMENT) -->
+                <div id="unlock-form" style="display:{% if not session.get('wallet_' + family_id + '_unlocked') %}block{% else %}none{% endif %};">
+                    <h3>Unlock Wallet</h3>
+                    <label>Enter Passphrase:</label>
+                    <input type="password" id="wallet-passphrase" class="form-input">
+                    <button id="unlock-wallet-btn" class="btn" onclick="unlockWallet()">Unlock Wallet</button>
+                    <p id="unlock-error" style="color:red; display:none;"></p>
+                </div>
+                <!-- DEVELOPMENT - Inside the auth-modal div -->
+
+
+                <div class="modal-content">
+                    <h2>Access Family Wallet</h2>
+                    
+                    <!-- Device Authentication -->
+                    <div id="device-auth" style="display:none;">
+                        <p>Authenticating with registered device...</p>
+                        <button id="auth-retry" class="btn">Retry</button>
+                    </div>
+                    
+                    <!-- Password Fallback -->
+                    <div id="password-auth" style="display:none;">
+                        <label for="wallet-password">Enter Wallet Password:</label>
+                        <input type="password" id="wallet-password" class="form-input">
+                        <button id="password-submit" class="btn">Authenticate</button>
+                    </div>
+                    
+                    <!-- Device Registration -->
+                    <div id="device-registration" style="display:none;">
+                        <p>Register this device for future access</p>
+                        <button id="register-device" class="btn">Register Device</button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- TEMPORARY DEBUG -->
+            <div style="background: #f0f0f0; padding: 20px; margin-top: 20px;">
+                <h3>Debug Information</h3>
+                <pre id="debug-output"></pre>
+            </div>
+            <!-- TEMPORARY DEBUG -->
+        
+        </main>
+    </div>
+
+    <script src="/static/js/wallet_dashboard.js"></script>
+    <script>
+
+        initializeDashboard(walletData, transactions, familyId)
+
+    </script>
+</body>
+</html>
