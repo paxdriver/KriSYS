@@ -8,46 +8,89 @@ System designed for humanitarian crises – prioritizing reliability, privacy, a
 
 ## Primary Use Cases
 
-- Crisis organization resource management: real-time coordination of supplies, personnel, and aid distribution  
-- Reuniting missing persons: family tracking and check-in system with QR code identification  
-- Inventory and aid distribution: supply chain tracking and resource allocation management  
-- Offline message delivery: encrypted personal communications and emergency alerts without internet  
-- QR code check-in stations: simple identification using bracelets, necklaces, or printed codes  
+- Crisis organization resource management: real-time coordination of supplies, personnel, and aid distribution
+- Inventory and aid distribution: supply chain tracking and resource allocation management
+- Reuniting missing persons: remote family tracking and check-in system with QR code identification
+- Offline message delivery: encrypted personal communications and emergency alerts without internet or power
+- QR code check-in stations: simple identification using bracelets, necklaces, or printed codes
 
 ---
 
-## **Current Status: Phase 2.5 Complete**
+## **Current Status: Phase 2 Complete**
 
 ### ✅ Completed Features
-- Flask backend API with custom blockchain implementation  
-- React/Next.js frontend with component-based architecture  
-- PGP key management system with KeyManager abstraction  
-- Client-side message encryption and decryption  
-- Docker containerized development environment  
-- Real-time blockchain explorer  
-- Family wallet management with passphrase protection  
-- QR code generation for member identification  
-- Offline message queuing system  
-- Local relay/confirmation tracking (relay_hash per message)  
-- DevTools for:  
-  - manual mining  
-  - admin alerts  
-  - simulated offline mode  
-  - processing offline message queue  
-  - experimental sync payload export/import  
+- Flask backend API with custom blockchain implementation
+- React/Next.js frontend with component-based architecture
+- PGP key management system with KeyManager abstraction
+- Contact management (names replacing addresses, edited and stored locally)
+- Client-side message encryption and decryption
+- Docker containerized development environment
+- Real-time blockchain explorer
+- Family wallet management with passphrase protection
+- QR code generation for member identification
+- Offline message queuing system
+- Local relay/confirmation tracking (relay_hash per message) 
+- Block signing for canonical chain verification by users offline & online
 
-### 🔄 In Progress
+- DevTools banner for:  
+  - manually mining a block
+  - sending admin alerts / check-ins
+  - simulated offline mode
+  - processing offline message queue
+  - experimental sync payload export/import
+  - Rate limiting ovverride
+
+---
+
+### Anticipated Future Features
+- Device registration
+- Station api key revocation
+- Provider setup wizard
+- Message threads
+- Blockchain explorer culling / sorting / filtering
+- QR code sharing to display / read codes between users for contact management
+
+### Phase IN-sensitive TO-DO's
 - QR scanner implementation for check-in stations  
+- Wallet creation at stations
 - Advanced contact management features  
-- Mobile-responsive optimizations  
+- Mobile-responsive optimizations and UX features/flow
 - Refinement of offline sync UX (beyond dev-only JSON copy/paste)  
 
-### 📋 Next Phase
+---
+
+## **Phase 3 - Offline Data Propagation Between Users **
+
+### Overview
 - Peer-to-peer WiFi or local-network sync for offline device communication  
 - Enhanced station templates and check-in types  
 - Message threading and reply chains  
 - Optional embedding of public keys in QR codes to reduce server lookups  
 
+### Phase 3 Steps - Mesh & Offline Sync
+1. Show unconfirmed messages locally
+Display locally queued messages alongside confirmed on‑chain ones.
+(Done ✓)
+
+2. Offline blockchain access
+Load chain and wallet data from local cache when no network connection is available.
+
+3. Peer sync payload definition
+Define a precise JSON structure for what is exchanged between devices
+(e.g. queued messages + confirmed relay map + blocks + metadata).
+
+4. Peer sync merge logic
+Implement how devices merge those payloads and resolve conflicts safely
+(using signatures, timestamps, relay hashes, etc.).
+
+5. Manual payload transfer
+Add simple import/export options (QR, copy/paste, file) so users can sync devices manually offline.
+
+6. Automatic mesh transport (optional later)
+Add WebRTC / Bluetooth / Wi‑Fi Direct, etc., to do automatic peer‑to‑peer sync using the same payload format.
+
+7. Testing & validation
+Test network loss → message queue → peer sync → reconfirmation → server reconciliation end‑to‑end.
 ---
 
 # Architecture Overview
@@ -102,6 +145,7 @@ krisys/
 │   │   └── public-key.js         # Public key fetching proxy
 │   ├── services/
 │   │   ├── api.js                # Flask backend integration
+│   │   ├── blockVerifier.js      # User verification of block's signature (signed by provider server-side when mined)
 │   │   ├── keyManager.js         # PGP crypto operations abstraction
 │   │   ├── localStorage.js       # Disaster-specific offline storage
 │   │   └── contactStorage.js     # Privacy-first contact management
