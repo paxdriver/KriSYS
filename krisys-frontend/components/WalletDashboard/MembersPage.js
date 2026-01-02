@@ -2,6 +2,7 @@
 'use client'
 import { useState } from "react"
 import { contactStorage } from "../../services/contactStorage"
+import { showAddressQr } from "@/utils/qr"
 
 export default function MembersPage({ walletData, transactions, privateKey }) {
     const isUnlocked = !!privateKey
@@ -38,28 +39,40 @@ export default function MembersPage({ walletData, transactions, privateKey }) {
         setEditName('')
     }
 
-    const generateQRCode = async (address, familyId) => {
-        try {
-            const response = await fetch(`http://localhost:5000/wallet/${familyId}/qr/${address}`)
-            const data = await response.json()
+    // const generateQRCode = async (address, familyId) => {
+    //     try {
+    //         const response = await fetch(`http://localhost:5000/wallet/${familyId}/qr/${address}`)
+    //         const data = await response.json()
             
-            const displayName = getDisplayName(address)
-            const qrWindow = window.open('', '_blank', 'width=400,height=400')
-            qrWindow.document.write(`
-                <html>
-                    <head><title>QR Code - ${displayName}</title></head>
-                    <body style="text-align:center; padding:20px;">
-                        <h3>Member QR Code</h3>
-                        <p><strong>${displayName}</strong></p>
-                        <img src="${data.qr_code}" alt="QR Code" />
-                        <p style="word-break:break-all; font-size:12px;">${address}</p>
-                    </body>
-                </html>
-            `)
-        } catch (error) {
-            alert('Failed to generate QR code')
-        }
+    //         const displayName = getDisplayName(address)
+    //         const qrWindow = window.open('', '_blank', 'width=400,height=400')
+    //         qrWindow.document.write(`
+    //             <html>
+    //                 <head><title>QR Code - ${displayName}</title></head>
+    //                 <body style="text-align:center; padding:20px;">
+    //                     <h3>Member QR Code</h3>
+    //                     <p><strong>${displayName}</strong></p>
+    //                     <img src="${data.qr_code}" alt="QR Code" />
+    //                     <p style="word-break:break-all; font-size:12px;">${address}</p>
+    //                 </body>
+    //             </html>
+    //         `)
+    //     } catch (error) {
+    //         alert('Failed to generate QR code')
+    //     }
+    // }
+    const generateQRCode = async (address, familyId) => {
+        const displayName = getDisplayName(address)
+        await showAddressQr({
+            familyId,
+            address,
+            displayName,
+            title: 'Member QR Code',
+            heading: 'Member QR Code',
+        })
     }
+
+
 
     return (
         <div id="members-page" className="page">
@@ -121,14 +134,16 @@ export default function MembersPage({ walletData, transactions, privateKey }) {
                             </div>
                             
                             <div className="member-actions">
-                                <button 
-                                    className="btn-icon" 
-                                    title="Generate QR Code" 
-                                    onClick={() => generateQRCode(member.address, walletData.family_id)}
-                                >
-                                    📇
-                                </button>
-                                {isUnlocked && (
+                                {isUnlocked && (<>
+                                    {/* Generate QR code */}
+                                    <button
+                                        className="btn-icon"
+                                        title="Generate QR Code"
+                                        onClick={ () => generateQRCode(member.address, walletData.family_id) }
+                                    >📇
+                                    </button>
+                                
+                                    {/* Copy address */}
                                     <button 
                                         className="btn-icon"
                                         title="Copy address to clipboard"
@@ -139,7 +154,7 @@ export default function MembersPage({ walletData, transactions, privateKey }) {
                                     >
                                         📋
                                     </button>
-                                )}
+                                </>)}
                             </div>
                         </div>
                     ))}

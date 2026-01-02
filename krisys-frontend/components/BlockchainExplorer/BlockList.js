@@ -17,10 +17,10 @@ export default function BlockList() {
             setError(null)
 
             try {
-                // Fetch crisis metadata and full chain in parallel
+                // ONLINE PATH: Fetch crisis metadata and full chain in parallel
                 const [crisisRes, chainRes] = await Promise.all([
                     api.getCrisisInfo(),
-                    api.getBlockchain()
+                    api.getBlockchain(),
                 ])
 
                 const blockPublicKey = crisisRes.data.block_public_key
@@ -33,21 +33,38 @@ export default function BlockList() {
                 )
 
                 if (canonicalBlocks.length !== allBlocks.length) {
-                    console.warn(`Discarded ${allBlocks.length - canonicalBlocks.length} unverified blocks`)
+                    console.warn(
+                        `Discarded ${
+                            allBlocks.length - canonicalBlocks.length
+                        } unverified blocks`
+                    )
                 }
 
                 setBlocks(canonicalBlocks)
 
-                // Optionally cache only canonical blocks offline
+                // Cache only canonical blocks offline
                 if (canonicalBlocks.length > 0) {
                     disasterStorage.saveBlockchain(canonicalBlocks)
                 }
-            } 
-            catch (e) {
-                console.error('Failed to load canonical blockchain', e)
-                setError('Failed to load blockchain')
-            } 
-            finally {
+            } catch (e) {
+                console.error(
+                    'Failed to load canonical blockchain from backend:',
+                    e
+                )
+
+                // OFFLINE / ERROR FALLBACK: use locally cached canonical blocks
+                const cachedBlocks = disasterStorage.getBlockchain() || []
+                if (cachedBlocks.length > 0) {
+                    console.log(
+                        'Using cached blockchain from localStorage for offline access'
+                    )
+                    setBlocks(cachedBlocks)
+                    // Optionally mark that we're in offline mode instead of a hard error
+                    setError(null)
+                } else {
+                    setError('Failed to load blockchain')
+                }
+            } finally {
                 setLoading(false)
             }
         }
@@ -69,30 +86,32 @@ export default function BlockList() {
 
     return (
         <div className="card">
-        <div className="card-header">
-            <h3>Blockchain ({blocks.length} blocks)</h3>
-        </div>
-        <div className="card-body">
-            {blocks
-            .slice()
-            .reverse()
-            .map((block) => (
-                <div key={block.block_index} className="block-item">
-                <div className="block-header">
-                    <span className="block-index">
-                        Block #{block.block_index}
-                    </span>
-                    <span className="block-time">
-                        {new Date(block.timestamp * 1000).toLocaleString()}
-                    </span>
-                </div>
-                <div className="block-hash">{block.hash}</div>
-                <div className="block-transactions">
-                    {block.transactions.length} transaction(s)
-                </div>
-                </div>
-            ))}
-        </div>
+            <div className="card-header">
+                <h3>Blockchain ({blocks.length} blocks)</h3>
+            </div>
+            <div className="card-body">
+                {blocks
+                    .slice()
+                    .reverse()
+                    .map((block) => (
+                        <div key={block.block_index} className="block-item">
+                            <div className="block-header">
+                                <span className="block-index">
+                                    Block #{block.block_index}
+                                </span>
+                                <span className="block-time">
+                                    {new Date(
+                                        block.timestamp * 1000
+                                    ).toLocaleString()}
+                                </span>
+                            </div>
+                            <div className="block-hash">{block.hash}</div>
+                            <div className="block-transactions">
+                                {block.transactions.length} transaction(s)
+                            </div>
+                        </div>
+                    ))}
+            </div>
         </div>
     )
 }

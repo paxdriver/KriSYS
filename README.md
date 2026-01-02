@@ -44,6 +44,8 @@ System designed for humanitarian crises – prioritizing reliability, privacy, a
 
 ### Anticipated Future Features
 - Device registration
+- Notifications
+
 - Station api key revocation
 - Provider setup wizard
 - Message threads

@@ -16,16 +16,18 @@ class DisasterStorage {
     constructor() {
         this.STORAGE_KEYS = {
             PRIVATE_KEY: 'krisys_private_key',
-            WALLET_DATA: 'krisys_wallet_data', 
-            BLOCKCHAIN: 'krisys_blockchain',        // DEV NOTE: This should be pruned based on lastest timestamp or something down the road
-            MESSAGE_QUEUE: 'krisys_message_queue',  // For message relaying when offline
-            PUBLIC_KEYS: 'krisys_public_keys',      // Other people's keys for encryption
+            WALLET_DATA: 'krisys_wallet_data',
+            BLOCKCHAIN: 'krisys_blockchain', // DEV NOTE: This should be pruned based on lastest timestamp or something down the road
+            MESSAGE_QUEUE: 'krisys_message_queue', // For message relaying when offline
+            PUBLIC_KEYS: 'krisys_public_keys', // Other people's keys for encryption
             SYNC_STATUS: 'krisys_sync_status',
-            CONFIRMED_RELAYS: 'krisys_confirmed_relays' // relay_hash for offline message queues / confirmations
+            CONFIRMED_RELAYS: 'krisys_confirmed_relays', // relay_hash for offline message queues / confirmations
         }
     }
 
-    deletePrivateKey(familyId) { // DEV NOTE: familyId might be needed if one device shared by a few families, but NOT at public device stations where users log in to public devices.
+    deletePrivateKey(familyId) {
+        // DEV NOTE: familyId might be needed if one device shared by a few families,
+        // but NOT at public device stations where users log in to public devices.
         console.log('Deleting invalid private key from localStorage')
         localStorage.removeItem(this.STORAGE_KEYS.PRIVATE_KEY)
     }
@@ -38,10 +40,13 @@ class DisasterStorage {
             privateKey: privateKey,
             storedAt: Date.now(),
             // Add device identifier for multi-device sync later
-            deviceId: this.getDeviceId()
+            deviceId: this.getDeviceId(),
         }
-        
-        localStorage.setItem(this.STORAGE_KEYS.PRIVATE_KEY, JSON.stringify(keyData))
+
+        localStorage.setItem(
+            this.STORAGE_KEYS.PRIVATE_KEY,
+            JSON.stringify(keyData)
+        )
         console.log('Private key stored locally - user can read messages offline!')
     }
 
@@ -62,18 +67,81 @@ class DisasterStorage {
         return keyData.privateKey
     }
 
+    // WALLET DATA STORAGE - per-family cached wallet metadata for offline use
+    saveWalletData(familyId, walletData) {
+        console.log('Storing wallet metadata locally for offline access')
+        const stored = localStorage.getItem(this.STORAGE_KEYS.WALLET_DATA)
+        const map = stored ? JSON.parse(stored) : {}
+
+        map[familyId] = {
+            data: walletData,
+            storedAt: Date.now(),
+        }
+
+        localStorage.setItem(
+            this.STORAGE_KEYS.WALLET_DATA,
+            JSON.stringify(map)
+        )
+    }
+
+    getWalletData(familyId) {
+        const stored = localStorage.getItem(this.STORAGE_KEYS.WALLET_DATA)
+        if (!stored) return null
+
+        try {
+            const map = JSON.parse(stored)
+            const entry = map[familyId]
+            return entry ? entry.data : null
+        } catch (e) {
+            console.error('Failed to parse cached wallet data:', e)
+            return null
+        }
+    }
+
     // BLOCKCHAIN STORAGE - Store entire blockchain locally
+    // DEV / TODO: battery-saving + pruning strategy
+    /*
+        Phase 3+ (later work), we will extend this to:
+        - Respect a user "battery saving mode" toggle that controls how
+          aggressively the app scans neighbours (Bluetooth/Wi‑Fi/WebRTC)
+          for new sync payloads and blocks. That scanning logic will live
+          in higher-level hooks/services, but it will use this storage
+          (BLOCKCHAIN + WALLET_DATA + MESSAGE_QUEUE) as its backing store.
+        - Add pruning rules so we do NOT keep the full chain forever on
+          each device. Examples:
+            * Only keep the last N blocks or last M days.
+            * Apply a size budget per device (e.g. max X MB for chain data).
+            * Prefer keeping blocks that contain this wallet’s own
+              transactions over totally unrelated history.
+        Right now we:
+            - dump the full canonical chain into localStorage,
+            - never prune it,
+            - and do not differentiate per-crisis or per-wallet.
+        This is acceptable for small dev chains, but MUST be revisited
+        before production / large deployments.
+    */
     saveBlockchain(blockchain) {
         console.log('Storing blockchain locally for offline access')
-        localStorage.setItem(this.STORAGE_KEYS.BLOCKCHAIN, JSON.stringify({
-            blocks: blockchain,
-            lastUpdated: Date.now()
-        }))
+        localStorage.setItem(
+            this.STORAGE_KEYS.BLOCKCHAIN,
+            JSON.stringify({
+                blocks: blockchain,
+                lastUpdated: Date.now(),
+            })
+        )
     }
 
     getBlockchain() {
         const stored = localStorage.getItem(this.STORAGE_KEYS.BLOCKCHAIN)
-        return stored ? JSON.parse(stored).blocks : []
+        if (!stored) return []
+
+        try {
+            const parsed = JSON.parse(stored)
+            return parsed.blocks || []
+        } catch (e) {
+            console.error('Failed to parse cached blockchain:', e)
+            return []
+        }
     }
 
     // MESSAGE QUEUE - Store messages to send when connectivity returns
@@ -84,9 +152,12 @@ class DisasterStorage {
             ...message,
             queuedAt: Date.now(),
             attempts: 0,
-            status: 'pending'
+            status: 'pending',
         })
-        localStorage.setItem(this.STORAGE_KEYS.MESSAGE_QUEUE, JSON.stringify(queue))
+        localStorage.setItem(
+            this.STORAGE_KEYS.MESSAGE_QUEUE,
+            JSON.stringify(queue)
+        )
     }
 
     getMessageQueue() {
@@ -100,9 +171,12 @@ class DisasterStorage {
         const keys = this.getPublicKeys()
         keys[familyId] = {
             publicKey: publicKey,
-            storedAt: Date.now()
+            storedAt: Date.now(),
         }
-        localStorage.setItem(this.STORAGE_KEYS.PUBLIC_KEYS, JSON.stringify(keys))
+        localStorage.setItem(
+            this.STORAGE_KEYS.PUBLIC_KEYS,
+            JSON.stringify(keys)
+        )
     }
 
     getPublicKeys() {
@@ -114,7 +188,11 @@ class DisasterStorage {
     getDeviceId() {
         let deviceId = localStorage.getItem('krisys_device_id')
         if (!deviceId) {
-            deviceId = 'device_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9)
+            deviceId =
+                'device_' +
+                Date.now() +
+                '_' +
+                Math.random().toString(36).substr(2, 9)
             localStorage.setItem('krisys_device_id', deviceId)
         }
         return deviceId
@@ -139,7 +217,7 @@ class DisasterStorage {
         const confirmed = this.getConfirmedRelays()
         confirmed[relayHash] = {
             confirmedAt: Date.now(),
-            ...info
+            ...info,
         }
         localStorage.setItem(
             this.STORAGE_KEYS.CONFIRMED_RELAYS,
@@ -147,8 +225,8 @@ class DisasterStorage {
         )
         console.log(`Marked relay as confirmed: ${relayHash}`)
     }
-    
-    // Remove from the local queue any messages whose relay_hash has been marked as confirmed. Returns the new queue array. 
+
+    // Remove from the local queue any messages whose relay_hash has been marked as confirmed. Returns the new queue array.
     pruneConfirmedFromQueue() {
         const queue = this.getMessageQueue()
         const confirmed = this.getConfirmedRelays()
@@ -157,15 +235,15 @@ class DisasterStorage {
             return queue
         }
 
-        const filtered = queue.filter(msg => {
+        const filtered = queue.filter((msg) => {
             const rh = msg.relay_hash
 
             // Legacy/sent entries without relay_hash can be safely dropped
             if (!rh && msg.status === 'sent') return false
-            
+
             // Normal path: to drop queued messages if this messaged was successfully relayed to blockchain
             if (!rh) return true // keep items without relay_hash
-            
+
             return !confirmed[rh]
         })
 
@@ -175,10 +253,13 @@ class DisasterStorage {
         )
 
         // DEV LOG
-        console.log(`Pruned ${ queue.length - filtered.length } confirmed messages from queue`)
+        console.log(
+            `Pruned ${queue.length - filtered.length} confirmed messages from queue`
+        )
 
         return filtered
     }
+
     // Syncing messages between blockchain diffs, used with pruneConfirmedFromQueue
     syncConfirmedFromTransactions(transactions) {
         if (!Array.isArray(transactions) || transactions.length === 0) {
@@ -197,7 +278,7 @@ class DisasterStorage {
             confirmed[relayHash] = {
                 confirmedAt: Date.now(),
                 txId: tx.transaction_id,
-                timestampPosted: tx.timestamp_posted
+                timestampPosted: tx.timestamp_posted,
             }
             updated = true
         }
@@ -211,7 +292,8 @@ class DisasterStorage {
         }
     }
 
-    /*  Build a payload to sync with another device.
+    /*
+        Build a payload to sync with another device.
         Includes:
             - this device's ID
             - unconfirmed, pending queued messages
@@ -234,10 +316,12 @@ class DisasterStorage {
             deviceId: this.getDeviceId(),
             generatedAt: Date.now(),
             queued: queuedForSync,
-            confirmed
+            confirmed,
         }
     }
-    /*  Merge another device's sync payload into local storage.
+
+    /*
+        Merge another device's sync payload into local storage.
             - Incorporates their confirmed relays
             - Adds any new, unconfirmed queued messages we don't already have
             - Then prunes any messages that are now confirmed
@@ -253,7 +337,7 @@ class DisasterStorage {
             ? payload.queued
             : []
         const incomingConfirmed =
-            (payload.confirmed && typeof payload.confirmed === 'object')
+            payload.confirmed && typeof payload.confirmed === 'object'
                 ? payload.confirmed
                 : {}
 
@@ -282,7 +366,7 @@ class DisasterStorage {
                 if (incomingTime < existingTime) {
                     localConfirmed[relayHash] = {
                         ...existing,
-                        ...info
+                        ...info,
                     }
                     confirmedChanged = true
                 }
@@ -330,7 +414,7 @@ class DisasterStorage {
                 status: msg.status || 'pending',
                 attempts:
                     typeof msg.attempts === 'number' ? msg.attempts : 0,
-                queuedAt: msg.queuedAt || Date.now()
+                queuedAt: msg.queuedAt || Date.now(),
             }
 
             queue.push(normalized)
@@ -350,7 +434,7 @@ class DisasterStorage {
 
     // UTILITY - Clear all data (for testing/reset)
     clearAll() {
-        Object.values(this.STORAGE_KEYS).forEach(key => {
+        Object.values(this.STORAGE_KEYS).forEach((key) => {
             localStorage.removeItem(key)
         })
         console.log('Cleared all local storage')
