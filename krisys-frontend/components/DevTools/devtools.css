@@ -107,8 +107,22 @@
         font-size: 0.8rem;
     }
 }
-
 /* Adjust main content to account for dev tools */
 .dashboard-container {
     margin-top: 3rem;
+}
+
+/* Mesh P2P status indicators */
+.mesh-status {
+    display: inline-flex;
+    gap: 8px;
+    margin-left: 12px;
+    font-size: 11px;
+    opacity: 0.85;
+}
+.mesh-status span::after {
+    content: ' • ';
+}
+.mesh-status span:last-child::after {
+    content: '';
 }
