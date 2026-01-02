@@ -22,9 +22,15 @@ export default function BlockList() {
                     api.getCrisisInfo(),
                     api.getBlockchain(),
                 ])
-
-                const blockPublicKey = crisisRes.data.block_public_key
+                
+                const crisisData = crisisRes.data
+                const blockPublicKey = crisisData.block_public_key
                 const allBlocks = chainRes.data || []
+
+                // Cache crisis metadata (including block_public_key) for offline use
+                if (crisisData) {
+                    disasterStorage.saveCrisisMetadata(crisisData)
+                }
 
                 // Only keep blocks whose signatures verify with the crisis key
                 const canonicalBlocks = await filterCanonicalBlocks(

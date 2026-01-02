@@ -17,14 +17,16 @@ class DisasterStorage {
         this.STORAGE_KEYS = {
             PRIVATE_KEY: 'krisys_private_key',
             WALLET_DATA: 'krisys_wallet_data',
-            BLOCKCHAIN: 'krisys_blockchain', // DEV NOTE: This should be pruned based on lastest timestamp or something down the road
-            MESSAGE_QUEUE: 'krisys_message_queue', // For message relaying when offline
-            PUBLIC_KEYS: 'krisys_public_keys', // Other people's keys for encryption
+            BLOCKCHAIN: 'krisys_blockchain',        // DEV NOTE: This should be pruned based on lastest timestamp or something down the road
+            MESSAGE_QUEUE: 'krisys_message_queue',  // For message relaying when offline
+            PUBLIC_KEYS: 'krisys_public_keys',      // Other people's keys for encryption
             SYNC_STATUS: 'krisys_sync_status',
             CONFIRMED_RELAYS: 'krisys_confirmed_relays', // relay_hash for offline message queues / confirmations
+            CRISIS_METADATA: 'krisys_crisis_metadata'    // crisis id + block_public_key for offline block verification
         }
     }
 
+    // DEV NOTE: NOT yet used
     deletePrivateKey(familyId) {
         // DEV NOTE: familyId might be needed if one device shared by a few families,
         // but NOT at public device stations where users log in to public devices.
@@ -94,6 +96,42 @@ class DisasterStorage {
             return entry ? entry.data : null
         } catch (e) {
             console.error('Failed to parse cached wallet data:', e)
+            return null
+        }
+    }
+
+    // CRISIS METADATA STORAGE - e.g. crisis id, name, block_public_key
+    saveCrisisMetadata(meta) {
+        try {
+            localStorage.setItem(
+                this.STORAGE_KEYS.CRISIS_METADATA,
+                JSON.stringify({
+                    id: meta.id || meta.crisis_id || null,
+                    name: meta.name || null,
+                    organization: meta.organization || null,
+                    contact: meta.contact || null,
+                    description: meta.description || null,
+                    created_at: meta.created_at || null,
+                    // Backend may expose this as block_public_key or public_key; normalize here
+                    block_public_key:
+                        meta.block_public_key || meta.public_key || null,
+                    storedAt: Date.now()
+                })
+            )
+        } 
+        catch (e) {
+            console.error('Failed to save crisis metadata:', e)
+        }
+    }
+    getCrisisMetadata() {
+        const stored = localStorage.getItem(
+            this.STORAGE_KEYS.CRISIS_METADATA
+        )
+        if (!stored) return null
+        try {
+            return JSON.parse(stored)
+        } catch (e) {
+            console.error('Failed to parse crisis metadata:', e)
             return null
         }
     }
@@ -292,33 +330,96 @@ class DisasterStorage {
         }
     }
 
-    /*
-        Build a payload to sync with another device.
-        Includes:
-            - this device's ID
-            - unconfirmed, pending queued messages
-            - full confirmed-relays map
+    /*  Build a payload to sync with another device.
 
-        TODO - via a simple JSON payload we're only defining the data model and merge logic here; actually transmitting it (QR / file / WebRTC / etc.) comes later.
+        SCHEMA (version 1):
+        {
+            version: 1,
+            deviceId: string,
+            crisisId: string | null,      // TODO: populate from crisis metadata later
+            generatedAt: number,          // ms since epoch
+            chain_tip: {
+                block_index: number,
+                hash: string,
+                previous_hash: string
+            } | null,
+            blocks: [],                   // reserved for future block-level sync
+            queued: MessageTx[],
+            confirmed: {
+                [relayHash: string]: {
+                    confirmedAt?: number,
+                    txId?: string,
+                    timestampPosted?: number,
+                    // ... extra metadata
+                }
+            }
+        }
+
+        For now (Step 3), we only actively use:
+            - queued   : pending messages to relay
+            - confirmed: map of relay_hash -> confirmation info
+
+        The chain_tip + blocks fields are placeholders that we will start
+        filling and merging in a later step when we implement full
+        block-level mesh sync between devices.
+
+        NOTE: This payload is intentionally self-contained and versioned so
+        that:
+            - older clients can ignore newer fields safely,
+            - we can extend it as we add features (battery-saving modes,
+              pruning policies, partial chain segments, etc.).
     */
     exportSyncPayload() {
-        const queue = this.getMessageQueue()
-        const confirmed = this.getConfirmedRelays()
+            const queue = this.getMessageQueue()
+            const confirmed = this.getConfirmedRelays()
 
-        // Only pending messages that are not already confirmed
-        const queuedForSync = queue.filter(
-            (msg) =>
-                msg.status === 'pending' &&
-                !this.isMessageConfirmed(msg.relay_hash)
-        )
+            // Only pending messages that are not already confirmed
+            const queuedForSync = queue.filter(
+                (msg) =>
+                    msg.status === 'pending' &&
+                    !this.isMessageConfirmed(msg.relay_hash)
+            )
 
-        return {
-            deviceId: this.getDeviceId(),
-            generatedAt: Date.now(),
-            queued: queuedForSync,
-            confirmed,
+            // Crisis metadata (if we have it) for sanity-checking that peers are
+            // syncing the same crisis / blockchain.
+            const crisisMeta = this.getCrisisMetadata()
+
+            // Look at our locally cached blockchain to expose a simple "tip"
+            // pointer and a small suffix of canonical blocks.
+            const blocks = this.getBlockchain() || []
+            const lastBlock =
+                Array.isArray(blocks) && blocks.length > 0
+                    ? blocks[blocks.length - 1]
+                    : null
+
+            // Share only the last N canonical blocks to limit payload size.
+            // Later, we can make this configurable (battery / storage policy).
+            const MAX_BLOCKS_SHARE = 10
+            const blocksToShare =
+                Array.isArray(blocks) && blocks.length > 0
+                    ? blocks.slice(-MAX_BLOCKS_SHARE)
+                    : []
+
+            return {
+                version: 1,
+                deviceId: this.getDeviceId(),
+                crisisId: crisisMeta ? crisisMeta.id : null,
+                generatedAt: Date.now(),
+                chain_tip: lastBlock
+                    ? {
+                        block_index: lastBlock.block_index,
+                        hash: lastBlock.hash,
+                        previous_hash: lastBlock.previous_hash
+                    }
+                    : null,
+                // NOTE: receiver currently ignores this.blocks; in the next step
+                // we will implement block-level merge logic in importSyncPayload,
+                // using the crisis block_public_key to verify signatures.
+                blocks: blocksToShare,
+                queued: queuedForSync,
+                confirmed
+            }
         }
-    }
 
     /*
         Merge another device's sync payload into local storage.

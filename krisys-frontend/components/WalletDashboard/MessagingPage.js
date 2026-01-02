@@ -9,7 +9,9 @@ import { KeyManager } from '@/services/keyManager'
 import TransactionItem from './TransactionItem'
 
 export default function MessagingPage({ walletData, transactions, privateKey }) {
-    const [selectedRecipient, setSelectedRecipient] = useState('')
+    const [senderAddress, setSenderAddress] = useState('')
+    const [selectedRecipients, setSelectedRecipients] = useState([])
+    const [manualRecipientInput, setManualRecipientInput] = useState('')
     const [messageText, setMessageText] = useState('')
     const [sending, setSending] = useState(false)
     const [error, setError] = useState('')
@@ -19,6 +21,13 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
         () => walletData?.members?.map((m) => m.address) || [],
         [walletData?.members]
     )
+
+    // Initialise senderAddress to first member when wallet data is available
+    useEffect(() => {
+        if (!senderAddress && myAddresses.length > 0) {
+            setSenderAddress(myAddresses[0])
+        }
+    }, [myAddresses, senderAddress])
 
     // Canonical, on-chain messages involving this wallet (sent or received)
     const myMessages = useMemo(() => {
@@ -122,81 +131,168 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
         )
     }, [myMessages, queuedMyMessages])
 
+    // Pre-select recipient from URL (e.g. from Contacts page)
     useEffect(() => {
         const urlRecipient = searchParams.get('recipient')
-        if (urlRecipient) setSelectedRecipient(urlRecipient)
+        if (urlRecipient) {
+            setSelectedRecipients((prev) =>
+                prev.includes(urlRecipient)
+                    ? prev
+                    : [...prev, urlRecipient]
+            )
+        }
     }, [searchParams])
+
+    // Toggle a member as recipient
+    const toggleRecipient = (address) => {
+        setSelectedRecipients((prev) =>
+            prev.includes(address)
+                ? prev.filter((a) => a !== address)
+                : [...prev, address]
+        )
+    }
+
+    // Add manual recipient from input
+    const handleAddManualRecipient = () => {
+        const value = manualRecipientInput.trim()
+        if (!value) return
+
+        setSelectedRecipients((prev) =>
+            prev.includes(value) ? prev : [...prev, value]
+        )
+        setManualRecipientInput('')
+    }
+
+    // Utility: derive familyId from an address
+    const getFamilyIdFromAddress = (address) => {
+        return address.includes('-')
+            ? address.split('-').slice(0, -1).join('-')
+            : address
+    }
 
     const sendMessage = async (e) => {
         e.preventDefault()
-        if (!selectedRecipient || !messageText.trim()) return
+        if (selectedRecipients.length === 0 || !messageText.trim()) return
 
         setSending(true)
         setError('')
 
         try {
-            // Extract family ID from recipient address
-            const familyId = selectedRecipient.includes('-')
-                ? selectedRecipient.split('-').slice(0, -1).join('-')
-                : selectedRecipient
+            // Determine which address we're sending from
+            const fromAddress =
+                senderAddress || (myAddresses.length > 0
+                    ? myAddresses[0]
+                    : null)
 
-            // Use KeyManager for encryption
-            const encryptedMessage = await KeyManager.encryptMessage(
-                messageText,
-                familyId
-            )
-
-            // Create a stable per-message ID for offline relay
-            const relayHash =
-                (typeof window !== 'undefined' &&
-                    window.crypto &&
-                    window.crypto.randomUUID &&
-                    window.crypto.randomUUID()) ||
-                `${Date.now()}_${Math.random()
-                    .toString(36)
-                    .slice(2)}`
-
-            // Create transaction
-            const transaction = {
-                timestamp_created: Date.now() / 1000,
-                station_address: myAddresses[0],
-                message_data: encryptedMessage,
-                related_addresses: [selectedRecipient],
-                type_field: 'message',
-                priority_level: 5,
-                relay_hash: relayHash, // <- used for offline relay & confirmation
-                origin_device: disasterStorage.getDeviceId(), // <- extra metadata, server ignores
+            if (!fromAddress) {
+                setError('No sender address available in this wallet')
+                setSending(false)
+                return
             }
 
-            // Send or queue
-            try {
-                await api.addTransaction(transaction)
-                console.log('📡 Message sent online immediately')
-                alert('Message sent!')
-            } catch (error) {
-                if (error.isNetworkError) {
-                    console.log(
-                        '📱 No connection - queueing message for later transmission'
+            // Group recipients by familyId so each family gets one tx
+            const groups = {}
+            for (const addr of selectedRecipients) {
+                const fid = getFamilyIdFromAddress(addr)
+                if (!groups[fid]) groups[fid] = []
+                groups[fid].push(addr)
+            }
+
+            let totalGroups = 0
+            let queuedCount = 0
+
+            for (const [familyId, addrs] of Object.entries(groups)) {
+                totalGroups++
+
+                try {
+                    // Encrypt once per recipient family
+                    const encryptedMessage =
+                        await KeyManager.encryptMessage(
+                            messageText,
+                            familyId
+                        )
+
+                    // Stable per-message ID for offline relay
+                    const relayHash =
+                        (typeof window !== 'undefined' &&
+                            window.crypto &&
+                            window.crypto.randomUUID &&
+                            window.crypto.randomUUID()) ||
+                        `${Date.now()}_${Math.random()
+                            .toString(36)
+                            .slice(2)}`
+
+                    const transaction = {
+                        timestamp_created: Date.now() / 1000,
+                        station_address: fromAddress,
+                        message_data: encryptedMessage,
+                        related_addresses: addrs, // all recipients in this family
+                        type_field: 'message',
+                        priority_level: 5,
+                        relay_hash: relayHash,
+                        origin_device: disasterStorage.getDeviceId(),
+                    }
+
+                    try {
+                        await api.addTransaction(transaction)
+                        console.log(
+                            '📡 Message sent online for family group',
+                            familyId
+                        )
+                    } catch (error) {
+                        if (error.isNetworkError) {
+                            console.log(
+                                '📱 No connection - queueing message for family group',
+                                familyId
+                            )
+                            disasterStorage.queueMessage(transaction)
+                            queuedCount++
+                        } else {
+                            console.error(
+                                'Application error while sending to family group',
+                                familyId,
+                                error
+                            )
+                            setError(
+                                error.message ||
+                                    'Failed to send message to one or more recipients'
+                            )
+                        }
+                    }
+                } catch (err) {
+                    console.error(
+                        'Encryption or send failed for family group',
+                        familyId,
+                        err
                     )
-                    disasterStorage.queueMessage(transaction)
-                    alert(
-                        '📱 No internet - message queued for transmission when connected'
+                    setError(
+                        err.message ||
+                            'Encryption failed for one or more recipient groups'
                     )
-                } else {
-                    console.error('Application error:', error.message)
-                    setError(error.message || 'Failed to send message')
                 }
             }
 
+            if (queuedCount > 0) {
+                alert(
+                    `Messages queued for ${queuedCount} recipient group(s); they will be sent when online.`
+                )
+            } else {
+                alert(
+                    `Message sent to ${totalGroups} recipient group(s).`
+                )
+            }
+
             setMessageText('')
-            setSelectedRecipient('')
-            setError('')
+            setSelectedRecipients([])
+            setManualRecipientInput('')
         } catch (err) {
             setError(err.message || 'Failed to send message')
         } finally {
             setSending(false)
         }
     }
+
+    const hasRecipients = selectedRecipients.length > 0
 
     return (
         <div id="messaging-page" className="page">
@@ -211,24 +307,67 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
                 </div>
                 <div className="card-body">
                     <form onSubmit={sendMessage}>
+                        {/* Sender selection */}
+                        <div className="form-group">
+                            <label>Send as:</label>
+                            <div className="member-buttons">
+                                {walletData?.members?.map((member) => (
+                                    <button
+                                        key={member.address}
+                                        type="button"
+                                        className={`member-btn ${
+                                            senderAddress ===
+                                            member.address
+                                                ? 'selected'
+                                                : ''
+                                        }`}
+                                        onClick={() =>
+                                            setSenderAddress(
+                                                member.address
+                                            )
+                                        }
+                                        disabled={sending}
+                                    >
+                                        <ContactName
+                                            address={member.address}
+                                            isUnlocked={!!privateKey}
+                                        />
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
                         <div className="form-group">
                             <label>Send to:</label>
 
-                            {/* Manual Address Input - Always visible */}
+                            {/* Manual Address Input */}
                             <div className="manual-address-input">
                                 <input
                                     type="text"
-                                    value={selectedRecipient}
+                                    value={manualRecipientInput}
                                     onChange={(e) =>
-                                        setSelectedRecipient(e.target.value)
+                                        setManualRecipientInput(
+                                            e.target.value
+                                        )
                                     }
                                     className="form-input"
                                     placeholder="Paste wallet address (e.g. familyId-memberId)"
                                     disabled={sending}
                                 />
+                                <button
+                                    type="button"
+                                    className="btn"
+                                    onClick={handleAddManualRecipient}
+                                    disabled={
+                                        sending ||
+                                        !manualRecipientInput.trim()
+                                    }
+                                >
+                                    Add recipient
+                                </button>
                                 <p className="input-hint">
                                     💡 Enter any wallet address manually, or
-                                    select from your family members below
+                                    select from your family members below.
                                 </p>
                             </div>
 
@@ -243,13 +382,14 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
                                             key={member.address}
                                             type="button"
                                             className={`member-btn ${
-                                                selectedRecipient ===
-                                                member.address
+                                                selectedRecipients.includes(
+                                                    member.address
+                                                )
                                                     ? 'selected'
                                                     : ''
                                             }`}
                                             onClick={() =>
-                                                setSelectedRecipient(
+                                                toggleRecipient(
                                                     member.address
                                                 )
                                             }
@@ -264,26 +404,41 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
                                 </div>
                             </div>
 
-                            {/* Selected Contact Display */}
-                            {selectedRecipient && (
+                            {/* Selected Contacts Display */}
+                            {hasRecipients && (
                                 <div className="selected-contact-display">
                                     <span className="selected-label">
                                         Sending to:{' '}
                                     </span>
-                                    <ContactName
-                                        address={selectedRecipient}
-                                        isUnlocked={!!privateKey}
-                                    />
-                                    <button
-                                        type="button"
-                                        className="clear-recipient"
-                                        onClick={() =>
-                                            setSelectedRecipient('')
-                                        }
-                                        title="Clear recipient"
-                                    >
-                                        ✕
-                                    </button>
+                                    <span className="selected-list">
+                                        {selectedRecipients.map(
+                                            (addr) => (
+                                                <span
+                                                    key={addr}
+                                                    className="selected-chip"
+                                                >
+                                                    <ContactName
+                                                        address={addr}
+                                                        isUnlocked={
+                                                            !!privateKey
+                                                        }
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        className="clear-recipient"
+                                                        onClick={() =>
+                                                            toggleRecipient(
+                                                                addr
+                                                            )
+                                                        }
+                                                        title="Remove recipient"
+                                                    >
+                                                        ✕
+                                                    </button>
+                                                </span>
+                                            )
+                                        )}
+                                    </span>
                                 </div>
                             )}
                         </div>
@@ -307,7 +462,7 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
                             className="btn"
                             disabled={
                                 sending ||
-                                !selectedRecipient ||
+                                !hasRecipients ||
                                 !messageText.trim()
                             }
                         >

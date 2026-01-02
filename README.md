@@ -23,6 +23,7 @@ System designed for humanitarian crises – prioritizing reliability, privacy, a
 - React/Next.js frontend with component-based architecture
 - PGP key management system with KeyManager abstraction
 - Contact management (names replacing addresses, edited and stored locally)
+- Sent From and multiple recipients in messages
 - Client-side message encryption and decryption
 - Docker containerized development environment
 - Real-time blockchain explorer
