@@ -10,40 +10,42 @@ export default function UnlockForm({ familyId, onUnlock }) {
     const [validating, setValidating] = useState(true)
     const [isFirstTime, setIsFirstTime] = useState(false)
     
-    // CHECK FOR EXISTING LOCAL KEY ON COMPONENT LOAD WITH VALIDATION
+    // CHECK FOR EXISTING LOCAL KEY ON COMPONENT LOAD (OFFLINE-SAFE)
     useEffect(() => {
         const checkExistingKey = async () => {
-            console.log('🔍 Checking for existing validated private key...')
+            console.log('🔍 Checking for existing cached private key...')
             setValidating(true)
-            
+
             try {
-                // Try to get cached key first (won't make server request if no cache)
                 const cachedKey = localStorage.getItem('krisys_private_key')
                 if (cachedKey) {
                     const keyData = JSON.parse(cachedKey)
-                    if (keyData.familyId === familyId) {
-                        // Validate cached key
-                        const isValid = await KeyManager.validatePrivateKey(familyId, keyData.privateKey)
-                        if (isValid) {
-                            console.log('✅ Found valid cached key! Auto-unlocking...')
-                            setTimeout(() => onUnlock(keyData.privateKey), 0)
-                            return
-                        }
+                    if ( keyData.familyId === familyId && keyData.privateKey) {
+                        console.log(
+                            'Found cached private key for this wallet. Auto-unlocking without server (offline-safe).'
+                        )
+                        setTimeout( () => onUnlock(keyData.privateKey), 0 )
+                        
+                        return
                     }
                 }
-                
-                // No valid cached key - this might be first time for new wallet
-                console.log('📝 No valid cached key - user needs to unlock manually')
+
+                console.log(
+                    'No cached key for this wallet - user needs to unlock online at least once.'
+                )
                 setIsFirstTime(true)
-                
-            } catch (error) {
-                console.log('⚠️ Auto-unlock failed - user needs to enter passphrase')
+            } 
+            catch (error) {
+                console.log(
+                    '⚠️ Auto-unlock check failed - user needs to enter passphrase'
+                )
                 setIsFirstTime(true)
-            } finally {
+            } 
+            finally {
                 setValidating(false)
             }
         }
-        
+
         checkExistingKey()
     }, [familyId, onUnlock])
 
@@ -104,7 +106,7 @@ export default function UnlockForm({ familyId, onUnlock }) {
                 </p>
             )}
             <p className="unlock-hint">
-                💡 Your validated key will be stored locally for offline message access
+                Your validated key will be stored locally for offline message access
             </p>
             <label>Enter Passphrase:</label>
             <input 
@@ -129,10 +131,10 @@ export default function UnlockForm({ familyId, onUnlock }) {
                     <summary>🔒 Security Info</summary>
                     <p>Your private key is:</p>
                     <ul>
-                        <li>✅ Encrypted with your passphrase</li>
-                        <li>✅ Validated against your wallet</li>
-                        <li>✅ Stored locally for offline access</li>
-                        <li>✅ Never seen by the server in plain text</li>
+                        <li>Encrypted with your passphrase</li>
+                        <li>Validated against your wallet</li>
+                        <li>Stored locally for offline access</li>
+                        <li>Never seen by the server in plain text</li>
                     </ul>
                 </details>
             </div>

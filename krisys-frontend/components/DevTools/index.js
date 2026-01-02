@@ -263,15 +263,17 @@ export default function DevTools({ onRefresh }) {
             }
         }
 
-    const handleImportSync = () => {
+    const handleImportSync = async () => {
         const input = window.prompt('Paste sync payload JSON:')
         if (!input) return
 
         try {
             const payload = JSON.parse(input)
             console.log('Importing KriSYS sync payload:', payload)
-            disasterStorage.importSyncPayload(payload)
-            alert('Sync payload imported. Local queue and confirmations updated.')
+            await disasterStorage.importSyncPayload(payload)
+            alert(
+                'Sync payload imported. Local queue, confirmations, and blocks updated.'
+            )
             if (onRefresh) onRefresh()
         } catch (error) {
             console.error('Failed to import sync payload:', error)

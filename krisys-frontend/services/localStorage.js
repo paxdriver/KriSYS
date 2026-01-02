@@ -1,4 +1,5 @@
 // services/localStorage.js
+import { verifyBlockSignature } from './blockVerifier'
 
 /*
   LOCAL STORAGE FOR DISASTER COMMUNICATION
@@ -429,7 +430,7 @@ class DisasterStorage {
         
         TODO - via a simple JSON payload we're only defining the data model and merge logic here; actually transmitting it (QR / file / WebRTC / etc.) comes later.
     */
-    importSyncPayload(payload) {
+    async importSyncPayload(payload) {
         if (!payload || typeof payload !== 'object') {
             return
         }
@@ -445,10 +446,12 @@ class DisasterStorage {
         /* 1) Merge confirmed-relay map
             - Takes the incoming confirmed object.
             - For each relayHash:
-            - If you have no local entry, you store theirs.
-         	- If you both have entries and both have confirmedAt, you keep the one with the earlier confirmedAt (not strictly required, but keeps deterministic-ish data).
+              - If you have no local entry, you store theirs.
+              - If you both have entries and both have confirmedAt,
+                you keep the one with the earlier confirmedAt (not strictly
+                required, but keeps deterministic-ish data).
+            - Writes back the merged CONFIRMED_RELAYS if anything changed.
         */
-        // - Writes back the merged CONFIRMED_RELAYS if anything changed.
         const localConfirmed = this.getConfirmedRelays()
         let confirmedChanged = false
 
@@ -467,7 +470,7 @@ class DisasterStorage {
                 if (incomingTime < existingTime) {
                     localConfirmed[relayHash] = {
                         ...existing,
-                        ...info,
+                        ...info
                     }
                     confirmedChanged = true
                 }
@@ -515,7 +518,7 @@ class DisasterStorage {
                 status: msg.status || 'pending',
                 attempts:
                     typeof msg.attempts === 'number' ? msg.attempts : 0,
-                queuedAt: msg.queuedAt || Date.now(),
+                queuedAt: msg.queuedAt || Date.now()
             }
 
             queue.push(normalized)
@@ -531,6 +534,168 @@ class DisasterStorage {
 
         // 3) Final cleanup: remove any now-confirmed items from queue
         this.pruneConfirmedFromQueue()
+
+        // 4) Merge any incoming blocks (canonical, server-signed) from payload
+        await this._mergeBlocksFromPayload(payload)
+    }
+
+    /*
+        Merge canonical blocks from a peer's sync payload into the local
+        cached blockchain.
+
+        Rules (simple, conservative):
+        - Require crisis block_public_key to be present locally so we can
+          verify PGP signatures.
+        - If we have NO local blocks yet:
+            * Accept any incoming blocks whose signatures verify.
+            * Sort them by block_index ascending and store them as our local
+              chain fragment (we may only have the last N blocks; that's OK).
+        - If we DO have local blocks:
+            * Build a map of block_index -> local block.
+            * For each incoming block (sorted by index):
+                - If we already have that index:
+                    - If hashes match: skip (duplicate).
+                    - If hashes differ: log a warning (fork) and ignore incoming.
+                - If we don't have that index:
+                    - Only accept if:
+                        block_index === local_tip_index + 1 AND
+                        previous_hash === local_tip_hash AND
+                        signature verifies.
+                    - Then append to local chain and move tip forward.
+        - We do NOT yet attempt complex fork resolution or gap-filling.
+    */
+    async _mergeBlocksFromPayload(payload) {
+        const incomingBlocks = Array.isArray(payload.blocks)
+            ? payload.blocks
+            : []
+        if (!incomingBlocks.length) return
+
+        const crisisMeta = this.getCrisisMetadata()
+        const blockPublicKey = crisisMeta?.block_public_key
+        if (!blockPublicKey) {
+            console.warn(
+                'No crisis block_public_key available; skipping block merge from sync payload.'
+            )
+            return
+        }
+
+        let localBlocks = this.getBlockchain() || []
+        if (!Array.isArray(localBlocks)) {
+            localBlocks = []
+        }
+
+        // Sort incoming by block_index (ascending)
+        const sortedIncoming = incomingBlocks
+            .filter(
+                (b) =>
+                    b &&
+                    typeof b.block_index === 'number' &&
+                    Number.isFinite(b.block_index)
+            )
+            .sort((a, b) => a.block_index - b.block_index)
+
+        if (!localBlocks.length) {
+            // No local chain yet: accept any verified blocks as a fragment.
+            const accepted = []
+            for (const block of sortedIncoming) {
+                try {
+                    const ok = await verifyBlockSignature(
+                        block,
+                        blockPublicKey
+                    )
+                    if (!ok) {
+                        console.warn(
+                            `Incoming block #${block.block_index} failed signature verification; skipped.`
+                        )
+                        continue
+                    }
+                    accepted.push(block)
+                } catch (e) {
+                    console.error(
+                        'Error verifying incoming block signature:',
+                        e
+                    )
+                }
+            }
+
+            if (accepted.length) {
+                this.saveBlockchain(accepted)
+                console.log(
+                    `Imported ${accepted.length} canonical block(s) from peer into empty local chain.`
+                )
+            }
+            return
+        }
+
+        // We already have a local chain: only append clean extensions of the tip.
+        const existingByIndex = new Map(
+            localBlocks.map((b) => [b.block_index, b])
+        )
+        let tip = localBlocks[localBlocks.length - 1]
+        let appended = 0
+
+        for (const block of sortedIncoming) {
+            const idx = block.block_index
+
+            // If we already have this index, check for conflict or duplicate.
+            if (existingByIndex.has(idx)) {
+                const localBlock = existingByIndex.get(idx)
+                if (localBlock.hash !== block.hash) {
+                    console.warn(
+                        `Incoming block at index ${idx} conflicts with local block (different hash). Ignoring incoming block.`
+                    )
+                }
+                continue
+            }
+
+            // Only accept direct tip extensions for now.
+            if (idx !== tip.block_index + 1) {
+                // Not contiguous; ignore for this simple implementation.
+                continue
+            }
+            if (block.previous_hash !== tip.hash) {
+                // Does not link to our current tip; ignore.
+                continue
+            }
+
+            // Verify signature before accepting.
+            try {
+                const ok = await verifyBlockSignature(block, blockPublicKey)
+                if (!ok) {
+                    console.warn(
+                        `Incoming block #${idx} failed signature verification; skipped.`
+                    )
+                    continue
+                }
+            } catch (e) {
+                console.error(
+                    'Error verifying incoming block signature:',
+                    e
+                )
+                continue
+            }
+
+            // All checks passed: append to local chain.
+            localBlocks.push(block)
+            existingByIndex.set(idx, block)
+            tip = block
+            appended++
+        }
+
+        if (appended > 0) {
+            this.saveBlockchain(localBlocks)
+            console.log(
+                `Appended ${appended} block(s) from sync payload to local chain.`
+            )
+        }
+    }
+
+    // UTILITY - Clear all data (for testing/reset)
+    clearAll() {
+        Object.values(this.STORAGE_KEYS).forEach((key) => {
+            localStorage.removeItem(key)
+        })
+        console.log('Cleared all local storage')
     }
 
     // UTILITY - Clear all data (for testing/reset)
