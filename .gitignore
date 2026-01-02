@@ -6,3 +6,4 @@ DEV\ -\ prompt*
 .env*
 NEW_PROMPT.py
 DELETE.txt
+**/*.db
