@@ -7,7 +7,7 @@ import './devtools.css'
 
 // Station URL for mesh sync and flush (local station backend)
 const STATION_URL =
-    process.env.NEXT_PUBLIC_STATION_URL || 'http://localhost:6000'
+    process.env.NEXT_PUBLIC_STATION_URL || 'http://localhost:6001'
 
 export default function DevTools({ onRefresh }) {
     const [mining, setMining] = useState(false)
@@ -196,6 +196,7 @@ export default function DevTools({ onRefresh }) {
         }
     }
 
+    // DEV ONLY - network status shim for testing in dev environment
     const toggleNetworkStatus = () => {
         const newOnlineStatus = !isOnline
         setIsOnline(newOnlineStatus)

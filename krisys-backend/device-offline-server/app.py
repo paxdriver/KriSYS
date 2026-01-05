@@ -2,9 +2,13 @@
 import os
 import time
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 import requests
 
 app = Flask(__name__)
+
+# DEV CORS: allow frontend at localhost:3000 to call station APIs
+CORS(app, origins=["http://localhost:3000"])
 
 # Simple in-memory mesh store for this station (DEV ONLY).
 # In production, this would likely be backed by SQLite under /app/data.

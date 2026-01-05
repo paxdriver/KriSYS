@@ -35,7 +35,7 @@ services:
       context: ./krisys-backend
       dockerfile: ./device-offline-server/Dockerfile
     ports:
-      - "6000:5000"
+      - "6001:5000"
     environment:
       - FLASK_ENV=development
     volumes:
