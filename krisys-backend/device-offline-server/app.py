@@ -1,6 +1,8 @@
 # krisys-backend/device-offline-server/app.py
+import os
 import time
 from flask import Flask, jsonify, request
+import requests
 
 app = Flask(__name__)
 
@@ -20,6 +22,9 @@ MAX_ADDRESSES_PER_TX = 16
 MAX_ADDRESS_LENGTH = 128
 MAX_STATION_ADDRESS_LENGTH = 128
 MAX_TYPE_FIELD_LENGTH = 32
+
+# Central backend URL from station's perspective (inside docker network)
+CENTRAL_URL = os.environ.get("CENTRAL_API_URL", "http://backend:5000")
 
 
 def sanitize_sync_payload_server(payload):
@@ -267,6 +272,71 @@ def mesh_sync():
     # 4) Build station payload and return to client
     payload = export_station_payload()
     return jsonify(payload), 200
+
+
+@app.route("/station/flush", methods=["POST"])
+def station_flush():
+    """
+    Push station's queued messages to the central backend as real transactions.
+
+    DEV ONLY: this is how we simulate "internet came back, station is now
+    uploading all the messages it collected while offline".
+    """
+    # Filter pending messages
+    pending = [
+        msg for msg in station_state["queued"]
+        if msg.get("status") == "pending"
+    ]
+    if not pending:
+        return jsonify(
+            {"status": "ok", "message": "No pending messages to flush"}
+        ), 200
+
+    success = 0
+    failed = 0
+    errors = []
+
+    for msg in pending:
+        relay_hash = msg.get("relay_hash")
+        try:
+            # Post to central /transaction with rate-limit override
+            url = f"{CENTRAL_URL}/transaction"
+            headers = {
+                "Content-Type": "application/json",
+                "X-Dev-Rate-Override": "true"
+            }
+            resp = requests.post(url, json=msg, headers=headers, timeout=5)
+            if resp.status_code == 201:
+                success += 1
+                msg["status"] = "sent"
+                # Do not mark as confirmed yet; canonical confirmation comes
+                # when mined into a block, which the client will learn via
+                # normal /blockchain or /wallet/..../transactions sync.
+            else:
+                failed += 1
+                errors.append(
+                    f"{relay_hash}: HTTP {resp.status_code} {resp.text}"
+                )
+        except Exception as e:
+            failed += 1
+            errors.append(f"{relay_hash}: {e}")
+
+    # Optionally, we could prune 'sent' messages from station_state["queued"]
+    station_state["queued"] = [
+        msg for msg in station_state["queued"]
+        if msg.get("status") != "sent"
+    ]
+
+    return jsonify(
+        {
+            "status": "ok",
+            "central_url": CENTRAL_URL,
+            "attempted": len(pending),
+            "success": success,
+            "failed": failed,
+            "errors": errors,
+        }
+    ), 200
 
 
 if __name__ == "__main__":

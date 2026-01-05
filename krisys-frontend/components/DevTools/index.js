@@ -5,6 +5,10 @@ import { api } from '@/services/api'
 import { disasterStorage } from '@/services/localStorage'
 import './devtools.css'
 
+// Station URL for mesh sync and flush (local station backend)
+const STATION_URL =
+    process.env.NEXT_PUBLIC_STATION_URL || 'http://localhost:6000'
+
 export default function DevTools({ onRefresh }) {
     const [mining, setMining] = useState(false)
     const [isOnline, setIsOnline] = useState(true)
@@ -12,6 +16,8 @@ export default function DevTools({ onRefresh }) {
     const [rateLimitOverride, setRateLimitOverride] = useState(false)
     const [sending, setSending] = useState(false)
     const [meshInfo, setMeshInfo] = useState(null)
+    const [syncingStation, setSyncingStation] = useState(false)
+    const [flushingStation, setFlushingStation] = useState(false)
 
     // Update queued message count periodically
     useEffect(() => {
@@ -22,8 +28,8 @@ export default function DevTools({ onRefresh }) {
             )
         }
 
-        updateQueueCount() // Initial count
-        const interval = setInterval(updateQueueCount, 2000) // Update every 2 seconds
+        updateQueueCount()
+        const interval = setInterval(updateQueueCount, 2000)
         return () => clearInterval(interval)
     }, [])
 
@@ -110,7 +116,7 @@ export default function DevTools({ onRefresh }) {
         )
         if (!mode) return
 
-        // MODE 2: station check-in test (DEVELOPMENT obviously)
+        // MODE 2: station check-in test (DEVELOPMENT)
         if (mode === '2') {
             const address = prompt('Enter wallet address to check in:')
             if (!address) return
@@ -162,7 +168,8 @@ export default function DevTools({ onRefresh }) {
 
             return
         }
-        // DEFAULT: broadcast emergency alert (existing behavior)
+
+        // DEFAULT: broadcast emergency alert
         const message = prompt('Enter emergency alert message:')
         if (!message) return
 
@@ -207,16 +214,20 @@ export default function DevTools({ onRefresh }) {
             window.KRISYS_OFFLINE_MODE = true
 
             window.fetch = (url, options) => {
+                const u = typeof url === 'string' ? url : String(url)
                 // Allow internal Next.js API routes to work
                 if (
-                    url.startsWith('/api/') ||
-                    url.startsWith(window.location.origin)
+                    u.startsWith('/api/') ||
+                    u.startsWith(window.location.origin) ||
+                    u.startsWith(STATION_URL)
                 ) {
                     return window.originalFetch(url, options)
                 }
 
-                // Simulate failure for external API calls
-                return Promise.reject(new Error('Simulated offline mode'))
+                // Simulate failure for external API calls (central, internet)
+                return Promise.reject(
+                    new Error('Simulated offline mode')
+                )
             }
         }
     }
@@ -229,7 +240,6 @@ export default function DevTools({ onRefresh }) {
             newOverride.toString()
         )
 
-        // Also set it for API calls to pick up
         if (newOverride) {
             localStorage.setItem('dev_bypass_rate_limit', 'true')
             alert('Rate limiting DISABLED for rapid testing')
@@ -264,7 +274,6 @@ export default function DevTools({ onRefresh }) {
                     msg.sentAt = Date.now()
                     sent++
 
-                    // Mark this relay as confirmed on this device
                     if (msg.relay_hash) {
                         disasterStorage.markMessageConfirmed(
                             msg.relay_hash,
@@ -279,17 +288,14 @@ export default function DevTools({ onRefresh }) {
                         'Failed to send queued message:',
                         error
                     )
-                    // Don't break the loop, try to send remaining messages
                 }
             }
 
-            // Update queue in storage
             localStorage.setItem(
                 'krisys_message_queue',
                 JSON.stringify(queue)
             )
 
-            // Remove any now-confirmed messages from the queue
             const newQueue = disasterStorage.pruneConfirmedFromQueue()
             setQueuedMessages(
                 newQueue.filter(
@@ -315,7 +321,80 @@ export default function DevTools({ onRefresh }) {
         }
     }
 
-    // DEV Utilities ->
+    // Station sync: send our payload to the station, merge its response back
+    const handleStationSync = async () => {
+        setSyncingStation(true)
+        try {
+            const payload = disasterStorage.exportSyncPayload()
+            console.log(
+                'Sending sync payload to station:',
+                payload
+            )
+
+            const res = await fetch(`${STATION_URL}/mesh/sync`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+
+            if (!res.ok) {
+                const text = await res.text()
+                throw new Error(
+                    `Station sync failed: ${res.status} ${text}`
+                )
+            }
+
+            const stationPayload = await res.json()
+            console.log(
+                'Received station sync payload:',
+                stationPayload
+            )
+
+            disasterStorage.importSyncPayload(stationPayload)
+
+            alert('Station sync completed.')
+            if (onRefresh) onRefresh()
+        } catch (error) {
+            console.error('Station sync error:', error)
+            alert(`Station sync failed: ${error.message}`)
+        } finally {
+            setSyncingStation(false)
+        }
+    }
+
+    // Station flush: ask station to push its queued messages to central
+    const handleStationFlush = async () => {
+        setFlushingStation(true)
+        try {
+            const res = await fetch(
+                `${STATION_URL}/station/flush`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                }
+            )
+
+            if (!res.ok) {
+                const text = await res.text()
+                throw new Error(
+                    `Flush failed: ${res.status} ${text}`
+                )
+            }
+
+            const data = await res.json()
+            console.log('Station flush result:', data)
+
+            alert(
+                `Station flush: attempted ${data.attempted}, ` +
+                    `success ${data.success}, failed ${data.failed}`
+            )
+        } catch (error) {
+            console.error('Station flush error:', error)
+            alert(`Station flush failed: ${error.message}`)
+        } finally {
+            setFlushingStation(false)
+        }
+    }
 
     const handleExportSync = () => {
         try {
@@ -347,7 +426,7 @@ export default function DevTools({ onRefresh }) {
                 'Importing KriSYS sync payload:',
                 payload
             )
-            await disasterStorage.importSyncPayload(payload)
+            disasterStorage.importSyncPayload(payload)
             alert(
                 'Sync payload imported. Local queue, confirmations, and blocks updated.'
             )
@@ -375,16 +454,15 @@ export default function DevTools({ onRefresh }) {
             alert(`Test alert failed: ${error.message}`)
         }
     }
-    // <-- DEV Utilities
 
     const clearStorage = () => {
         if (
             confirm(
-                '🗑️ Clear all local storage? This will log you out and clear all offline data.'
+                'Clear all local storage? This will log you out and clear all offline data.'
             )
         ) {
             disasterStorage.clearAll()
-            localStorage.clear() // Clear everything including contacts
+            localStorage.clear()
             window.location.reload()
         }
     }
@@ -392,14 +470,14 @@ export default function DevTools({ onRefresh }) {
     return (
         <div className="dev-tools">
             <div className="dev-tools-inner">
-                <span className="dev-label">🔧 DEV TOOLS</span>
+                <span className="dev-label">DEV TOOLS</span>
 
                 <span
                     className={`network-status ${
                         isOnline ? 'online' : 'offline'
                     }`}
                 >
-                    {isOnline ? '🟢 ONLINE' : '🔴 OFFLINE'}
+                    {isOnline ? 'ONLINE' : 'OFFLINE'}
                 </span>
 
                 <button
@@ -452,6 +530,24 @@ export default function DevTools({ onRefresh }) {
 
                 <button
                     className="dev-btn"
+                    onClick={handleStationSync}
+                    disabled={syncingStation}
+                    title={`Sync queued/confirmed state with station at ${STATION_URL}`}
+                >
+                    {syncingStation ? 'Syncing...' : 'Sync Station'}
+                </button>
+
+                <button
+                    className="dev-btn"
+                    onClick={handleStationFlush}
+                    disabled={flushingStation}
+                    title="Ask station to flush its queued messages to central backend"
+                >
+                    {flushingStation ? 'Flushing...' : 'Flush Station'}
+                </button>
+
+                <button
+                    className="dev-btn"
                     onClick={handleImportSync}
                     title="Import sync payload from pasted JSON"
                 >
@@ -463,7 +559,7 @@ export default function DevTools({ onRefresh }) {
                     onClick={sendTestAlert}
                     title="Send test emergency alert to all wallets"
                 >
-                    🚨 Test Alert
+                    Test Alert
                 </button>
 
                 <button
@@ -471,7 +567,7 @@ export default function DevTools({ onRefresh }) {
                     onClick={createAlert}
                     title="Create emergency alert or test station check-in"
                 >
-                    🚨 Check-in
+                    Check-in
                 </button>
 
                 <br />

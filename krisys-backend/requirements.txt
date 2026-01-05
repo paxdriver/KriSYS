@@ -3,3 +3,4 @@ Flask-CORS==4.0.0
 pgpy==0.6.0
 qrcode[pil]==7.4.2
 gunicorn==21.2.0
+requests==2.32.3
