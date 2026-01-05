@@ -30,3 +30,16 @@ services:
     command: npm run dev
     depends_on:
       - backend
+  station:
+    build: 
+      context: ./krisys-backend
+      dockerfile: ./device-offline-server/Dockerfile
+    ports:
+      - "6000:5000"
+    environment:
+      - FLASK_ENV=development
+    volumes:
+      # DEV: local folder where station could store its own mesh DB/cache
+      - ./krisys-backend/device-offline-server/station-data:/app/data
+    # For now, no shared DB or blockchain; this is a separate process
+    # representing a station device. We can add volumes / DB later.

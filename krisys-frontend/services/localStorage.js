@@ -25,6 +25,183 @@ class DisasterStorage {
             CONFIRMED_RELAYS: 'krisys_confirmed_relays', // relay_hash for offline message queues / confirmations
             CRISIS_METADATA: 'krisys_crisis_metadata'    // crisis id + block_public_key for offline block verification
         }
+
+        // Limits for incoming sync payloads to protect against abuse
+        this.MAX_QUEUED_PER_PAYLOAD = 100
+        this.MAX_CONFIRMED_PER_PAYLOAD = 500
+        this.MAX_PER_ORIGIN = 50
+        this.MAX_MESSAGE_LENGTH = 8192
+        this.MAX_ADDRESSES_PER_TX = 16
+        this.MAX_ADDRESS_LENGTH = 128
+        this.MAX_STATION_ADDRESS_LENGTH = 128
+        this.MAX_TYPE_FIELD_LENGTH = 32
+    }
+
+
+    // Sanitize and bound an incoming sync payload (queued + confirmed)
+    sanitizeSyncPayload(payload) {
+        if (!payload || typeof payload !== 'object') {
+            return { queued: [], confirmed: {} }
+        }
+
+        const rawQueued = Array.isArray(payload.queued)
+            ? payload.queued
+            : []
+        const rawConfirmed =
+            payload.confirmed && typeof payload.confirmed === 'object'
+                ? payload.confirmed
+                : {}
+
+        const now = Date.now()
+        const oneDayMs = 24 * 60 * 60 * 1000
+
+        const sanitizedQueued = []
+        const perOriginCount = {}
+
+        // Build a quick lookup set of existing relay_hash values in our queue
+        const localQueue = this.getMessageQueue()
+        const localRelayHashes = new Set(
+            localQueue
+                .map((m) => m && m.relay_hash)
+                .filter((rh) => typeof rh === 'string' && rh.length > 0)
+        )
+
+        // Helper to check string length
+        const isString = (v) => typeof v === 'string'
+        const clampLength = (s, max) =>
+            s.length <= max ? s : s.slice(0, max)
+
+        // Sanitize queued messages
+        for (const msg of rawQueued) {
+            if (
+                !msg ||
+                typeof msg !== 'object' ||
+                sanitizedQueued.length >= this.MAX_QUEUED_PER_PAYLOAD
+            ) {
+                break
+            }
+
+            const relayHash = msg.relay_hash
+            if (!isString(relayHash) || !relayHash.trim()) {
+                continue
+            }
+
+            // Skip if already confirmed locally
+            if (this.isMessageConfirmed(relayHash)) {
+                continue
+            }
+
+            // Skip if we already have this relay in our queue
+            if (localRelayHashes.has(relayHash)) {
+                continue
+            }
+
+            // Per-origin device quota
+            const origin = isString(msg.origin_device)
+                ? msg.origin_device
+                : 'unknown'
+            perOriginCount[origin] =
+                (perOriginCount[origin] || 0) + 1
+            if (perOriginCount[origin] > this.MAX_PER_ORIGIN) {
+                continue
+            }
+
+            // Basic type/shape checks
+            const ts = Number(msg.timestamp_created)
+            if (!Number.isFinite(ts)) continue
+            const tsMs = ts * 1000
+            if (tsMs < 0 || tsMs > now + oneDayMs) continue
+
+            const priority = Number(msg.priority_level)
+            if (!Number.isFinite(priority)) continue
+            if (priority < 1 || priority > 5) continue
+
+            const stationAddr = msg.station_address
+            if (!isString(stationAddr)) continue
+
+            let typeField = msg.type_field
+            if (!isString(typeField)) continue
+            typeField = clampLength(typeField, this.MAX_TYPE_FIELD_LENGTH)
+
+            const messageData = msg.message_data
+            if (!isString(messageData)) continue
+            if (messageData.length > this.MAX_MESSAGE_LENGTH) continue
+
+            let related = Array.isArray(msg.related_addresses)
+                ? msg.related_addresses
+                : []
+            related = related
+                .filter((a) => isString(a) && a.length > 0)
+                .slice(0, this.MAX_ADDRESSES_PER_TX)
+                .map((a) =>
+                    a.length > this.MAX_ADDRESS_LENGTH
+                        ? a.slice(0, this.MAX_ADDRESS_LENGTH)
+                        : a
+                )
+
+            const normalized = {
+                relay_hash: relayHash,
+                timestamp_created: ts,
+                station_address: clampLength(
+                    stationAddr,
+                    this.MAX_STATION_ADDRESS_LENGTH
+                ),
+                message_data: messageData,
+                related_addresses: related,
+                type_field: typeField,
+                priority_level: priority,
+                origin_device: origin,
+                // Preserve attempts/status/queuedAt if present, with defaults
+                status: msg.status || 'pending',
+                attempts:
+                    typeof msg.attempts === 'number'
+                        ? msg.attempts
+                        : 0,
+                queuedAt:
+                    typeof msg.queuedAt === 'number'
+                        ? msg.queuedAt
+                        : now
+            }
+
+            sanitizedQueued.push(normalized)
+        }
+
+        // 2) Sanitize confirmed-relay map (lightly)
+        const sanitizedConfirmed = {}
+        const confirmedEntries = Object.entries(rawConfirmed)
+        for (let i = 0; i < confirmedEntries.length; i++) {
+            if (i >= this.MAX_CONFIRMED_PER_PAYLOAD) break
+            const [relayHash, info] = confirmedEntries[i]
+            if (!isString(relayHash) || !relayHash.trim()) continue
+            if (!info || typeof info !== 'object') continue
+
+            // Optionally clamp confirmedAt / timestampPosted
+            const cleanInfo = { ...info }
+            if (typeof cleanInfo.confirmedAt === 'number') {
+                if (
+                    cleanInfo.confirmedAt < 0 ||
+                    cleanInfo.confirmedAt > now + oneDayMs
+                ) {
+                    delete cleanInfo.confirmedAt
+                }
+            }
+            if (typeof cleanInfo.timestampPosted === 'number') {
+                if (
+                    cleanInfo.timestampPosted < 0 ||
+                    cleanInfo.timestampPosted >
+                        (now + oneDayMs) / 1000
+                ) {
+                    delete cleanInfo.timestampPosted
+                }
+            }
+
+            sanitizedConfirmed[relayHash] = cleanInfo
+        }
+
+        return {
+            queued: sanitizedQueued,
+            confirmed: sanitizedConfirmed
+        }
     }
 
     // DEV NOTE: NOT yet used
@@ -430,18 +607,17 @@ class DisasterStorage {
         
         TODO - via a simple JSON payload we're only defining the data model and merge logic here; actually transmitting it (QR / file / WebRTC / etc.) comes later.
     */
-    async importSyncPayload(payload) {
-        if (!payload || typeof payload !== 'object') {
+importSyncPayload(payload) {
+        // Sanitize and bound incoming payload first
+        const { queued: incomingQueued, confirmed: incomingConfirmed } =
+            this.sanitizeSyncPayload(payload)
+
+        if (
+            !Array.isArray(incomingQueued) ||
+            typeof incomingConfirmed !== 'object'
+        ) {
             return
         }
-
-        const incomingQueued = Array.isArray(payload.queued)
-            ? payload.queued
-            : []
-        const incomingConfirmed =
-            payload.confirmed && typeof payload.confirmed === 'object'
-                ? payload.confirmed
-                : {}
 
         /* 1) Merge confirmed-relay map
             - Takes the incoming confirmed object.
@@ -455,7 +631,9 @@ class DisasterStorage {
         const localConfirmed = this.getConfirmedRelays()
         let confirmedChanged = false
 
-        for (const [relayHash, info] of Object.entries(incomingConfirmed)) {
+        for (const [relayHash, info] of Object.entries(
+            incomingConfirmed
+        )) {
             if (!relayHash) continue
 
             const existing = localConfirmed[relayHash]
@@ -485,12 +663,11 @@ class DisasterStorage {
         }
 
         /* 2) Merge incoming queued messages
-            - Takes payload.queued (list of messages).
+            - Takes sanitized queued (list of messages).
             - For each incoming message:
-                - Skips if no relay_hash.
-                - Skips if that relay_hash is now confirmed locally.
+                - Skips if relay_hash is already confirmed (sanitizer mostly did this).
                 - Skips if there is already a message in your queue with that relay_hash.
-                - Otherwise, normalizes some fields (status, attempts, queuedAt) and appends it to your queue.
+                - Otherwise, appends it to your queue.
             - Saves updated queue if anything changed.
         */
         let queue = this.getMessageQueue()
@@ -513,15 +690,8 @@ class DisasterStorage {
                 continue
             }
 
-            const normalized = {
-                ...msg,
-                status: msg.status || 'pending',
-                attempts:
-                    typeof msg.attempts === 'number' ? msg.attempts : 0,
-                queuedAt: msg.queuedAt || Date.now()
-            }
-
-            queue.push(normalized)
+            // msg is already normalized by sanitizeSyncPayload
+            queue.push(msg)
             queueChanged = true
         }
 
@@ -534,9 +704,6 @@ class DisasterStorage {
 
         // 3) Final cleanup: remove any now-confirmed items from queue
         this.pruneConfirmedFromQueue()
-
-        // 4) Merge any incoming blocks (canonical, server-signed) from payload
-        await this._mergeBlocksFromPayload(payload)
     }
 
     /*
@@ -692,17 +859,7 @@ class DisasterStorage {
 
     // UTILITY - Clear all data (for testing/reset)
     clearAll() {
-        Object.values(this.STORAGE_KEYS).forEach((key) => {
-            localStorage.removeItem(key)
-        })
-        console.log('Cleared all local storage')
-    }
-
-    // UTILITY - Clear all data (for testing/reset)
-    clearAll() {
-        Object.values(this.STORAGE_KEYS).forEach((key) => {
-            localStorage.removeItem(key)
-        })
+        Object.values(this.STORAGE_KEYS).forEach( key => localStorage.removeItem(key) )
         console.log('Cleared all local storage')
     }
 }
