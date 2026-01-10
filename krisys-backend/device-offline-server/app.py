@@ -13,8 +13,9 @@ CORS(app, origins=["http://localhost:3000"])
 # Simple in-memory mesh store for this station (DEV ONLY).
 # In production, this would likely be backed by SQLite under /app/data.
 station_state = {
-    "queued": [],    # list of normalized pending messages
-    "confirmed": {}  # relay_hash -> info
+    "queued": [],       # list of normalized pending messages
+    "confirmed": {},    # relay_hash -> info
+    "blocks": [],       # store blocks to be 
 }
 
 # Limits (mirroring the frontend's DisasterStorage limits)
@@ -26,6 +27,8 @@ MAX_ADDRESSES_PER_TX = 16
 MAX_ADDRESS_LENGTH = 128
 MAX_STATION_ADDRESS_LENGTH = 128
 MAX_TYPE_FIELD_LENGTH = 32
+MAX_BLOCKS_PER_PAYLOAD = 10
+MAX_BLOCKS_STORED = 25
 
 # Central backend URL from station's perspective (inside docker network)
 CENTRAL_URL = os.environ.get("CENTRAL_API_URL", "http://backend:5000")
@@ -341,6 +344,38 @@ def station_flush():
             "errors": errors,
         }
     ), 200
+    
+def merge_blocks_into_station_state(incoming_blocks):
+    if not isinstance(incoming_blocks, list):
+        return
+
+    # Deduplicate by block_index; keep first seen. Ignore conflicts.
+    existing_by_index = {
+        b.get("block_index"): b
+        for b in station_state.get("blocks", [])
+        if isinstance(b, dict) and isinstance(b.get("block_index"), int)
+    }
+
+    for b in incoming_blocks[:MAX_BLOCKS_PER_PAYLOAD]:
+        if not isinstance(b, dict):
+            continue
+
+        idx = b.get("block_index")
+        if not isinstance(idx, int):
+            continue
+
+        if idx in existing_by_index:
+            # If hashes conflict, ignore incoming (station can’t resolve forks)
+            if existing_by_index[idx].get("hash") != b.get("hash"):
+                continue
+        else:
+            existing_by_index[idx] = b
+
+    merged = list(existing_by_index.values())
+    merged.sort(key=lambda x: x.get("block_index", -1))
+
+    # Keep only the last MAX_BLOCKS_STORED
+    station_state["blocks"] = merged[-MAX_BLOCKS_STORED:]
 
 
 if __name__ == "__main__":

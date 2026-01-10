@@ -69,7 +69,8 @@ export default function DevTools({ onRefresh }) {
                     lastIndex,
                     hasPrivateKey
                 })
-            } catch (e) {
+            }   
+            catch (e) {
                 console.error('Failed to derive mesh status:', e)
             }
         }
@@ -87,7 +88,8 @@ export default function DevTools({ onRefresh }) {
                 body: body ? JSON.stringify(body) : undefined
             })
             return await response.json()
-        } catch (error) {
+        }   
+        catch (error) {
             throw new Error(`Admin request failed: ${error.message}`)
         }
     }
@@ -98,13 +100,16 @@ export default function DevTools({ onRefresh }) {
             const result = await adminProxy('mine')
             if (result.message) {
                 alert(`${result.message}`)
-            } else {
+            } 
+            else {
                 alert(`${result.error}`)
             }
             if (onRefresh) onRefresh()
-        } catch (error) {
+        } 
+        catch (error) {
             alert(`Mining failed: ${error.message}`)
-        } finally {
+        } 
+        finally {
             setMining(false)
         }
     }
@@ -130,9 +135,11 @@ export default function DevTools({ onRefresh }) {
             let stationId
             if (stationChoice === '1') {
                 stationId = 'STATION_001'
-            } else if (stationChoice === '2') {
+            } 
+            else if (stationChoice === '2') {
                 stationId = 'HOSPITAL_SE_001'
-            } else {
+            } 
+            else {
                 alert('Unknown station selection')
                 return
             }
@@ -155,14 +162,16 @@ export default function DevTools({ onRefresh }) {
                         `Check-in OK:\n${data.message}\ntransaction_id: ${data.transaction_id}`
                     )
                     if (onRefresh) onRefresh()
-                } else {
+                } 
+                else {
                     alert(
                         `Check-in failed: ${
                             data.error || JSON.stringify(data)
                         }`
                     )
                 }
-            } catch (error) {
+            } 
+            catch (error) {
                 alert(`Check-in failed: ${error.message}`)
             }
 
@@ -188,10 +197,12 @@ export default function DevTools({ onRefresh }) {
             if (result.status === 'success') {
                 alert('Emergency alert sent!')
                 if (onRefresh) onRefresh()
-            } else {
+            } 
+            else {
                 alert(`Failed to send alert: ${result.error}`)
             }
-        } catch (error) {
+        } 
+        catch (error) {
             alert(`Failed to send alert: ${error.message}`)
         }
     }
@@ -217,11 +228,9 @@ export default function DevTools({ onRefresh }) {
             window.fetch = (url, options) => {
                 const u = typeof url === 'string' ? url : String(url)
                 // Allow internal Next.js API routes to work
-                if (
-                    u.startsWith('/api/') ||
+                if (u.startsWith('/api/') ||
                     u.startsWith(window.location.origin) ||
-                    u.startsWith(STATION_URL)
-                ) {
+                    u.startsWith(STATION_URL)) {
                     return window.originalFetch(url, options)
                 }
 
@@ -244,7 +253,8 @@ export default function DevTools({ onRefresh }) {
         if (newOverride) {
             localStorage.setItem('dev_bypass_rate_limit', 'true')
             alert('Rate limiting DISABLED for rapid testing')
-        } else {
+        } 
+        else {
             localStorage.removeItem('dev_bypass_rate_limit')
             alert('Rate limiting ENABLED (normal 10min intervals)')
         }
@@ -284,7 +294,8 @@ export default function DevTools({ onRefresh }) {
                             }
                         )
                     }
-                } catch (error) {
+                } 
+                catch (error) {
                     console.error(
                         'Failed to send queued message:',
                         error
@@ -315,9 +326,11 @@ export default function DevTools({ onRefresh }) {
             }
 
             if (onRefresh) onRefresh()
-        } catch (error) {
+        } 
+        catch (error) {
             alert(`Queue processing failed: ${error.message}`)
-        } finally {
+        } 
+        finally {
             setSending(false)
         }
     }
@@ -351,14 +364,17 @@ export default function DevTools({ onRefresh }) {
                 stationPayload
             )
 
-            disasterStorage.importSyncPayload(stationPayload)
+            // disasterStorage.importSyncPayload(stationPayload)
+            await disasterStorage.importSyncPayloadAsync(stationPayload)
 
             alert('Station sync completed.')
             if (onRefresh) onRefresh()
-        } catch (error) {
+        } 
+        catch (error) {
             console.error('Station sync error:', error)
             alert(`Station sync failed: ${error.message}`)
-        } finally {
+        } 
+        finally {
             setSyncingStation(false)
         }
     }
@@ -389,10 +405,12 @@ export default function DevTools({ onRefresh }) {
                 `Station flush: attempted ${data.attempted}, ` +
                     `success ${data.success}, failed ${data.failed}`
             )
-        } catch (error) {
+        } 
+        catch (error) {
             console.error('Station flush error:', error)
             alert(`Station flush failed: ${error.message}`)
-        } finally {
+        } 
+        finally {
             setFlushingStation(false)
         }
     }
@@ -406,7 +424,8 @@ export default function DevTools({ onRefresh }) {
                 JSON.stringify(payload, null, 2)
             )
             alert('Sync payload exported to console (see DevTools).')
-        } catch (error) {
+        } 
+        catch (error) {
             console.error(
                 'Failed to export sync payload:',
                 error
@@ -427,12 +446,14 @@ export default function DevTools({ onRefresh }) {
                 'Importing KriSYS sync payload:',
                 payload
             )
-            disasterStorage.importSyncPayload(payload)
+            // disasterStorage.importSyncPayload(payload)
+            await disasterStorage.importSyncPayloadAsync(payload)
             alert(
                 'Sync payload imported. Local queue, confirmations, and blocks updated.'
             )
             if (onRefresh) onRefresh()
-        } catch (error) {
+        } 
+        catch (error) {
             console.error(
                 'Failed to import sync payload:',
                 error
