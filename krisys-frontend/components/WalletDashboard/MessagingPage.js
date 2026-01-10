@@ -58,7 +58,8 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
             if (msg.type_field !== 'message') return false
 
             // Only show still-pending items
-            if (msg.status && msg.status !== 'pending') return false
+            const _status = msg.status || 'pending'     // robustness check, not strictly necessary
+            if (_status !== 'pending' && _status !== 'sent') return false
 
             // Skip anything already known as confirmed
             if (disasterStorage.isMessageConfirmed(msg.relay_hash)) {
@@ -209,7 +210,8 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
                     const encryptedMessage =
                         await KeyManager.encryptMessage(
                             messageText,
-                            familyId
+                            familyId,               // recipient's family
+                            walletData.family_id, // sender's family, so sent messages can be read too
                         )
 
                     // Stable per-message ID for offline relay

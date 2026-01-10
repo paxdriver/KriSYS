@@ -10,6 +10,7 @@ export class KeyManager {
 
             // Get the public key for this wallet from server
             const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/wallet/${familyId}/public-key`)
+            disasterStorage.savePublicKey(familyId, public_key) // cache own private key if not already saved to localStorage
             const { public_key } = await response.json()
 
             if (!public_key) {
@@ -177,7 +178,7 @@ export class KeyManager {
     }
 
     // Encrypt message for sending
-    static async encryptMessage(plaintext, recipientFamilyId) {
+    static async encryptMessage(plaintext, recipientFamilyId, senderFamilyId) {
         try {
             console.log('🔐 KeyManager encrypting message...')
 
@@ -189,13 +190,27 @@ export class KeyManager {
             }
 
             // Encrypt
-            const publicKey = await openpgp.readKey({
+            const recipientKey = await openpgp.readKey({
                 armoredKey: publicKeyString
             })
+
+            // Encrypy for both recipient AND for sender, so sender can read sent messages in their own dashboards
+            const encryptionKeys = [recipientKey]
+            if (senderFamilyId && senderFamilyId !== recipientFamilyId) {    // de-depulication if message is family-to-family member
+                
+                // DEV NOTE: FIX THIS
+
+                // change this keymanager.getpublickey call to just pulling from localstorage first. sender should have their own public key, just hacking this together quick for now.
+                const senderArmored = await KeyManager.getPublicKey(senderFamilyId)
+                const senderKey = await openpgp.readKey({ armoredKey: senderArmored })
+                encryptionKeys.push(senderKey)
+            }
+                
+            // Encrypt once to all keys
             const message = await openpgp.createMessage({ text: plaintext })
             const encrypted = await openpgp.encrypt({
                 message: message,
-                encryptionKeys: publicKey,
+                encryptionKeys: encryptionKeys,
                 format: 'armored'
             })
 

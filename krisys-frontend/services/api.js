@@ -52,9 +52,9 @@ apiClient.interceptors.response.use(
 
 export const api = {
     // Blockchain endpoints
-    getBlockchain: () => axios.get(`${API_BASE}/blockchain`),
-    getCrisisInfo: () => axios.get(`${API_BASE}/crisis`),
-    getCurrentPolicy: () => apiClient.get('/policy'),
+    getBlockchain: () => apiClient.get(`${API_BASE}/blockchain`),
+    getCrisisInfo: () => apiClient.get(`${API_BASE}/crisis`),
+    getCurrentPolicy: () => axios.get('/policy'),
   
     // Wallet endpoints
     // createWallet: (numMembers) => axios.post(`${API_BASE}/wallet`, { num_members: numMembers }),

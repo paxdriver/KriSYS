@@ -263,76 +263,38 @@ export default function DevTools({ onRefresh }) {
     const processQueue = async () => {
         const queue = disasterStorage.getMessageQueue()
 
-        // Only pending and not already confirmed
-        const pending = queue.filter(
-            (msg) =>
-                msg.status === 'pending' &&
-                !disasterStorage.isMessageConfirmed(msg.relay_hash)
+        // Only pending meaning sent but not already in a block (messages in blocks are "confirmed")
+        const pending = queue.filter( msg =>
+            (msg.status || 'pending') === 'pending' &&
+            !disasterStorage.isMessageConfirmed(msg.relay_hash)
         )
+        setQueuedMessages(pending)
 
-        if (pending.length === 0) {
+        if (pending.length <= 0) {
             alert('No messages in queue')
             return
         }
 
-        setSending(true)
-        try {
-            let sent = 0
-            for (const msg of pending) {
-                try {
-                    await api.addTransaction(msg)
-                    msg.status = 'sent'
-                    msg.sentAt = Date.now()
-                    sent++
-
-                    if (msg.relay_hash) {
-                        disasterStorage.markMessageConfirmed(
-                            msg.relay_hash,
-                            {
-                                source: 'processQueue',
-                                sentAt: msg.sentAt
-                            }
-                        )
-                    }
-                } 
-                catch (error) {
-                    console.error(
-                        'Failed to send queued message:',
-                        error
-                    )
-                }
+        // setSending(true)
+        let sent = 0
+        for (const msg of pending) {
+            try {
+                await api.addTransaction(msg)
+                msg.status = 'sent'
+                msg.sentAt = Date.now()
+                sent++
+            } 
+            catch (error) {
+                console.error('Failed to send queued message:', error)
             }
-
-            localStorage.setItem(
-                'krisys_message_queue',
-                JSON.stringify(queue)
-            )
-
-            const newQueue = disasterStorage.pruneConfirmedFromQueue()
-            setQueuedMessages(
-                newQueue.filter(
-                    (msg) => msg.status === 'pending'
-                ).length
-            )
-
-            if (sent === pending.length) {
-                alert(`Successfully sent all ${sent} queued messages!`)
-            } else {
-                alert(
-                    `Sent ${sent}/${pending.length} messages. ${
-                        pending.length - sent
-                    } failed.`
-                )
-            }
-
-            if (onRefresh) onRefresh()
-        } 
-        catch (error) {
-            alert(`Queue processing failed: ${error.message}`)
-        } 
-        finally {
-            setSending(false)
         }
+
+        // Persist new queue state
+        localStorage.setItem( 'krisys_message_queue', JSON.stringify(queue) )
+
+        alert(`Posted ${sent}/${pending.length} messages from process queue.`)
+
+        if (onRefresh) onRefresh()
     }
 
     // Station sync: send our payload to the station, merge its response back

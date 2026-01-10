@@ -468,7 +468,8 @@ class DisasterStorage {
         if (!relayHash) return
         const confirmed = this.getConfirmedRelays()
         confirmed[relayHash] = {
-            confirmedAt: Date.now(),
+            confirmedAt: info.timestampPosted * 1000,
+            // confirmedAt: info.timestamp_posted,
             ...info,
         }
         localStorage.setItem(
