@@ -2,7 +2,7 @@
 **/.pytest_cache/
 **/blockchain/
 **/node_modules/
-DEV\ -\ prompt*
+**/DEV*
 .env*
 NEW_PROMPT.py
 DELETE.txt
