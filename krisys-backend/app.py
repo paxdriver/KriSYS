@@ -57,7 +57,8 @@ hurricane_policy_id = policy_system.create_crisis_policy(
         },
         'types': ['check_in', 'message', 'alert', 'damage_report']
     },
-    policy_id="Hurricane_Bobo"
+    # No policy_id provided -> generates UUID during the policy creation process
+    policy_id=None      # TODO: When building the crisis generation wizard for aid organizations to create an event, they can assign an id for that event to be the same as an id used in another system if they should choose, or as part of a relational database to help integrate different systems into one another easily.
 )
 
 # Activate the hurricane policy
@@ -70,7 +71,8 @@ blockchain = Blockchain(policy_system)
 def DEV_POLICY_CHECK():
     # Get current policy information
     current_policy = blockchain.policy_system.get_policy()
-    logger.info(f"Crisis: {current_policy['name']}")
+    logger.info(f"Crisis Name: {current_policy['name']}")
+    logger.info(f"policy_id: {hurricane_policy_id}")
     logger.info(f"Organization: {current_policy['organization']}")
     logger.info(f"Contact: {current_policy['contact']}")
     logger.info(f"Description: {current_policy['description']}")
@@ -234,6 +236,7 @@ def health():
 def get_crisis_info():
     """Get metadata about the current crisis"""
     return jsonify({
+        "id": blockchain.crisis_metadata["id"],
         "name": blockchain.crisis_metadata['name'],
         "organization": blockchain.crisis_metadata['organization'],
         "contact": blockchain.crisis_metadata['contact'],
@@ -313,6 +316,9 @@ def add_transaction():
                 blockchain.add_transaction(tx, rate_limit_override=rate_limit_override)
                 return jsonify({"status": "success", "transaction_id": tx.transaction_id}), 201
             
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400
+
             except KeyError as e:
                 return jsonify({"error": f"Missing field: {str(e)}"}), 400
         

@@ -98,12 +98,8 @@ export default function DevTools({ onRefresh }) {
         setMining(true)
         try {
             const result = await adminProxy('mine')
-            if (result.message) {
-                alert(`${result.message}`)
-            } 
-            else {
-                alert(`${result.error}`)
-            }
+            if (result.message) alert(`${result.message}`)
+            else alert(`${result.error}`)
             if (onRefresh) onRefresh()
         } 
         catch (error) {
@@ -268,7 +264,7 @@ export default function DevTools({ onRefresh }) {
             (msg.status || 'pending') === 'pending' &&
             !disasterStorage.isMessageConfirmed(msg.relay_hash)
         )
-        setQueuedMessages(pending)
+        setQueuedMessages(pending.length)
 
         if (pending.length <= 0) {
             alert('No messages in queue')

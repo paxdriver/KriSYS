@@ -4,6 +4,8 @@ import json
 import time
 from datetime import datetime, timedelta
 import os
+import uuid
+import copy
 import pgpy
 from pgpy.constants import PubKeyAlgorithm, KeyFlags, HashAlgorithm, SymmetricKeyAlgorithm
 import uuid
@@ -59,8 +61,7 @@ class PolicySystem:
         """Create a base default policy"""
         self.policies['default'] = {
             'name': "Default Crisis Policy",
-            'id': "default",
-            'created_at': datetime.now().isoformat(),
+            'created_at': int(time.time()),
             'organization': "KriSYS Foundation",
             'contact': "support@krisys.org",
             'description': "Standard policy for crisis response",
@@ -80,39 +81,32 @@ class PolicySystem:
         
         # Generate unique ID if not provided
         if not policy_id:
-            base_id = name.lower().replace(" ", "_")
-            policy_id = base_id
-            counter = 1
-            while policy_id in self.policies:
-                policy_id = f"{base_id}_{counter}"
-                counter += 1
+            policy_id = uuid.uuid4().hex
         
         # Merge defaults with provided custom policy details
-        full_policy = self.REQUIRED_POLICY_FIELDS.copy()
+        full_policy = copy.deepcopy(self.REQUIRED_POLICY_FIELDS)
         full_policy.update(policy_settings)
         
         # Create the complete policy object
-        policy_data = {
+        self.policies[policy_id] = {
             "name": name,
-            "id": policy_id, 
             "organization": organization,
             "contact": contact,
             "description": description,
             "policy": full_policy,
             "created_at": int(time.time()),
         }
-        
-        # Store the policy in the system
-        self.policies[policy_id] = policy_data
-        
         return policy_id
         
     
-    def get_policy(self, name=None):
-        policy_id = name or self.current_policy
-        policy = self.policies.get(policy_id, self.policies['default'])
-        policy['id'] = policy_id
-        return policy
+    def get_policy(self, policy_id: Optional[str] = None):
+        _policy_id = policy_id or self.current_policy
+        policy = self.policies.get(_policy_id, self.policies["default"])
+
+        # Return a copy and attach id without mutating stored policy dict
+        out = dict(policy)
+        out["id"] = _policy_id
+        return out
     
     def validate_transaction(self, transaction):
         policy = self.get_policy()['policy']
