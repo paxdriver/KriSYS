@@ -295,12 +295,12 @@ def add_transaction():
                     
             try:
                 tx = Transaction(
-                    timestamp_created = data['timestamp_created'],
+                    timestamp_created = int(data['timestamp_created']),
                     station_address = data['station_address'],
                     message_data = message_data,
                     related_addresses = data['related_addresses'],
                     type_field = data['type_field'],
-                    priority_level = data['priority_level'],
+                    priority_level = int(data['priority_level']),
                     relay_hash = data.get('relay_hash', ''),
                     posted_id = data.get('posted_id', '')
                 )
@@ -378,33 +378,7 @@ def create_wallet():
     except Exception as e:
         logger.error(f"Wallet creation error: {str(e)}")
         return jsonify({"error": "Wallet creation failed"}), 500
-    ########### OLD
-    # try: 
-    #     data = request.json
-    #     num_members = int(data.get('num_members', 1))
-        
-    #     if num_members < 1 or num_members > MAX_MEMBERS:
-    #         return jsonify({"error": "Number of members must be between 1-20"}), 400
 
-    #     # Create members list with default names
-    #     members = [{"name": f"Member {i+1}"} for i in range(num_members)]
-        
-    #     # Use WalletManager to create wallet (keys stored in wallet_keys table)
-    #     wallet = blockchain.wallets.create_wallet(
-    #         family_id=hashlib.sha256(secrets.token_bytes(32)).hexdigest()[:24],
-    #         members=members,
-    #         crisis_id=blockchain.crisis_metadata['id'],
-    #         passphrase=""  # Empty passphrase for development
-    #     )
-        
-    #     logger.info(wallet.family_id)
-        
-    #     return jsonify(wallet.to_dict()), 201
-
-    # except Exception as e:
-    #     logger.error(f"Wallet creation error: {str(e)}")
-    #     return jsonify({"error": "Wallet creation failed"}), 500
-    ########### OLD
 
 @app.route('/admin/alert', methods=['POST'])
 @admin_required
@@ -412,12 +386,12 @@ def admin_alert():
     data = request.json
     try: 
         tx = Transaction(
-            timestamp_created=time.time(),
+            timestamp_created=int(time.time()),
             station_address="ADMIN_ALERT",
             message_data=data['message'],
             related_addresses=[],
             type_field="alert",
-            priority_level=data['priority']
+            priority_level=int(data['priority'])
         )
         blockchain.add_transaction(tx)
         return jsonify({"status": "success", "transaction_id": tx.transaction_id}), 201
@@ -522,7 +496,7 @@ def check_in():
 
         # Create check-in transaction
         tx = Transaction(
-            timestamp_created=time.time(),
+            timestamp_created=int(time.time()),
             station_address=station_id,
             message_data="Check-in",
             related_addresses=[address],

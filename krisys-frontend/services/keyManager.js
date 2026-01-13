@@ -10,12 +10,11 @@ export class KeyManager {
 
             // Get the public key for this wallet from server
             const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/wallet/${familyId}/public-key`)
-            disasterStorage.savePublicKey(familyId, public_key) // cache own private key if not already saved to localStorage
+            if (!response.ok) throw new Error(`Failed to fetch public key: ${response.status}`)
+            
             const { public_key } = await response.json()
-
-            if (!public_key) {
-                throw new Error('No public key found for wallet')
-            }
+            if (!public_key) throw new Error('No public key found for wallet')
+            disasterStorage.savePublicKey(familyId, public_key) // cache own private key if not already saved to localStorage
 
             // Test message
             const testMessage = 'krisys_key_validation_test'
@@ -47,9 +46,7 @@ export class KeyManager {
                 throw error
             }
 
-            const encryptedMessage = await openpgp.readMessage({
-                armoredMessage: encrypted
-            })
+            const encryptedMessage = await openpgp.readMessage({ armoredMessage: encrypted })
             const { data: decrypted } = await openpgp.decrypt({
                 message: encryptedMessage,
                 decryptionKeys: privateKeyObj,

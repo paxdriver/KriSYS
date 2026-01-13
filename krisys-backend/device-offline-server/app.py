@@ -204,18 +204,31 @@ def export_station_payload():
     """
     Build a sync payload from the station's current state.
 
-    Shape matches the client exportSyncPayload, but for now:
-      - crisisId is None,
-      - chain_tip and blocks are None/empty.
+    Shape matches the client exportSyncPayload.
     """
     now_ms = int(time.time() * 1000)
+
+    blocks = station_state.get("blocks", [])
+    last_block = blocks[-1] if isinstance(blocks, list) and blocks else None
+
+    chain_tip = None
+    if isinstance(last_block, dict):
+        chain_tip = {
+            "block_index": last_block.get("block_index"),
+            "hash": last_block.get("hash"),
+            "previous_hash": last_block.get("previous_hash"),
+        }
+
     return {
         "version": 1,
         "deviceId": "station_local",  # later: env-configurable STATION_ID
         "crisisId": None,
         "generatedAt": now_ms,
-        "chain_tip": None,
-        "blocks": [],
+        "chain_tip": chain_tip,
+        # return only a suffix to cap payload size
+        "blocks": blocks[-MAX_BLOCKS_PER_PAYLOAD:]
+        if isinstance(blocks, list)
+        else [],
         "queued": station_state["queued"],
         "confirmed": station_state["confirmed"],
     }
@@ -243,11 +256,11 @@ def mesh_sync():
         incoming = {}
 
     # 1) Sanitize incoming payload (queued + confirmed)
-    incoming_queued, incoming_confirmed = sanitize_sync_payload_server(
-        incoming
-    )
-
+    incoming_queued, incoming_confirmed = sanitize_sync_payload_server(incoming)
+    
     # 2) Merge confirmed-relay map into station_state["confirmed"]
+            # merge incoming blocks inside /mesh/sync
+    merge_blocks_into_station_state(incoming.get("blocks") or [])
     for relay_hash, info in incoming_confirmed.items():
         existing = station_state["confirmed"].get(relay_hash)
         if not existing:
@@ -262,9 +275,7 @@ def mesh_sync():
                 station_state["confirmed"][relay_hash] = merged
 
     # 3) Merge queued messages into station_state["queued"]
-    known_relay_hashes = set(
-        q.get("relay_hash") for q in station_state["queued"] if q.get("relay_hash")
-    )
+    known_relay_hashes = set( q.get("relay_hash") for q in station_state["queued"] if q.get("relay_hash") )
     known_relay_hashes.update(station_state["confirmed"].keys())
 
     for msg in incoming_queued:

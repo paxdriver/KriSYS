@@ -1,5 +1,5 @@
 // services/localStorage.js
-import { verifyBlockSignature } from './blockVerifier'
+import { verifyBlockSignature, verifyBlockCanonical } from './blockVerifier'
 
 /*
   LOCAL STORAGE FOR DISASTER COMMUNICATION
@@ -830,7 +830,7 @@ class DisasterStorage {
             const accepted = []
             for (const block of sortedIncoming) {
                 try {
-                    const ok = await verifyBlockSignature(
+                    const ok = await verifyBlockCanonical(
                         block,
                         blockPublicKey
                     )
@@ -891,7 +891,8 @@ class DisasterStorage {
 
             // Verify signature before accepting.
             try {
-                const ok = await verifyBlockSignature(block, blockPublicKey)
+                const ok = await verifyBlockCanonical(block, blockPublicKey)
+                // const ok = await verifyBlockSignature(block, blockPublicKey)
                 if (!ok) {
                     console.warn(
                         `Incoming block #${idx} failed signature verification; skipped.`

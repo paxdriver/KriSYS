@@ -97,24 +97,16 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 
         // Locally queued messages (unconfirmed)
         const queued = queuedMyMessages
-            .filter(
-                (msg) =>
-                    !msg.relay_hash ||
-                    !confirmedRelayHashes.has(msg.relay_hash)
-            )
+            .filter( (msg) => !msg.relay_hash || !confirmedRelayHashes.has(msg.relay_hash) )
             .map((msg) => {
-                const sortTs =
-                    msg.timestamp_posted ||
-                    msg.queuedAt ||
-                    msg.timestamp_created
+                const sortTsSeconds = typeof msg.timestamp_posted === 'number' ? 
+                    msg.timestamp_posted : typeof msg.queuedAt === 'number' ?
+                    Math.floor(msg.queuedAt / 1000) : msg.timestamp_created
 
                 return {
-                    transaction_id:
-                        msg.transaction_id ||
-                        msg.relay_hash ||
-                        `queued-${sortTs}`,
+                    transaction_id: msg.transaction_id || msg.relay_hash || `queued-${sortTsSeconds}`,
                     timestamp_created: msg.timestamp_created,
-                    timestamp_posted: sortTs,
+                    timestamp_posted: sortTsSeconds,
                     station_address: msg.station_address,
                     message_data: msg.message_data,
                     related_addresses: msg.related_addresses,
@@ -123,7 +115,7 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
                     relay_hash: msg.relay_hash,
                     _isConfirmed: false,
                     _isQueuedLocal: true,
-                    _sortTimestamp: sortTs,
+                    _sortTimestamp: sortTsSeconds,
                 }
             })
 
@@ -225,7 +217,7 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
                             .slice(2)}`
 
                     const transaction = {
-                        timestamp_created: Date.now() / 1000,
+                        timestamp_created: Math.floor(Date.now() / 1000),
                         station_address: fromAddress,
                         message_data: encryptedMessage,
                         related_addresses: addrs, // all recipients in this family

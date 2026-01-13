@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import os
 import pgpy
 from pgpy.constants import PubKeyAlgorithm, KeyFlags, HashAlgorithm, SymmetricKeyAlgorithm
+import uuid
 import threading
 import secrets
 from typing import List, Dict, Optional
@@ -135,7 +136,7 @@ class PolicySystem:
 class Transaction:
     def __init__(
         self,
-        timestamp_created: float,
+        timestamp_created: int,
         station_address: str,
         message_data: str,
         related_addresses: List[str],
@@ -144,7 +145,7 @@ class Transaction:
         transaction_id: Optional[str] = None,
         relay_hash: str = "",
         posted_id: str = "",
-        timestamp_posted: Optional[float] = None):
+        timestamp_posted: Optional[int] = None):
         
         """
         Represents a blockchain transaction
@@ -154,9 +155,10 @@ class Transaction:
         - priority_level: From 1 (highest) to 5 (lowest)
         """
         
-        self.transaction_id = transaction_id or self.generate_id(timestamp_created, station_address)
+        self.transaction_id = transaction_id or uuid.uuid4().hex
+        # self.transaction_id = transaction_id or self.generate_id(timestamp_created, station_address) # tested working in development prior to uuid implementation
         self.timestamp_created = timestamp_created
-        self.timestamp_posted = timestamp_posted or time.time()
+        self.timestamp_posted = timestamp_posted or int(time.time())
         self.station_address = station_address
         self.message_data = message_data
         self.related_addresses = related_addresses
@@ -216,7 +218,12 @@ class Block:
             "transactions": [tx.to_dict() for tx in self.transactions],
             "previous_hash": self.previous_hash,
             "nonce": self.nonce
-        }, sort_keys=True)
+            }, 
+            sort_keys=True, 
+            separators=(",", ":"),  # no spaces so that json from ES6 matches dict in python
+                                    # match JS JSON.stringify unicode behavior)
+            ensure_ascii=False,         # make sure utf characters aren't escaped because that would distort any deterministic hash
+        )
         return hashlib.sha256(block_data.encode()).hexdigest()
 
     def to_dict(self) -> Dict:
@@ -262,7 +269,7 @@ class Wallet:
         device = {
             "device_id": device_id,
             "public_key": public_key_str,
-            "registered_at": time.time()
+            "registered_at": int(time.time())
         }
                
         # Store device
@@ -574,7 +581,7 @@ class Blockchain:
             recent_txs = [
                 tx for tx in self.pending_transactions 
                 if tx.station_address == transaction.station_address
-                and (time.time() - tx.timestamp_created) < policy_config['rate_limit']
+                and (int(time.time()) - tx.timestamp_created) < policy_config['rate_limit']
             ]
             if recent_txs:
                 raise ValueError(
@@ -600,14 +607,14 @@ class Blockchain:
                 for db_block in blocks:
                     # Load transactions for this block
                     transactions_data = conn.execute(
-                        'SELECT * FROM transactions WHERE block_id = ?',
+                        'SELECT * FROM transactions WHERE block_id = ? ORDER BY id ASC',
                         (db_block['id'],)
                     ).fetchall()
                     
                     transactions = []
                     for tx_data in transactions_data:
                         tx = Transaction(
-                            timestamp_created=tx_data['timestamp_created'],
+                            timestamp_created=int(tx_data['timestamp_created']),
                             station_address=tx_data['station_address'],
                             message_data=tx_data['message_data'],
                             related_addresses=tx_data['related_addresses'].split(','),
@@ -616,13 +623,13 @@ class Blockchain:
                             transaction_id=tx_data['transaction_id'],
                             relay_hash=tx_data['relay_hash'],
                             posted_id=tx_data['posted_id'],
-                            timestamp_posted=tx_data['timestamp_posted']
+                            timestamp_posted=int(tx_data['timestamp_posted']),
                         )
                         transactions.append(tx)
                     
                     block = Block(
                         block_index=db_block['block_index'],
-                        timestamp=db_block['timestamp'],
+                        timestamp=int(db_block['timestamp']),
                         transactions=transactions,
                         previous_hash=db_block['previous_hash'],
                         nonce=db_block['nonce'],
@@ -718,7 +725,7 @@ class Blockchain:
         }
 
         meta_tx = Transaction(
-            timestamp_created=time.time(),
+            timestamp_created=int(time.time()),
             station_address="SYSTEM",  # synthetic origin for metadata, not pertinent to any code of functionality right now
             message_data=json.dumps(metadata_payload),
             related_addresses=[],
@@ -728,7 +735,7 @@ class Blockchain:
 
         genesis = Block(
             block_index=0,
-            timestamp=time.time(),
+            timestamp=int(time.time()),
             transactions=[meta_tx],
             previous_hash="0",
         )
@@ -745,7 +752,7 @@ class Blockchain:
         last_block = self.chain[-1]
         new_block = Block(
             block_index=last_block.block_index + 1,
-            timestamp=time.time(),
+            timestamp=int(time.time()),
             transactions=self.pending_transactions.copy(),
             previous_hash=last_block.hash
         )
@@ -773,7 +780,7 @@ class Blockchain:
                     self.mine_and_save()
                 
                 # Sleep for the remaining time in the block interval
-                sleep_time = block_interval - (time.time() % block_interval)
+                sleep_time = block_interval - (int(time.time()) % block_interval)
                 time.sleep(sleep_time)
             except Exception as e:
                 logger.error(f"Mining error: {str(e)}")
@@ -833,6 +840,7 @@ class Blockchain:
                 },
                 sort_keys=True,
                 separators=(',', ':'),  # match JSON.stringify (no spaces)
+                ensure_ascii=False,     # make sure utf characters aren't escaped because that would distort any deterministic hash
             )
 
             message = pgpy.PGPMessage.new(header)
