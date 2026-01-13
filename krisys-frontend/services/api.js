@@ -54,7 +54,7 @@ export const api = {
     // Blockchain endpoints
     getBlockchain: () => apiClient.get(`${API_BASE}/blockchain`),
     getCrisisInfo: () => apiClient.get(`${API_BASE}/crisis`),
-    getCurrentPolicy: () => axios.get('/policy'),
+    getCurrentPolicy: () => apiClient.get('/policy'),
   
     // Wallet endpoints
     // createWallet: (numMembers) => axios.post(`${API_BASE}/wallet`, { num_members: numMembers }),
@@ -63,9 +63,9 @@ export const api = {
             num_members: numMembers,
             passphrase: passphrase 
         }),
-    getWallet: (familyId) => axios.get(`${API_BASE}/wallet/${familyId}`),
-    getWalletTransactions: (familyId) => axios.get(`${API_BASE}/wallet/${familyId}/transactions`),
-    getWalletQR: (familyId, address) => axios.get(`${API_BASE}/wallet/${familyId}/qr/${address}`),
+    getWallet: (familyId) => apiClient.get(`${API_BASE}/wallet/${familyId}`),
+    getWalletTransactions: (familyId) => apiClient.get(`${API_BASE}/wallet/${familyId}/transactions`),
+    getWalletQR: (familyId, address) => apiClient.get(`${API_BASE}/wallet/${familyId}/qr/${address}`),
         
     // Auth endpoints
     unlockWallet: (familyId, passphrase) => 
@@ -84,11 +84,9 @@ export const api = {
     // CHECKING IN FROM A VERIFIED STATION USING LOCALLY STORED API KEY PROVIDED BY THE BLOCKCHAIN PROVIDER EXCLUSIVELY 
     // (replaces passphrase protection that the typical wallets would use and does not pgp encrypt its messages, all plain text)
     checkin: (address, stationId = 'STATION_001', stationApiKey) =>
-    axios.post(
-        `${API_BASE}/checkin`,
+    axios.post( `${API_BASE}/checkin`,
         { address, station_id: stationId },
-        {
-        headers: stationApiKey
+        { headers: stationApiKey
             ? { 'X-Station-API-Key': stationApiKey }
             : {}
         }

@@ -44,7 +44,7 @@ Part A — Frontend: make `importSyncPayload` also merge blocks + derive confirm
 		3) then scans the resulting local blocks for transactions with `relay_hash` and calls `syncConfirmedFromTransactions()` to prune the queue.
 
 	Why it must be async:
-	-	`_mergeBlocksFromPayload` calls `verifyBlockSignature`, which uses OpenPGP and is async.
+	-	`_mergeBlocksFromPayload` calls `verifyBlockSignature`/ `verifyBlockCanoncial`, which uses OpenPGP and is async.
 	-	If you try to keep everything synchronous, you either skip verification (bad) or block the UI thread awkwardly.
 */
 
@@ -830,22 +830,15 @@ class DisasterStorage {
             const accepted = []
             for (const block of sortedIncoming) {
                 try {
-                    const ok = await verifyBlockCanonical(
-                        block,
-                        blockPublicKey
-                    )
+                    const ok = await verifyBlockCanonical(block, blockPublicKey)
                     if (!ok) {
-                        console.warn(
-                            `Incoming block #${block.block_index} failed signature verification; skipped.`
-                        )
+                        console.warn(`Incoming block #${block.block_index} failed signature verification; skipped.`)
                         continue
                     }
                     accepted.push(block)
-                } catch (e) {
-                    console.error(
-                        'Error verifying incoming block signature:',
-                        e
-                    )
+                } 
+                catch (e) {
+                    console.error('Error verifying incoming block signature:', e)
                 }
             }
 
@@ -859,9 +852,7 @@ class DisasterStorage {
         }
 
         // We already have a local chain: only append clean extensions of the tip.
-        const existingByIndex = new Map(
-            localBlocks.map((b) => [b.block_index, b])
-        )
+        const existingByIndex = new Map( localBlocks.map((b) => [b.block_index, b]) )
         let tip = localBlocks[localBlocks.length - 1]
         let appended = 0
 

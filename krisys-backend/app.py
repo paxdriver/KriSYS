@@ -224,6 +224,11 @@ def admin_required(f):
 
 #####################
 
+# Test route
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({"role": "backend", "status": "ok"}), 200
+
 # Crisis metadata
 @app.route('/crisis', methods=['GET'])
 def get_crisis_info():

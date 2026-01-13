@@ -110,20 +110,28 @@ export async function verifyBlockSignature(block, blockPublicKeyArmored) {
 }
 
 export async function verifyBlockCanonical(block, blockPublicKeyArmored) {
-    if (!block) return false
+	if (!block) return false
 
-    // 1) Integrity: hash(body) must match block.hash
-    try {
-        const expectedHash = await computeBlockHash(block)
-        if (expectedHash !== block.hash) return false
-    } 
-    catch (err) {
-        console.error('Block hash recompute failed:', err)
-        return false
-    }
+	try {
+		const expectedHash = await computeBlockHash(block)
+		if (expectedHash !== block.hash) {
+			console.warn('Hash mismatch', {
+				block_index: block.block_index,
+				expectedHash,
+				blockHash: block.hash,
+			})
+			return false
+		}
+	} catch (err) {
+		console.error('Block hash recompute failed:', err)
+		return false
+	}
 
-    // 2) Authenticity: signature(header) must verify
-    return verifyBlockSignature(block, blockPublicKeyArmored)
+	const sigOk = await verifyBlockSignature(block, blockPublicKeyArmored)
+	if (!sigOk) {
+		console.warn('Signature invalid', { block_index: block.block_index })
+	}
+	return sigOk
 }
 
 // Return only canonical blocks (verified + linked). Stops at first invalid.

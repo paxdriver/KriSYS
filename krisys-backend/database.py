@@ -97,7 +97,7 @@ def init_db():
             registration_code_hash TEXT,  -- hash of one-time activation code (future)
             api_key_hash TEXT,            -- hash of long-term API key
             status TEXT DEFAULT 'pending',
-            created_at INTEGER DEFAULT (CAST(strftime('%s','now') AS INTEGER))
+            created_at INTEGER DEFAULT (CAST(strftime('%s','now') AS INTEGER)),
             UNIQUE(crisis_id, station_id)
         )
         ''')

@@ -99,7 +99,7 @@ class PolicySystem:
             "contact": contact,
             "description": description,
             "policy": full_policy,
-            "created_at": datetime.now().isoformat(),
+            "created_at": int(time.time()),
         }
         
         # Store the policy in the system
@@ -189,7 +189,7 @@ class Block:
     def __init__(
         self,
         block_index: int,
-        timestamp: float,
+        timestamp: int,
         transactions: List[Transaction],
         previous_hash: str,
         nonce: int = 0,
@@ -596,52 +596,54 @@ class Blockchain:
         """Load blockchain from database, return True if successful"""
         try:
             with db_connection() as conn:
-                # Load blocks
                 blocks = conn.execute(
-                    'SELECT * FROM blocks ORDER BY block_index'
+                    "SELECT * FROM blocks ORDER BY block_index"
                 ).fetchall()
-                
+
                 if not blocks:
                     return False
-                
+
                 for db_block in blocks:
-                    # Load transactions for this block
                     transactions_data = conn.execute(
-                        'SELECT * FROM transactions WHERE block_id = ? ORDER BY id ASC',
-                        (db_block['id'],)
+                        "SELECT * FROM transactions WHERE block_id = ? ORDER BY id ASC",
+                        (db_block["id"],),
                     ).fetchall()
-                    
+
                     transactions = []
                     for tx_data in transactions_data:
+                        related_str = tx_data["related_addresses"] or ""
+                        related_addresses = [a for a in related_str.split(",") if a]
+
                         tx = Transaction(
-                            timestamp_created=int(tx_data['timestamp_created']),
-                            station_address=tx_data['station_address'],
-                            message_data=tx_data['message_data'],
-                            related_addresses=tx_data['related_addresses'].split(','),
-                            type_field=tx_data['type_field'],
-                            priority_level=tx_data['priority_level'],
-                            transaction_id=tx_data['transaction_id'],
-                            relay_hash=tx_data['relay_hash'],
-                            posted_id=tx_data['posted_id'],
-                            timestamp_posted=int(tx_data['timestamp_posted']),
+                            timestamp_created=int(tx_data["timestamp_created"]),
+                            station_address=tx_data["station_address"],
+                            message_data=tx_data["message_data"],
+                            related_addresses=related_addresses,
+                            type_field=tx_data["type_field"],
+                            priority_level=int(tx_data["priority_level"]),
+                            transaction_id=tx_data["transaction_id"],
+                            relay_hash=tx_data["relay_hash"],
+                            posted_id=tx_data["posted_id"],
+                            timestamp_posted=int(tx_data["timestamp_posted"]),
                         )
                         transactions.append(tx)
-                    
+
                     block = Block(
-                        block_index=db_block['block_index'],
-                        timestamp=int(db_block['timestamp']),
+                        block_index=int(db_block["block_index"]),
+                        timestamp=int(db_block["timestamp"]),
                         transactions=transactions,
-                        previous_hash=db_block['previous_hash'],
-                        nonce=db_block['nonce'],
-                        signature=db_block['signature'],
+                        previous_hash=db_block["previous_hash"],
+                        nonce=int(db_block["nonce"]),
+                        signature=db_block["signature"],
                     )
+
                     # Override calculated hash with stored hash
-                    block.hash = db_block['hash']
+                    block.hash = db_block["hash"]
                     self.chain.append(block)
-                
+
                 logger.info(f"Loaded {len(self.chain)} blocks from database")
                 return True
-                
+
         except Exception as e:
             logger.error(f"Error loading chain: {str(e)}")
             return False
@@ -678,37 +680,26 @@ class Blockchain:
                     INSERT INTO transactions 
                     (block_id, transaction_id, timestamp_created, timestamp_posted, 
                      station_address, message_data, related_addresses, 
-                     relay_hash, posted_id, type_field, priority_level) 
+                     relay_hash, posted_id, type_field, priority_level)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''',
                     (
                         block_id,
                         tx.transaction_id,
-                        tx.timestamp_created,
-                        tx.timestamp_posted,
+                        int(tx.timestamp_created),
+                        int(tx.timestamp_posted),
                         tx.station_address,
                         tx.message_data,
                         ','.join(tx.related_addresses),
                         tx.relay_hash,
                         tx.posted_id,
                         tx.type_field,
-                        tx.priority_level
+                        int(tx.priority_level),
                     )
                 )
             conn.commit()
             logger.info(f"Saved block #{block.block_index} to database")
 
-    # def create_genesis_block(self):
-    #     """Create and save the genesis block"""
-    #     genesis = Block(
-    #         block_index=0,
-    #         timestamp=time.time(),
-    #         transactions=[],
-    #         previous_hash="0"
-    #     )
-    #     self.chain.append(genesis)
-    #     self.save_block(genesis)
-    #     logger.info("Created genesis block")
     def create_genesis_block(self):
         """Create and save the genesis block with crisis metadata"""
 
@@ -727,7 +718,12 @@ class Blockchain:
         meta_tx = Transaction(
             timestamp_created=int(time.time()),
             station_address="SYSTEM",  # synthetic origin for metadata, not pertinent to any code of functionality right now
-            message_data=json.dumps(metadata_payload),
+            message_data=json.dumps( 
+                metadata_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ),
             related_addresses=[],
             type_field="metadata",
             priority_level=1,
