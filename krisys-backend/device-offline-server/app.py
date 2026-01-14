@@ -5,41 +5,49 @@ This service runs on a physical station device (e.g. hospital, shelter,
 food distribution point) and acts as an offline mesh relay.
 
 Responsibilities:
-- Accept unconfirmed client messages (relay_hash-based) while offline
-- Persist queued messages and recent blocks to disk (SQLite)
-- Prevent duplicate storage via inventory + dedupe checks
-- Enforce single-crisis operation via crisisId pinning
-- Relay queued messages to central backend when connectivity returns
+    - Accept unconfirmed client messages (relay_hash-based) while offline
+    - Persist queued messages and recent blocks to disk (SQLite)
+    - Prevent duplicate storage via inventory + dedupe checks
+    - Enforce single-crisis operation via crisisId pinning
+    - Relay queued messages to central backend when connectivity returns
+    - Verify received blocks (hash + signature) before storing
+    - Use verified blocks to mark relay_hash confirmed and prune queued
 
 Trust model:
-- Station trusts the crisis block_public_key obtained during provisioning
-- relay_hash (UUID) is the unique identifier for offline messages
-- transaction_id only exists after confirmation on the central blockchain
+    - Station must be bootstrapped from the trusted central server at least once
+      (same requirement as wallet creation).
+    - Station stores the crisis trust anchor (block_public_key) extracted from
+      genesis metadata into SQLite meta.
+    - relay_hash (UUID) is the stable ID for offline messages.
+    - transaction_id exists after central acceptance (but we do not depend on it
+      for mesh dedupe).
 
 Timestamp conventions:
-- timestamp_created: seconds since epoch (int)
-- queuedAt / generatedAt: milliseconds since epoch (int)
+    - timestamp_created: seconds since epoch (int)
+    - queuedAt / generatedAt / confirmedAt: milliseconds since epoch (int)
 """
 
 import os
 import time
 import sqlite3
 import json
+import hashlib
 from contextlib import contextmanager
+
 import requests
+import pgpy
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 app = Flask(__name__)
-
 CORS(app, origins=["http://localhost:3000"])
 
-# In-memory cache (not source of truth)
-station_state = { "crisisId": None }
+# In-memory cache (not source of truth; SQLite is source of truth)
+station_state = {
+    "crisisId": None,
+}
 
-# SETUP CONSTANTS
-# Limits to protect station from abuse or accidental overload
-# These mirror client-side limits where possible
+# Abuse / safety limits (keep bounded to protect station)
 MAX_QUEUED_PER_PAYLOAD = 100
 MAX_CONFIRMED_PER_PAYLOAD = 500
 MAX_PER_ORIGIN = 50
@@ -48,22 +56,31 @@ MAX_ADDRESSES_PER_TX = 16
 MAX_ADDRESS_LENGTH = 128
 MAX_STATION_ADDRESS_LENGTH = 128
 MAX_TYPE_FIELD_LENGTH = 32
+
 MAX_BLOCKS_PER_PAYLOAD = 10
 MAX_BLOCKS_STORED = 25
+
+# Inventory request cap (relay_hashes only)
 RELAY_HASH_CAP = 1000
 
+# Priority bounds (matches your crisis policy convention)
 TOP_PRIORITY = 1
 BOTTOM_PRIORITY = 5
 
+# Central backend URL from station's perspective (inside docker network)
 CENTRAL_URL = os.environ.get("CENTRAL_API_URL", "http://backend:5000")
 
+# Persistent data for offline unconfirmed messages, blockchain, etc.
 DATA_DIR = os.environ.get("STATION_DATA_DIR", "/app/data")
 STATION_DB_PATH = os.path.join(DATA_DIR, "station.db")
 
-# Context manager for station SQLite access
-# Ensures the data directory exists and connections are closed cleanly
+
 @contextmanager
 def station_db():
+    """
+    Context manager for station SQLite access.
+    Ensures the data directory exists and connections are closed cleanly.
+    """
     os.makedirs(DATA_DIR, exist_ok=True)
     conn = sqlite3.connect(STATION_DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -72,11 +89,13 @@ def station_db():
     finally:
         conn.close()
 
-# Initialize persistent storage tables
-# Called once at startup; safe to call repeatedly
+
 def init_station_db():
+    """
+    Initialize persistent storage tables.
+    Safe to call repeatedly.
+    """
     with station_db() as conn:
-        # Key/value metadata (crisisId, block_public_key, etc.)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS meta (
@@ -85,7 +104,7 @@ def init_station_db():
             )
             """
         )
-        # Unconfirmed queued messages (relay_hash is the primary key)
+
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS queued (
@@ -97,7 +116,7 @@ def init_station_db():
             )
             """
         )
-        # Confirmed messages (derived from verified blocks or hints)
+
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS confirmed (
@@ -106,7 +125,7 @@ def init_station_db():
             )
             """
         )
-        # Recent blockchain blocks (used for confirmation + gossip)
+
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS blocks (
@@ -120,6 +139,10 @@ def init_station_db():
 
         conn.commit()
 
+
+# ----------------------------
+# DB helpers (meta)
+# ----------------------------
 
 def db_get_meta(key: str) -> str | None:
     with station_db() as conn:
@@ -142,25 +165,75 @@ def db_set_meta(key: str, value: str) -> None:
         )
         conn.commit()
 
-# Ensure the station is bound to exactly one crisis. The first valid crisisId pins the station permanently
-# All subsequent requests must match this crisisId
-def ensure_crisis_id(incoming_crisis_id: str | None) -> tuple[bool, str]:
-    if not incoming_crisis_id or not isinstance(incoming_crisis_id, str):
-        return False, "Missing or invalid crisisId"
 
-    stored = db_get_meta("crisisId")
-    if stored is None:                      # First contact: persist crisisId
-        db_set_meta("crisisId", incoming_crisis_id)
-        station_state["crisisId"] = incoming_crisis_id
-        return True, ""
+def db_get_block_public_key() -> str | None:
+    return db_get_meta("block_public_key")
 
-    if stored != incoming_crisis_id:        # Prevent cross-crisis contamination
-        return False, "Station crisisId mismatch"
 
-    station_state["crisisId"] = stored
-    return True, ""
+# ----------------------------
+# DB helpers (blocks)
+# ----------------------------
 
-# Check whether a relay_hash is already confirmed
+def db_get_block_hash(block_index: int) -> str | None:
+    with station_db() as conn:
+        row = conn.execute(
+            "SELECT hash FROM blocks WHERE block_index = ?",
+            (int(block_index),),
+        ).fetchone()
+        return row["hash"] if row else None
+
+
+def db_put_block_verified(block: dict) -> None:
+    """
+    Store a block that has already passed verification.
+    We do not overwrite existing blocks at the same index (no forks supported).
+    """
+    with station_db() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO blocks (block_index, hash, previous_hash, json)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                int(block.get("block_index")),
+                str(block.get("hash")),
+                str(block.get("previous_hash")),
+                json.dumps(block, separators=(",", ":"), ensure_ascii=False),
+            ),
+        )
+
+        # Prune to last MAX_BLOCKS_STORED by index.
+        conn.execute(
+            """
+            DELETE FROM blocks
+            WHERE block_index NOT IN (
+                SELECT block_index
+                FROM blocks
+                ORDER BY block_index DESC
+                LIMIT ?
+            )
+            """,
+            (int(MAX_BLOCKS_STORED),),
+        )
+
+        conn.commit()
+
+
+def db_list_blocks(limit: int) -> list[dict]:
+    with station_db() as conn:
+        rows = conn.execute(
+            "SELECT json FROM blocks ORDER BY block_index DESC LIMIT ?",
+            (int(limit),),
+        ).fetchall()
+        blocks = [json.loads(r["json"]) for r in rows]
+        blocks.reverse()
+        return blocks
+
+
+# ----------------------------
+# DB helpers (queued + confirmed)
+# ----------------------------
+
 def db_is_confirmed(relay_hash: str) -> bool:
     with station_db() as conn:
         row = conn.execute(
@@ -169,7 +242,7 @@ def db_is_confirmed(relay_hash: str) -> bool:
         ).fetchone()
         return bool(row)
 
-# Check whether a relay_hash is already queued
+
 def db_is_queued(relay_hash: str) -> bool:
     with station_db() as conn:
         row = conn.execute(
@@ -178,7 +251,7 @@ def db_is_queued(relay_hash: str) -> bool:
         ).fetchone()
         return bool(row)
 
-# Persist a confirmed relay (untrusted hint or verified later)
+
 def db_put_confirmed(relay_hash: str, info: dict) -> None:
     with station_db() as conn:
         conn.execute(
@@ -194,9 +267,12 @@ def db_put_confirmed(relay_hash: str, info: dict) -> None:
         )
         conn.commit()
 
-# Retrieve confirmed entries for a set of relay hashes
-# Used by inventory to allow clients to prune their queues early
+
 def db_get_confirmed_many(relay_hashes: list[str]) -> dict:
+    """
+    Return confirmed info for the relay hashes provided.
+    Used by /mesh/inventory so clients can prune.
+    """
     if not relay_hashes:
         return {}
 
@@ -214,12 +290,19 @@ def db_get_confirmed_many(relay_hashes: list[str]) -> dict:
         out[r["relay_hash"]] = json.loads(r["json"])
     return out
 
-# Persist a queued message if it does not already exist
-# relay_hash uniqueness is enforced at the DB level
+
 def db_put_queued(msg: dict) -> bool:
+    """
+    Insert into queued if not already present.
+    Returns True if inserted, False if already existed.
+    """
     relay_hash = msg.get("relay_hash")
     if not isinstance(relay_hash, str) or not relay_hash:
         return False
+
+    status = msg.get("status")
+    if not isinstance(status, str) or not status:
+        status = "pending"
 
     with station_db() as conn:
         cur = conn.execute(
@@ -233,14 +316,21 @@ def db_put_queued(msg: dict) -> bool:
                 relay_hash,
                 json.dumps(msg, separators=(",", ":"), ensure_ascii=False),
                 msg.get("origin_device"),
-                msg.get("status"),
+                status,
                 int(msg.get("queuedAt") or 0),
             ),
         )
         conn.commit()
         return cur.rowcount == 1
 
-# Remove a queued message after successful flush or confirmation
+def db_update_queued_status(relay_hash: str, status: str) -> None:
+    with station_db() as conn:
+        conn.execute(
+            "UPDATE queued SET status = ? WHERE relay_hash = ?",
+            (status, relay_hash),
+        )
+        conn.commit()
+
 def db_delete_queued(relay_hash: str) -> None:
     with station_db() as conn:
         conn.execute(
@@ -249,9 +339,7 @@ def db_delete_queued(relay_hash: str) -> None:
         )
         conn.commit()
 
-# List queued messages in most-recent-first order
-# Used by sync payloads and station flush
-def db_list_queued(limit: int = 200) -> list[dict]:
+def db_list_queued(limit: int) -> list[dict]:
     with station_db() as conn:
         rows = conn.execute(
             "SELECT json FROM queued ORDER BY queuedAt DESC LIMIT ?",
@@ -259,56 +347,14 @@ def db_list_queued(limit: int = 200) -> list[dict]:
         ).fetchall()
         return [json.loads(r["json"]) for r in rows]
 
-# Persist a blockchain block received via mesh. Verification (hash + signature) will be added later. Old blocks are pruned to keep storage bounded
-def db_put_block(block: dict) -> None:
-    with station_db() as conn:
-        conn.execute(
-            """
-            INSERT INTO blocks (block_index, hash, previous_hash, json)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(block_index) DO UPDATE SET
-                hash=excluded.hash,
-                previous_hash=excluded.previous_hash,
-                json=excluded.json
-            """,
-            (
-                int(block.get("block_index")),
-                str(block.get("hash")),
-                str(block.get("previous_hash")),
-                json.dumps(block, separators=(",", ":"), ensure_ascii=False),
-            ),
-        )
 
-        conn.execute(
-            """
-            DELETE FROM blocks
-            WHERE block_index NOT IN (
-                SELECT block_index
-                FROM blocks
-                ORDER BY block_index DESC
-                LIMIT ?
-            )
-            """,
-            (int(MAX_BLOCKS_STORED),),
-        )
-
-        conn.commit()
-
-# Retrieve recent blocks for gossip / confirmation
-def db_list_blocks(limit: int = MAX_BLOCKS_STORED) -> list[dict]:
-    with station_db() as conn:
-        rows = conn.execute(
-            "SELECT json FROM blocks ORDER BY block_index DESC LIMIT ?",
-            (int(limit),),
-        ).fetchall()
-        blocks = [json.loads(r["json"]) for r in rows]
-        blocks.reverse()
-        return blocks
-
-# Return all relay_hash values known to this station. Used to dedupe inventory and incoming sync payloads
 def get_known_relay_hashes() -> set[str]:
+    """
+    Return all relay_hash values known to this station (queued or confirmed).
+    Used for inventory and for dedupe during sanitize.
+    """
     known = set()
-    # Query persistent storage to ensure dedupe survives restarts.
+
     with station_db() as conn:
         rows = conn.execute("SELECT relay_hash FROM queued").fetchall()
         known.update([r["relay_hash"] for r in rows])
@@ -318,38 +364,275 @@ def get_known_relay_hashes() -> set[str]:
 
     return known
 
-# Sanitize and normalize incoming mesh payloads
-#
-# This performs a cheap "smell test" before any persistence:
-# - relay_hash must be valid and unique
-# - timestamps must be reasonable
-# - payload size and field types are enforced
-#
-# This does NOT mean the message is confirmed on-chain in a block, it only means it is safe to store and relay as unconfirmed.
+
+# ----------------------------
+# Bootstrap + crisis pinning
+# ----------------------------
+def bootstrap_station_or_die() -> None:
+    """
+    Bootstrap station from the trusted central backend.
+
+    Behavior:
+        - Ensure genesis (block_index=0) exists in station DB.
+        - Extract crisisId + block_public_key from genesis metadata and persist.
+        - Seed station with the last MAX_BLOCKS_STORED verified blocks from
+          central /blockchain so it can relay confirmations immediately.
+
+    Assumption:
+        This runs only during station provisioning with trusted connectivity.
+    """
+    init_station_db()
+
+    # If we already have the trust anchor pinned, we are bootstrapped.
+    stored_crisis_id = db_get_meta("crisisId")
+    stored_pubkey = db_get_meta("block_public_key")
+    if stored_crisis_id and stored_pubkey:
+        station_state["crisisId"] = stored_crisis_id
+        return
+
+    resp = requests.get(f"{CENTRAL_URL}/blockchain", timeout=15)
+    resp.raise_for_status()
+    chain = resp.json()
+
+    if not isinstance(chain, list) or not chain:
+        raise RuntimeError("Central /blockchain returned empty chain")
+
+    genesis = None
+    for b in chain:
+        if isinstance(b, dict) and b.get("block_index") == 0:
+            genesis = b
+            break
+
+    if not genesis:
+        raise RuntimeError("Genesis block not found in central /blockchain")
+
+    # Store genesis as provisioning artifact (trusted source).
+    db_put_block_verified(genesis)
+
+    # Extract trust anchor from genesis metadata tx.
+    pubkey = None
+    crisis_id = None
+
+    for tx in genesis.get("transactions", []) or []:
+        if not isinstance(tx, dict):
+            continue
+
+        msg_data = tx.get("message_data")
+        if not isinstance(msg_data, str):
+            continue
+
+        try:
+            msg = json.loads(msg_data)
+        except Exception:
+            continue
+
+        if msg.get("type") != "crisis_metadata":
+            continue
+
+        pubkey = msg.get("block_public_key")
+        crisis_id = msg.get("crisis_id")
+        break
+
+    if not isinstance(pubkey, str) or not pubkey:
+        raise RuntimeError("block_public_key not found in genesis metadata")
+
+    if not isinstance(crisis_id, str) or not crisis_id:
+        raise RuntimeError("crisis_id not found in genesis metadata")
+
+    db_set_meta("block_public_key", pubkey)
+    db_set_meta("crisisId", crisis_id)
+    station_state["crisisId"] = crisis_id
+
+    # Seed station with last MAX_BLOCKS_STORED blocks from central.
+    # These will be verified before storing.
+    suffix = chain[-MAX_BLOCKS_STORED:]
+    process_incoming_blocks(suffix)
+
+
+def ensure_crisis_id(incoming_crisis_id: str | None) -> tuple[bool, str]:
+    """
+    Enforce single-crisis operation.
+    Station is pinned at bootstrap time and rejects any other crisisId.
+    """
+    if not incoming_crisis_id or not isinstance(incoming_crisis_id, str):
+        return False, "Missing or invalid crisisId"
+
+    stored = db_get_meta("crisisId")
+    if not stored:
+        return False, "Station not bootstrapped (missing crisisId)"
+
+    if stored != incoming_crisis_id:
+        return False, "Station crisisId mismatch"
+
+    station_state["crisisId"] = stored
+    return True, ""
+
+
+# ----------------------------
+# Block verification + confirmations
+# ----------------------------
+
+def compute_block_hash(block: dict) -> str | None:
+    """
+    Recompute block hash(body) using the exact canonical JSON rules used by
+    your central backend Block.calculate_hash().
+    """
+    try:
+        body = {
+            "block_index": int(block["block_index"]),
+            "timestamp": int(block["timestamp"]),
+            "transactions": block.get("transactions") or [],
+            "previous_hash": str(block["previous_hash"]),
+            "nonce": int(block.get("nonce") or 0),
+        }
+
+        blob = json.dumps(
+            body,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+
+        return hashlib.sha256(blob).hexdigest()
+    except Exception:
+        return None
+
+
+def verify_block_signature(block: dict, block_public_key: str) -> bool:
+    """
+    Verify detached PGP signature over canonical header:
+        { block_index, previous_hash, hash }
+    """
+    try:
+        pub = pgpy.PGPKey()
+        pub.parse(block_public_key)
+
+        sig = pgpy.PGPSignature.from_blob(block["signature"])
+
+        header = json.dumps(
+            {
+                "block_index": int(block["block_index"]),
+                "previous_hash": str(block["previous_hash"]),
+                "hash": str(block["hash"]),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+
+        msg = pgpy.PGPMessage.new(header)
+
+        # PGPy verify result type can vary; `.good` is the typical indicator.
+        res = pub.verify(msg, sig)
+        return bool(getattr(res, "good", False))
+    except Exception:
+        return False
+
+
+def process_incoming_blocks(incoming_blocks: list[dict]) -> int:
+    """
+    Verify incoming blocks (hash + signature) before storing.
+    On each stored block, derive confirmations:
+        if tx.relay_hash exists => mark confirmed + delete from queued.
+    Returns: number of newly stored blocks.
+    """
+    if not isinstance(incoming_blocks, list) or not incoming_blocks:
+        return 0
+
+    block_public_key = db_get_block_public_key()
+    if not block_public_key:
+        return 0
+
+    stored = 0
+
+    for b in incoming_blocks[:MAX_BLOCKS_PER_PAYLOAD]:
+        if not isinstance(b, dict):
+            continue
+
+        # Cheap shape checks first (avoid expensive work on junk).
+        if not isinstance(b.get("block_index"), int):
+            continue
+        if not isinstance(b.get("hash"), str):
+            continue
+        if not isinstance(b.get("previous_hash"), str):
+            continue
+        if not isinstance(b.get("signature"), str):
+            continue
+
+        # Ignore duplicates or conflicts (no forks).
+        existing_hash = db_get_block_hash(b["block_index"])
+        if existing_hash:
+            if existing_hash == b["hash"]:
+                continue
+            continue
+
+        # Integrity: hash(body)
+        expected = compute_block_hash(b)
+        if not expected or expected != b["hash"]:
+            continue
+
+        # Authenticity: signature(header)
+        if not verify_block_signature(b, block_public_key):
+            continue
+
+        # Verified => store
+        db_put_block_verified(b)
+        stored += 1
+
+        # Confirm any relay_hashes found in transactions
+        for tx in b.get("transactions") or []:
+            if not isinstance(tx, dict):
+                continue
+
+            rh = tx.get("relay_hash")
+            if not isinstance(rh, str) or not rh:
+                continue
+
+            info = {
+                "confirmedAt": int(time.time() * 1000),
+                "block_index": int(b["block_index"]),
+                "txId": tx.get("transaction_id"),
+                "timestampPosted": tx.get("timestamp_posted"),
+            }
+
+            db_put_confirmed(rh, info)
+            db_delete_queued(rh)
+
+    return stored
+
+
+# ----------------------------
+# Mesh payload sanitization + export
+# ----------------------------
+
 def sanitize_sync_payload_server(payload: dict) -> tuple[list[dict], dict]:
+    """
+    "Smell test" sanitization for incoming queued messages.
+    This does NOT mean confirmed; it only means safe enough to store + relay.
+
+    Returns:
+        (sanitized_queued, sanitized_confirmed)
+
+    Note:
+        We are not trusting client confirmed hints here. Confirmations come
+        from verified blocks.
+    """
     if not isinstance(payload, dict):
         return [], {}
 
     raw_queued = payload.get("queued") or []
-    raw_confirmed = payload.get("confirmed") or {}
-
     if not isinstance(raw_queued, list):
         raw_queued = []
-    if not isinstance(raw_confirmed, dict):
-        raw_confirmed = {}
-    
-    # Time windows used to reject obviously bad timestamps.
-    # timestamp_created is in seconds; queuedAt is in milliseconds.
+
+    sanitized_confirmed: dict = {}
+
     now_s = int(time.time())
     now_ms = now_s * 1000
     one_day_s = 24 * 60 * 60
-    one_day_ms = one_day_s * 1000
 
-    # Track how many messages each origin_device sends in this payload to prevent abuse from a single peer (DoS/spam).
     sanitized_queued: list[dict] = []
     per_origin_count: dict[str, int] = {}
 
-    # Known relay_hashes are fetched from persistent storage. This prevents re-accepting duplicates after station restarts.
     existing_relay_hashes = get_known_relay_hashes()
 
     def is_string(v):
@@ -357,22 +640,19 @@ def sanitize_sync_payload_server(payload: dict) -> tuple[list[dict], dict]:
 
     def clamp_length(s: str, max_len: int) -> str:
         return s if len(s) <= max_len else s[:max_len]
-    # Normalize input shapes to avoid type errors.
+
     for msg in raw_queued:
         if not isinstance(msg, dict):
             continue
         if len(sanitized_queued) >= MAX_QUEUED_PER_PAYLOAD:
             break
 
-        # relay_hash is the globally unique identifier for this message. If it is missing or already known, ignore the message.
         relay_hash = msg.get("relay_hash")
         if not is_string(relay_hash) or not relay_hash.strip():
             continue
         if relay_hash in existing_relay_hashes:
             continue
 
-
-	    # Enforce per-origin message quota
         origin = msg.get("origin_device")
         if not is_string(origin) or not origin:
             origin = "unknown"
@@ -381,7 +661,6 @@ def sanitize_sync_payload_server(payload: dict) -> tuple[list[dict], dict]:
             continue
 
         try:
-            # Validate timestamp_created (seconds since epoch).
             ts = int(msg.get("timestamp_created"))
         except (TypeError, ValueError):
             continue
@@ -392,12 +671,9 @@ def sanitize_sync_payload_server(payload: dict) -> tuple[list[dict], dict]:
             priority = int(msg.get("priority_level"))
         except (TypeError, ValueError):
             continue
-	    # Enforce priority bounds defined by the crisis policy
         if priority < TOP_PRIORITY or priority > BOTTOM_PRIORITY:
             continue
 
-
-	    # Station address is plain text
         station_addr = msg.get("station_address")
         if not is_string(station_addr):
             continue
@@ -407,8 +683,7 @@ def sanitize_sync_payload_server(payload: dict) -> tuple[list[dict], dict]:
         if not is_string(type_field):
             continue
         type_field = clamp_length(type_field, MAX_TYPE_FIELD_LENGTH)
-        
-        # Message body must be plain text and within size limits.
+
         message_data = msg.get("message_data")
         if not is_string(message_data):
             continue
@@ -427,17 +702,16 @@ def sanitize_sync_payload_server(payload: dict) -> tuple[list[dict], dict]:
             if len(a) > MAX_ADDRESS_LENGTH:
                 a = a[:MAX_ADDRESS_LENGTH]
             clean_related.append(a)
-        
-        # queuedAt is local bookkeeping time (ms). Used only for ordering and persistence, not consensus.
+
         queued_at = msg.get("queuedAt")
         if isinstance(queued_at, (int, float)):
             queued_at_ms = int(queued_at)
         else:
             queued_at_ms = now_ms
-        # Normalize input shapes to avoid type errors.
+
         normalized = {
             "relay_hash": relay_hash,
-            "timestamp_created": ts,  # seconds
+            "timestamp_created": ts,
             "station_address": station_addr,
             "message_data": message_data,
             "related_addresses": clean_related,
@@ -446,49 +720,25 @@ def sanitize_sync_payload_server(payload: dict) -> tuple[list[dict], dict]:
             "origin_device": origin,
             "status": msg.get("status") or "pending",
             "attempts": int(msg.get("attempts") or 0),
-            "queuedAt": queued_at_ms,  # ms
+            "queuedAt": queued_at_ms,
         }
-        # Sanitize confirmed-relay hints. These are NOT trusted confirmations; they are used only as hints to help clients prune queues until verified blocks arrive.
+
         sanitized_queued.append(normalized)
-
-    sanitized_confirmed: dict = {}
-    for i, (relay_hash, info) in enumerate(list(raw_confirmed.items())):
-        if i >= MAX_CONFIRMED_PER_PAYLOAD:
-            break
-        if not is_string(relay_hash) or not relay_hash.strip():
-            continue
-        if not isinstance(info, dict):
-            continue
-
-        clean_info = dict(info)
-
-        ca = clean_info.get("confirmedAt")
-        if isinstance(ca, (int, float)):
-            ca_ms = int(ca)
-            if ca_ms < 0 or ca_ms > now_ms + one_day_ms:
-                clean_info.pop("confirmedAt", None)
-
-        tp = clean_info.get("timestampPosted")
-        if isinstance(tp, (int, float)):
-            tp_s = int(tp)
-            if tp_s < 0 or tp_s > now_s + one_day_s:
-                clean_info.pop("timestampPosted", None)
-
-        sanitized_confirmed[relay_hash] = clean_info
 
     return sanitized_queued, sanitized_confirmed
 
-# Build a sync payload from the station's persisted state
-# This is returned to clients after inventory or sync
-def export_station_payload():
-    now_ms = int(time.time() * 1000) # Timestamp for when this payload was generated (ms).
-    # Load the persisted crisisId into memory for quick access.
+
+def export_station_payload() -> dict:
+    """
+    Build a sync payload from the station's persisted state.
+    Clients use this to update their local caches.
+    """
+    now_ms = int(time.time() * 1000)
     station_state["crisisId"] = db_get_meta("crisisId")
 
     blocks = db_list_blocks(MAX_BLOCKS_PER_PAYLOAD)
     last_block = blocks[-1] if blocks else None
-    # The chain tip summarizes the most recent known block.
-    # Clients use this to detect whether they are behind.
+
     chain_tip = None
     if isinstance(last_block, dict):
         chain_tip = {
@@ -496,9 +746,7 @@ def export_station_payload():
             "hash": last_block.get("hash"),
             "previous_hash": last_block.get("previous_hash"),
         }
-    # Return the full payload sent back to the client.
-    # Note: confirmed is empty for now; confirmations will later be
-    # derived strictly from verified blocks.
+
     return {
         "version": 1,
         "deviceId": "station_local",
@@ -507,31 +755,30 @@ def export_station_payload():
         "chain_tip": chain_tip,
         "blocks": blocks,
         "queued": db_list_queued(limit=MAX_QUEUED_PER_PAYLOAD),
-        # Keep empty for now unless you want to persist “hint confirmations”
+        # Confirmations are returned via inventory (filtered by relay_hashes).
         "confirmed": {},
     }
 
-# Initialize station database and load persisted crisisId
+
+# Initialize DB and bootstrap trust anchor (genesis + public key + crisisId).
 init_station_db()
-station_state["crisisId"] = db_get_meta("crisisId")
+bootstrap_station_or_die()
 
 
-# Connection test
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"role": "station", "status": "ok"}), 200
 
 
-# Offline queue stored on station/device
-#
-# Clients send relay_hashes only (no message bodies).
-# Station replies with:
-# - missing_relay_hashes: which messages the station does not have
-# - confirmed: any relay_hash already confirmed (hints for pruning)
-#
-# This prevents duplicate uploads and reduces bandwidth/CPU usage.
 @app.route("/mesh/inventory", methods=["POST"])
 def mesh_inventory():
+    """
+    Inventory handshake:
+        Client sends relay_hashes only.
+        Station replies:
+            - missing_relay_hashes: which relay hashes the station does NOT know
+            - confirmed: confirmations for hashes the station knows as confirmed
+    """
     incoming = request.get_json(force=True, silent=True) or {}
 
     ok, err = ensure_crisis_id(incoming.get("crisisId"))
@@ -543,14 +790,11 @@ def mesh_inventory():
         return jsonify({"error": "relay_hashes must be a list"}), 400
 
     relay_hashes = relay_hashes[:RELAY_HASH_CAP]
-    relay_hashes = [
-        rh for rh in relay_hashes if isinstance(rh, str) and rh.strip()
-    ]
+    relay_hashes = [rh for rh in relay_hashes if isinstance(rh, str) and rh.strip()]
 
     known = get_known_relay_hashes()
     missing_relay_hashes = [rh for rh in relay_hashes if rh not in known]
 
-    # If you later persist confirmed hints, replace {} with db lookup.
     confirmed = db_get_confirmed_many(relay_hashes)
 
     return jsonify(
@@ -561,27 +805,24 @@ def mesh_inventory():
         }
     ), 200
 
-# Clients send full message bodies (queued + blocks).
-# Station:
-# - sanitizes payload
-# - stores new queued messages
-# - stores blocks (verification added later)
-# - returns current station state
+
 @app.route("/mesh/sync", methods=["POST"])
 def mesh_sync():
+    """
+    Sync endpoint:
+        - accepts queued message bodies (unconfirmed) and recent blocks
+        - stores queued after smell test (dedupe by relay_hash)
+        - verifies blocks before storing
+        - uses verified blocks to confirm relay_hash and prune queued
+    """
     incoming = request.get_json(force=True, silent=True) or {}
 
     ok, err = ensure_crisis_id(incoming.get("crisisId"))
     if not ok:
         return jsonify({"error": err}), 400
 
-    incoming_queued, incoming_confirmed = sanitize_sync_payload_server(incoming)
+    incoming_queued, _ignored_confirmed = sanitize_sync_payload_server(incoming)
 
-    # Optional: store “confirmed hints” (untrusted) to help prune duplicates.
-    for relay_hash, info in incoming_confirmed.items():
-        db_put_confirmed(relay_hash, info)
-
-    # Store only new queued messages
     for msg in incoming_queued:
         rh = msg.get("relay_hash")
         if not rh:
@@ -590,38 +831,24 @@ def mesh_sync():
             continue
         db_put_queued(msg)
 
-    # Store blocks as-is for now (verification later)
     incoming_blocks = incoming.get("blocks") or []
     if isinstance(incoming_blocks, list):
-        for b in incoming_blocks[:MAX_BLOCKS_PER_PAYLOAD]:
-            if not isinstance(b, dict):
-                continue
-            if not isinstance(b.get("block_index"), int):
-                continue
-            if not isinstance(b.get("hash"), str):
-                continue
-            if not isinstance(b.get("previous_hash"), str):
-                continue
-            if not isinstance(b.get("signature"), str):
-                continue
-            db_put_block(b)
+        process_incoming_blocks(incoming_blocks)
 
     payload = export_station_payload()
     return jsonify(payload), 200
 
-# When internet connectivity is available, the station:
-# - posts queued messages to the central backend
-# - deletes them locally only after a successful 201 response
-#
-# This simulates delayed delivery from offline locations.
+
 @app.route("/station/flush", methods=["POST"])
 def station_flush():
-    # Load queued messages from persistent storage (SQLite) not from in-memory state, so this survives restarts.
+    """
+    When internet connectivity is available, station posts queued messages to
+    central backend and deletes from local queue only on HTTP 201 success.
+    """
     queued = db_list_queued(limit=MAX_QUEUED_PER_PAYLOAD)
-    
-    # Only attempt to flush messages still marked as "pending".
-    pending = [m for m in queued if m.get("status") == "pending"]
-    # If there is nothing to send, exit early.
+
+    pending = [m for m in queued if (m.get("status") or "pending") == "pending"]
+
     if not pending:
         return jsonify({"status": "ok", "message": "No pending messages"}), 200
 
@@ -630,10 +857,8 @@ def station_flush():
     errors = []
 
     for msg in pending:
-        # relay_hash uniquely identifies this message across the mesh
         relay_hash = msg.get("relay_hash")
-        
-        # POST the queued message to the central backend, the dev rate override allows bulk replay during testing.
+
         try:
             url = f"{CENTRAL_URL}/transaction"
             headers = {
@@ -643,12 +868,12 @@ def station_flush():
             resp = requests.post(url, json=msg, headers=headers, timeout=5)
 
             if resp.status_code == 201:
-                # Backend accepted the message, now safely remove it from the station queue.
                 success += 1
+
                 if isinstance(relay_hash, str) and relay_hash:
-                    db_delete_queued(relay_hash)
+                    # Don’t delete yet; keep it as dedupe memory until confirmed.
+                    db_update_queued_status(relay_hash, "sent")
             else:
-                # Backend rejected the message; keep it queued.
                 failed += 1
                 errors.append(
                     f"{relay_hash}: HTTP {resp.status_code} {resp.text}"
@@ -656,18 +881,15 @@ def station_flush():
         except Exception as e:
             failed += 1
             errors.append(f"{relay_hash}: {relay_hash}: {e}")
-    
-    # Return a summary so operators / UI can see what happened.
-    return jsonify(
-        {
+
+    return jsonify({
             "status": "ok",
             "central_url": CENTRAL_URL,
             "attempted": len(pending),
             "success": success,
             "failed": failed,
             "errors": errors,
-        }
-    ), 200
+        }), 200
 
 
 if __name__ == "__main__":
