@@ -296,33 +296,75 @@ export default function DevTools({ onRefresh }) {
     // Station sync: send our payload to the station, merge its response back
     const handleStationSync = async () => {
         setSyncingStation(true)
+
         try {
-            const payload = disasterStorage.exportSyncPayload()
-            console.log(
-                'Sending sync payload to station:',
-                payload
-            )
-
-            const res = await fetch(`${STATION_URL}/mesh/sync`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            })
-
-            if (!res.ok) {
-                const text = await res.text()
-                throw new Error(
-                    `Station sync failed: ${res.status} ${text}`
-                )
+            const crisis = disasterStorage.getCrisisMetadata()
+            const crisisId = crisis?.id
+            if (!crisisId) {
+                throw new Error('Missing crisisId (fetch /crisis once online first)')
             }
 
-            const stationPayload = await res.json()
-            console.log(
-                'Received station sync payload:',
-                stationPayload
+            const queue = disasterStorage.getMessageQueue() || []
+            const pending = queue.filter(
+                (m) =>
+                    (m.status || 'pending') === 'pending' &&
+                    m.relay_hash &&
+                    !disasterStorage.isMessageConfirmed(m.relay_hash)
             )
 
-            // disasterStorage.importSyncPayload(stationPayload)
+            const relay_hashes = pending.map((m) => m.relay_hash)
+
+            // 1) Inventory: cheap check first
+            const invRes = await fetch(`${STATION_URL}/mesh/inventory`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    crisisId,
+                    relay_hashes,
+                }),
+            })
+
+            if (!invRes.ok) {
+                const text = await invRes.text()
+                throw new Error(`Station inventory failed: ${invRes.status} ${text}`)
+            }
+
+            const inv = await invRes.json()
+
+            // Optional: apply confirmed hints (prunes local queue)
+            if (inv?.confirmed && typeof inv.confirmed === 'object') {
+                disasterStorage.importSyncPayload({
+                    queued: [],
+                    confirmed: inv.confirmed,
+                })
+            }
+
+            const missing = Array.isArray(inv?.missing_relay_hashes)
+                ? new Set(inv.missing_relay_hashes)
+                : new Set()
+
+            // 2) Sync: only send missing message bodies
+            const fullPayload = disasterStorage.exportSyncPayload()
+            const reducedPayload = {
+                ...fullPayload,
+                crisisId,
+                queued: (fullPayload.queued || []).filter( (m) => {
+                    m?.relay_hash ? missing.has(m.relay_hash) : false
+                }),
+            }
+
+            const syncRes = await fetch(`${STATION_URL}/mesh/sync`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(reducedPayload),
+            })
+
+            if (!syncRes.ok) {
+                const text = await syncRes.text()
+                throw new Error(`Station sync failed: ${syncRes.status} ${text}`)
+            }
+
+            const stationPayload = await syncRes.json()
             await disasterStorage.importSyncPayloadAsync(stationPayload)
 
             alert('Station sync completed.')
