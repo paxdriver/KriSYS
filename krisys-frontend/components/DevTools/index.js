@@ -345,13 +345,16 @@ export default function DevTools({ onRefresh }) {
 
             // 2) Sync: only send missing message bodies
             const fullPayload = disasterStorage.exportSyncPayload()
+            console.log(`Full Payload\n${JSON.stringify(fullPayload, null, 2)}`)
             const reducedPayload = {
                 ...fullPayload,
                 crisisId,
-                queued: (fullPayload.queued || []).filter( (m) => {
-                    m?.relay_hash ? missing.has(m.relay_hash) : false
+                queued: (fullPayload.queued || []).filter((m) => {
+                    const rh = m?.relay_hash
+                    return typeof rh === 'string' && rh.length > 0 && missing.has(rh)
                 }),
             }
+            console.log(`Reduced Payload\n${JSON.stringify(reducedPayload, null, 2)}`)
 
             const syncRes = await fetch(`${STATION_URL}/mesh/sync`, {
                 method: 'POST',

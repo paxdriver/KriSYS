@@ -1,5 +1,6 @@
 # krisys-backend/app.py
 import hashlib
+import uuid
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from blockchain import Blockchain, Transaction, PolicySystem
@@ -37,7 +38,72 @@ CORS(app, origins=['http://localhost:3000', 'http://localhost:5000', 'http://loc
 # app.secret_key = os.environ.get('SECRET_KEY', 'dev_secret_key_please_change_in_prod')  # PRODUCTION: Use secure random key
 ################
 
-# CREATING CRISIS
+def dev_bootstrap_policy_id_and_cleanup() -> str | None:
+	"""
+	DEV ONLY.
+	Rule: if dev_policy_id.txt is missing, we treat that as "reset everything".
+	We immediately create a new policy id file (to avoid Flask reloader double-run
+	making two different ids), then delete stale DBs/keys/station DB.
+
+	Returns:
+		policy_id (str) in development, else None
+	"""
+	is_dev = os.environ.get("FLASK_ENV") == "development"
+	if not is_dev:
+		return None
+
+	policy_file = os.path.join("blockchain", "dev_policy_id.txt")
+	os.makedirs(os.path.dirname(policy_file), exist_ok=True)
+
+	policy_id = None
+	if os.path.exists(policy_file):
+		with open(policy_file, "r", encoding="utf-8") as f:
+			policy_id = f.read().strip() or None
+
+	if policy_id:
+		logger.info(f"DEV: reusing persisted policy_id={policy_id}")
+		return policy_id
+
+	# Missing/empty policy file => create a new id FIRST (prevents reload races)
+	policy_id = uuid.uuid4().hex
+	with open(policy_file, "w", encoding="utf-8") as f:
+		f.write(policy_id)
+
+	logger.warning(
+		"DEV: dev_policy_id.txt was missing; created new policy_id and "
+		"cleaning stale artifacts for a fresh start."
+	)
+
+	db_path = os.getenv("BLOCKCHAIN_DB_PATH", "blockchain.db")
+
+	# Also wipe station DB so it can't stay pinned to an old crisisId/key
+	station_db_host_path = os.path.join(
+		"device-offline-server",
+		"station-data",
+		"station.db",
+	)
+
+	stale_paths = [
+		db_path,
+		"blockchain/master_public_key.asc",
+		"blockchain/master_private_key.asc",
+		station_db_host_path,
+	]
+
+	for path in stale_paths:
+		try:
+			if os.path.exists(path):
+				os.remove(path)
+				logger.info(f"DEV: deleted {path}")
+		except Exception as e:
+			logger.warning(f"DEV: failed to delete {path}: {e}")
+
+	return policy_id
+
+# GENERATING CRISIS BLOCKCHAIN - (an event and aftermath all tied to the same chain)
+# persists policy across reloads until the policy_id textfile is deleted. When that happens we'll delete old databases (station.db and blockchain.db) and asc pgp key files belonging to the old blockchain (master_public_key.asc/master_private_key.asc) so that we're starting fresh.
+persisted_policy_id = dev_bootstrap_policy_id_and_cleanup() 
+# Policy is the settings and details of the crisis for which we need a KriSys blockchain 
 policy_system = PolicySystem()
 hurricane_policy_id = policy_system.create_crisis_policy(
     name="Hurricane Response 2024",
@@ -58,7 +124,7 @@ hurricane_policy_id = policy_system.create_crisis_policy(
         'types': ['check_in', 'message', 'alert', 'damage_report']
     },
     # No policy_id provided -> generates UUID during the policy creation process
-    policy_id=None      # TODO: When building the crisis generation wizard for aid organizations to create an event, they can assign an id for that event to be the same as an id used in another system if they should choose, or as part of a relational database to help integrate different systems into one another easily.
+    policy_id=persisted_policy_id      # TODO: When building the crisis generation wizard for aid organizations to create an event, they can assign an id for that event to be the same as an id used in another system if they should choose, or as part of a relational database to help integrate different systems into one another easily.
 )
 
 # Activate the hurricane policy

@@ -1,3 +1,4 @@
+# krisys-backend/device-offline-server/app.py
 """
 KriSYS Offline Station Server
 
@@ -33,19 +34,21 @@ import sqlite3
 import json
 import hashlib
 from contextlib import contextmanager
-
 import requests
 import pgpy
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
+import logging
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 app = Flask(__name__)
 CORS(app, origins=["http://localhost:3000"])
 
 # In-memory cache (not source of truth; SQLite is source of truth)
-station_state = {
-    "crisisId": None,
-}
+station_state = {"crisisId": None,}
 
 # Abuse / safety limits (keep bounded to protect station)
 MAX_QUEUED_PER_PAYLOAD = 100
@@ -389,9 +392,35 @@ def bootstrap_station_or_die() -> None:
     if stored_crisis_id and stored_pubkey:
         station_state["crisisId"] = stored_crisis_id
         return
+    
+    # DEV - Race condition against flask app
+    # resp = requests.get(f"{CENTRAL_URL}/blockchain", timeout=15)
+    # resp.raise_for_status()
+    # Retry fetching blockchain from central (with backoff)
+    max_retries = 10
+    retry_delay = 1  # seconds
 
-    resp = requests.get(f"{CENTRAL_URL}/blockchain", timeout=15)
-    resp.raise_for_status()
+    for attempt in range(1, max_retries + 1):
+        try:
+            logger.info(f"Bootstrapping from central (attempt {attempt}/{max_retries})...")
+            resp = requests.get(f"{CENTRAL_URL}/blockchain", timeout=15)
+            resp.raise_for_status()
+            break
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            if attempt < max_retries:
+                logger.warning(
+                    f"Failed to reach central (attempt {attempt}): {e}. "
+                    f"Retrying in {retry_delay}s..."
+                )
+                time.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, 10)  # cap at 10s
+            else:
+                logger.error(f"Failed to bootstrap after {max_retries} attempts.")
+                raise RuntimeError(
+                    f"Could not reach central backend after {max_retries} retries: {e}"
+                ) from e
+    
+    #############################
     chain = resp.json()
 
     if not isinstance(chain, list) or not chain:
