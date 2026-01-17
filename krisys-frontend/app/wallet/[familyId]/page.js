@@ -10,8 +10,10 @@ import { filterCanonicalBlocks } from '@/services/blockVerifier'
 
 // Helper function for getting data from blocks rather than wallet/:id/transactions endpoint
 // DEV NOTE: This is ensuring we get canonical block data, and it includes alerts and sent messages now
+// Allows for family check-in from one scan, alert broadcast to family instead of members, obfuscates number of individuals in family thus reducing some chain bloat over time
 const deriveWalletTransactionsFromBlocks = (wallet, blocks) => {
   const memberAddresses = wallet?.members?.map((m) => m.address) || []
+  const walletId = wallet?.family_id || null
   const derived = []
 
   for (const block of blocks || []) {
@@ -26,18 +28,13 @@ const deriveWalletTransactionsFromBlocks = (wallet, blocks) => {
         continue
       }
 
-      const fromMe =
-        tx.station_address && memberAddresses.includes(tx.station_address)
+    const fromMe = tx.station_address && memberAddresses.includes(tx.station_address)
+    const toMember = Array.isArray(tx.related_addresses) && tx.related_addresses.some((addr) => memberAddresses.includes(addr))
+    const toWallet = walletId && Array.isArray(tx.related_addresses) && tx.related_addresses.includes(walletId)
 
-      const toMe =
-        Array.isArray(tx.related_addresses) &&
-        tx.related_addresses.some((addr) => memberAddresses.includes(addr))
-
-      if (fromMe || toMe) {
-        derived.push(tx)
-      }
-    }
+    if (fromMe || toMember || toWallet) derived.push(tx)
   }
+}
 
   return derived
 }

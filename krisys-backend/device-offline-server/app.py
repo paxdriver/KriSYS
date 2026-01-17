@@ -32,6 +32,7 @@ import os
 import time
 import sqlite3
 import json
+import uuid
 import hashlib
 from contextlib import contextmanager
 import requests
@@ -99,6 +100,7 @@ def init_station_db():
     Safe to call repeatedly.
     """
     with station_db() as conn:
+        # Store genesis block and metadata for the crisis
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS meta (
@@ -107,7 +109,7 @@ def init_station_db():
             )
             """
         )
-
+        # Table for queue messages to be added to a block once connected
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS queued (
@@ -119,7 +121,7 @@ def init_station_db():
             )
             """
         )
-
+        # Efficient lookup of relay_hashes to check if message needs to be queued
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS confirmed (
@@ -128,7 +130,7 @@ def init_station_db():
             )
             """
         )
-
+        # Table with blockchain persistent to help distribute offline data, verify new msgs, sync to other users, etc.
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS blocks (
@@ -136,6 +138,17 @@ def init_station_db():
                 hash TEXT NOT NULL,
                 previous_hash TEXT NOT NULL,
                 json TEXT NOT NULL
+            )
+            """
+        )
+        # For offline check-ins at a station
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS checkins_queued (
+                relay_hash TEXT PRIMARY KEY,
+                json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                queuedAt INTEGER NOT NULL
             )
             """
         )
@@ -172,6 +185,49 @@ def db_set_meta(key: str, value: str) -> None:
 def db_get_block_public_key() -> str | None:
     return db_get_meta("block_public_key")
 
+
+def db_is_checkin_queued(relay_hash: str) -> bool:
+	with station_db() as conn:
+		row = conn.execute(
+			"SELECT 1 FROM checkins_queued WHERE relay_hash = ?",
+			(relay_hash,),
+		).fetchone()
+		return bool(row)
+
+
+def db_put_checkin_queued(checkin: dict) -> bool:
+	relay_hash = checkin.get("relay_hash")
+	if not isinstance(relay_hash, str) or not relay_hash:
+		return False
+
+	status = checkin.get("status")
+	if not isinstance(status, str) or not status:
+		status = "pending"
+
+	with station_db() as conn:
+		cur = conn.execute(
+			"""
+			INSERT OR IGNORE INTO checkins_queued (relay_hash, json, status, queuedAt)
+			VALUES (?, ?, ?, ?)
+			""",
+			(
+				relay_hash,
+				json.dumps(checkin, separators=(",", ":"), ensure_ascii=False),
+				status,
+				int(checkin.get("queuedAt") or 0),
+			),
+		)
+		conn.commit()
+		return cur.rowcount == 1
+
+
+def db_list_checkins_queued(limit: int) -> list[dict]:
+	with station_db() as conn:
+		rows = conn.execute(
+			"SELECT json FROM checkins_queued ORDER BY queuedAt DESC LIMIT ?",
+			(int(limit),),
+		).fetchall()
+		return [json.loads(r["json"]) for r in rows]
 
 # ----------------------------
 # DB helpers (blocks)
@@ -824,6 +880,85 @@ bootstrap_station_or_die()
 def health():
     return jsonify({"role": "station", "status": "ok"}), 200
 
+
+# Check-ins by scanner, not gossip from mesh network but station-direct scans
+@app.route("/station/checkin", methods=["POST"])
+def station_checkin_offline():
+	"""
+	Offline check-in intake (station-local).
+
+	Client sends:
+		{
+			"crisisId": "...",
+			"address": "familyId-memberId",
+			"timestamp_created": 1234567890,   # optional seconds
+			"relay_hash": "uuid",              # optional (station will generate)
+			"origin_device": "device_..."      # optional
+		}
+
+	Station stores it durably for later flush to central /checkin.
+	"""
+	incoming = request.get_json(force=True, silent=True) or {}
+
+	ok, err = ensure_crisis_id(incoming.get("crisisId"))
+	if not ok:
+		return jsonify({"error": err}), 400
+
+	address = incoming.get("address")
+	if not isinstance(address, str) or not address.strip():
+		return jsonify({"error": "Missing or invalid address"}), 400
+
+	now_s = int(time.time())
+	now_ms = now_s * 1000
+
+	ts = incoming.get("timestamp_created")
+	if ts is None:
+		ts = now_s
+	try:
+		ts = int(ts)
+	except Exception:
+		return jsonify({"error": "timestamp_created must be integer seconds"}), 400
+
+	if ts < 0 or ts > now_s + 24 * 60 * 60:
+		return jsonify({"error": "timestamp_created out of bounds"}), 400
+
+	relay_hash = incoming.get("relay_hash")
+	if relay_hash is None or relay_hash == "":
+		relay_hash = str(uuid.uuid4())
+	if not isinstance(relay_hash, str) or not relay_hash.strip():
+		return jsonify({"error": "relay_hash must be a non-empty string"}), 400
+	if len(relay_hash) > 128:
+		return jsonify({"error": "relay_hash too long"}), 400
+
+	# Dedupe: if we already confirmed it via blocks, reject as already known
+	if db_is_confirmed(relay_hash):
+		return jsonify({"status": "ok", "relay_hash": relay_hash, "deduped": True}), 200
+
+	# Dedupe: if already queued, return ok
+	if db_is_checkin_queued(relay_hash):
+		return jsonify({"status": "ok", "relay_hash": relay_hash, "deduped": True}), 200
+
+	checkin = {
+		"relay_hash": relay_hash,
+		"timestamp_created": ts,  # seconds
+		"address": address.strip(),
+		"status": "pending",
+		"queuedAt": now_ms,  # ms
+		"origin_device": incoming.get("origin_device") or "unknown",
+	}
+
+	inserted = db_put_checkin_queued(checkin)
+
+	return (
+		jsonify(
+			{
+				"status": "queued",
+				"relay_hash": relay_hash,
+				"inserted": bool(inserted),
+			}
+		),
+		201,
+	)
 
 @app.route("/mesh/inventory", methods=["POST"])
 def mesh_inventory():

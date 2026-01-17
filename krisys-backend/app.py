@@ -521,14 +521,41 @@ def set_policy():
 #   -If status != 'active' or api_key_hash missing → 403.
 #   -If SHA-256(api_key) does not match api_key_hash (with hmac.compare_digest) → 401.
 #   -Only then do we accept and add the check_in transaction.
+#   -Checkins from offline generate relay_hash to help cull tx's pushed to blockchain and purge from queues
 @app.route('/checkin', methods=['POST'])
 def check_in():
     """Process QR code scan and create check-in transaction"""
     try:
-        data = request.json
+        data: dict = request.json
         address = data.get('address')
         station_id = data.get('station_id', 'STATION_001')
         api_key = request.headers.get('X-Station-API-Key')  # Registered station api key, established by admin remotely before distributing station scanners
+        
+        relay_hash = data.get('relay_hash', '')
+        
+        if relay_hash is None:
+            relay_hash = ''
+        
+        if not isinstance(relay_hash, str):
+            return jsonify({"error": "relay_hash must be a string"}), 400
+		
+        if len(relay_hash) > 128:
+            return jsonify({"error": "relay_hash too long"}), 400
+
+        now_s = int(time.time())
+        timestamp_created = data.get('timestamp_created', None)
+        if timestamp_created is None:
+            timestamp_created = now_s
+        
+        try:
+            timestamp_created = int(timestamp_created)
+        
+        except Exception:
+            return jsonify({"error": "timestamp_created must be an integer seconds"}), 400      
+     
+        # Allow old timestamps (offline check-ins), but reject far-future values
+        if timestamp_created < 0 or timestamp_created > now_s + 24 * 60 * 60:
+            return jsonify({"error": "timestamp_created out of bounds"}), 400
 
         if not address:
             return jsonify({"error": "Missing address"}), 400
@@ -566,9 +593,7 @@ def check_in():
         # Verify API key
         provided_hash = hashlib.sha256(api_key.encode('utf-8')).hexdigest()
         if not hmac.compare_digest(provided_hash, row['api_key_hash']):
-            logger.warning(
-                f"Invalid API key for station_id={station_id} crisis={crisis_id}"
-            )
+            logger.warning(f"Invalid API key for station_id={station_id} crisis={crisis_id}")
             return jsonify({"error": "Invalid station API key"}), 401
 
         # Create check-in transaction
@@ -579,13 +604,15 @@ def check_in():
             related_addresses=[address],
             type_field="check_in",
             priority_level=1,  # TODO: prioritize check-ins and alerts when mining blocks
+            relay_hash=relay_hash
         )
 
-        blockchain.add_transaction(tx)
+        blockchain.add_transaction(tx, rate_limit_override=True) # Check-ins are high through-put, only stations are allowed to do check-ins and stations will cull repeated transactions on behalf of the server in the case of spamming abuse (like a bored unattended child repeated scanning just to play with the device while bored, for eg.)
         return jsonify(
             {
                 "status": "success",
                 "transaction_id": tx.transaction_id,
+                "relay_hash": relay_hash,
                 "message": f"Checked in {address} at station {station_id}",
             }
         ), 201

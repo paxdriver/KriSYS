@@ -353,23 +353,19 @@ class DisasterStorage {
         try {
             // Get the old crisis metadata before we write the new one
             const prev = this.getCrisisMetadata()
-            
-            localStorage.setItem(
-                this.STORAGE_KEYS.CRISIS_METADATA,
-                JSON.stringify({
-                    id: meta.id || meta.crisis_id || null,
-                    name: meta.name || null,
-                    organization: meta.organization || null,
-                    contact: meta.contact || null,
-                    description: meta.description || null,
-                    created_at: meta.created_at || null,
-                    // Backend may expose this as block_public_key or public_key; normalize here
-                    block_public_key:
-                        meta.block_public_key || meta.public_key || null,
-                    storedAt: Date.now()
-                })
-            )
 
+            const next = {
+                id: meta.id || meta.crisis_id || null,
+                name: meta.name || null,
+                organization: meta.organization || null,
+                contact: meta.contact || null,
+                description: meta.description || null,
+                created_at: meta.created_at || null,
+                // Backend may expose this as block_public_key or public_key; normalize here
+                block_public_key: meta.block_public_key || meta.public_key || null,
+                storedAt: Date.now(),
+            }
+            
             // DEV NOTE: IN PROD WE'LL WANT TO ALLOW SUBSCRIBING TO MULTIPLE CRISES,
             //          THIS WILL NEED TO BE NAMESPACED TO ALLOW FOR THAT
             // If crisis changes, wipe all crisis-scoped caches (queue/blocks/keys/etc.)
@@ -381,6 +377,11 @@ class DisasterStorage {
                 )
                 this._clearCrisisScopedData()
             }
+
+            localStorage.setItem(
+                this.STORAGE_KEYS.CRISIS_METADATA,
+                JSON.stringify(next)
+            )
         } 
         catch (e) {
             console.error('Failed to save crisis metadata:', e)

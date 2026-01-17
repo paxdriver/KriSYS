@@ -52,6 +52,7 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
         }
     }, [myAddresses, senderAddress])
 
+    const walletId = walletData?.family_id || null  // aka familyId
     // Canonical, on-chain messages involving this wallet (sent or received)
     const myMessages = useMemo(() => {
         if (!transactions || !transactions.length) return []
@@ -59,13 +60,16 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
         return transactions.filter((tx) => {
             if (tx.type_field !== 'message') return false
 
-            const fromMe = tx.station_address && myAddresses.includes(tx.station_address)
-            const toMe = Array.isArray(tx.related_addresses) && tx.related_addresses.some((addr) => myAddresses.includes(addr)
-                )
+            // To see sent messages from me to others
+            const fromMe = tx.station_address && myAddresses.includes(tx.station_address) 
+            // Individual member of the wallet
+            const toMember = Array.isArray(tx.related_addresses) && tx.related_addresses.some( addr => myAddresses.includes(addr) )
+            // All members of the family get the message
+            const toFamily = walletId && Array.isArray(tx.related_addresses) && tx.related_addresses.includes(walletId)
 
-            return fromMe || toMe
+            return fromMe || toMember || toFamily
         })
-    }, [transactions, myAddresses])
+    }, [transactions, myAddresses, walletId])
 
     // Locally queued (unconfirmed) messages that involve this wallet
     const queuedMyMessages = useMemo(() => {
@@ -84,14 +88,16 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
                 return false
             }
 
+            // So user can see their own sent messages
             const fromMe = msg.station_address && myAddresses.includes(msg.station_address)
-            const toMe = Array.isArray(msg.related_addresses) && msg.related_addresses.some( 
-                (addr) => myAddresses.includes(addr)
-            )
+            // Individually addressed messages to a member of a group/family wallet
+            const toMe = Array.isArray(msg.related_addresses) && msg.related_addresses.some( addr => myAddresses.includes(addr))
+            // Messages to the group/family get included to message queue
+            const toFamily = walletId && Array.isArray(msg.related_addresses) && msg.related_addresses.includes(walletId)
 
-            return fromMe || toMe
+            return fromMe || toMe || toFamily
         })
-    }, [myAddresses, queueVersion])
+    }, [myAddresses, queueVersion, walletId])
 
     // Merge canonical and queued into a single list for display
     const allMessages = useMemo(() => {
