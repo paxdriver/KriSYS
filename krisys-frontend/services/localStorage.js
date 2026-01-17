@@ -62,6 +62,12 @@ class DisasterStorage {
             CRISIS_METADATA: 'krisys_crisis_metadata'    // crisis id + block_public_key for offline block verification
         }
 
+        // Emit an event to trigger re-render when localStorage is updated
+      	this.EVENTS = {
+            QUEUE_UPDATED: 'krisys:queue_updated',
+            CONFIRMED_UPDATED: 'krisys:confirmed_updated',
+        }
+
         // Limits for incoming sync payloads to protect against abuse
         this.MAX_QUEUED_PER_PAYLOAD = 100
         this.MAX_CONFIRMED_PER_PAYLOAD = 500
@@ -71,8 +77,42 @@ class DisasterStorage {
         this.MAX_ADDRESS_LENGTH = 128
         this.MAX_STATION_ADDRESS_LENGTH = 128
         this.MAX_TYPE_FIELD_LENGTH = 32
+
     }
 
+    // DEV NOTE: Consider changing this to a custom hook to allow re-renders throughout the app on custom event emissions if needed in other parts of the app
+    _emit(eventName, detail = undefined) {
+        try {
+            if (typeof window === 'undefined') return
+            window.dispatchEvent(new CustomEvent(eventName, { detail }))
+        } 
+        catch {
+            // Ignore event failures; storage is still the source of truth.
+        }
+    }
+    // DEV NOTE: NOT FOR PROD, NAMESPACE FOR PROD!!!
+    // Keep device id (identity for relay/origin) and contacts (separate storage).
+    // Clear everything that would be invalid across a new genesis/trust anchor.
+    _clearCrisisScopedData() {
+        const keysToClear = [
+            this.STORAGE_KEYS.PRIVATE_KEY,
+            this.STORAGE_KEYS.WALLET_DATA,
+            this.STORAGE_KEYS.BLOCKCHAIN,
+            this.STORAGE_KEYS.MESSAGE_QUEUE,
+            this.STORAGE_KEYS.PUBLIC_KEYS,
+            this.STORAGE_KEYS.SYNC_STATUS,
+            this.STORAGE_KEYS.CONFIRMED_RELAYS,
+            this.STORAGE_KEYS.CRISIS_METADATA,
+        ]
+
+        for (const key of keysToClear) {
+            try {
+                localStorage.removeItem(key)
+            } catch (e) {
+                // ignore
+            }
+        }
+    }
 
     // Sanitize and bound an incoming sync payload (queued + confirmed)
     sanitizeSyncPayload(payload) {
@@ -109,8 +149,7 @@ class DisasterStorage {
 
         // Sanitize queued messages
         for (const msg of rawQueued) {
-            if (
-                !msg ||
+            if (!msg ||
                 typeof msg !== 'object' ||
                 sanitizedQueued.length >= this.MAX_QUEUED_PER_PAYLOAD
             ) {
@@ -136,8 +175,7 @@ class DisasterStorage {
             const origin = isString(msg.origin_device)
                 ? msg.origin_device
                 : 'unknown'
-            perOriginCount[origin] =
-                (perOriginCount[origin] || 0) + 1
+            perOriginCount[origin] = (perOriginCount[origin] || 0) + 1
             if (perOriginCount[origin] > this.MAX_PER_ORIGIN) {
                 continue
             }
@@ -163,6 +201,8 @@ class DisasterStorage {
             if (!isString(messageData)) continue
             if (messageData.length > this.MAX_MESSAGE_LENGTH) continue
 
+            // Ensure related_addresses is an array, filter out invalid entries,
+            // limit to MAX_ADDRESSES_PER_TX, and truncate each address to MAX_ADDRESS_LENGTH
             let related = Array.isArray(msg.related_addresses)
                 ? msg.related_addresses
                 : []
@@ -173,7 +213,7 @@ class DisasterStorage {
                     a.length > this.MAX_ADDRESS_LENGTH
                         ? a.slice(0, this.MAX_ADDRESS_LENGTH)
                         : a
-                )
+                    )
 
             const normalized = {
                 relay_hash: relayHash,
@@ -214,19 +254,13 @@ class DisasterStorage {
             // Optionally clamp confirmedAt / timestampPosted
             const cleanInfo = { ...info }
             if (typeof cleanInfo.confirmedAt === 'number') {
-                if (
-                    cleanInfo.confirmedAt < 0 ||
-                    cleanInfo.confirmedAt > now + oneDayMs
-                ) {
+                if (cleanInfo.confirmedAt < 0 ||
+                    cleanInfo.confirmedAt > now + oneDayMs) {
                     delete cleanInfo.confirmedAt
                 }
             }
             if (typeof cleanInfo.timestampPosted === 'number') {
-                if (
-                    cleanInfo.timestampPosted < 0 ||
-                    cleanInfo.timestampPosted >
-                        (now + oneDayMs) / 1000
-                ) {
+                if (cleanInfo.timestampPosted < 0 || cleanInfo.timestampPosted > (now + oneDayMs) / 1000) {
                     delete cleanInfo.timestampPosted
                 }
             }
@@ -332,6 +366,18 @@ class DisasterStorage {
                     storedAt: Date.now()
                 })
             )
+
+            // DEV NOTE: IN PROD WE'LL WANT TO ALLOW SUBSCRIBING TO MULTIPLE CRISES,
+            //          THIS WILL NEED TO BE NAMESPACED TO ALLOW FOR THAT
+            // If crisis changes, wipe all crisis-scoped caches (queue/blocks/keys/etc.)
+            // so we never mix data across different trust anchors.
+            if (prev?.id && next.id && prev.id !== next.id) {
+                console.warn(
+                    `Crisis changed ${prev.id} -> ${next.id}. ` +
+                        "Clearing local crisis-scoped caches."
+                )
+                this._clearCrisisScopedData()
+            }
         } 
         catch (e) {
             console.error('Failed to save crisis metadata:', e)
@@ -342,9 +388,11 @@ class DisasterStorage {
             this.STORAGE_KEYS.CRISIS_METADATA
         )
         if (!stored) return null
+        
         try {
             return JSON.parse(stored)
-        } catch (e) {
+        } 
+        catch (e) {
             console.error('Failed to parse crisis metadata:', e)
             return null
         }
@@ -390,7 +438,8 @@ class DisasterStorage {
         try {
             const parsed = JSON.parse(stored)
             return parsed.blocks || []
-        } catch (e) {
+        } 
+        catch (e) {
             console.error('Failed to parse cached blockchain:', e)
             return []
         }
@@ -410,6 +459,8 @@ class DisasterStorage {
             this.STORAGE_KEYS.MESSAGE_QUEUE,
             JSON.stringify(queue)
         )
+        // Fire an event to re-render / memoized function update
+        this._emit(this.EVENTS.QUEUE_UPDATED, { source: 'queueMessage' })
     }
 
     getMessageQueue() {
@@ -440,11 +491,8 @@ class DisasterStorage {
     getDeviceId() {
         let deviceId = localStorage.getItem('krisys_device_id')
         if (!deviceId) {
-            deviceId =
-                'device_' +
-                Date.now() +
-                '_' +
-                Math.random().toString(36).substr(2, 9)
+            // DEV NOTE: CHANGE THIS TO UUID!!!
+            deviceId = 'device_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9)
             localStorage.setItem('krisys_device_id', deviceId)
         }
         return deviceId
@@ -452,9 +500,7 @@ class DisasterStorage {
 
     // CONFIRMED MESSAGES (by relay_hash) -----------------------------
     getConfirmedRelays() {
-        const stored = localStorage.getItem(
-            this.STORAGE_KEYS.CONFIRMED_RELAYS
-        )
+        const stored = localStorage.getItem(this.STORAGE_KEYS.CONFIRMED_RELAYS)
         return stored ? JSON.parse(stored) : {}
     }
 
@@ -468,14 +514,18 @@ class DisasterStorage {
         if (!relayHash) return
         const confirmed = this.getConfirmedRelays()
         confirmed[relayHash] = {
-            confirmedAt: info.timestampPosted * 1000,
-            // confirmedAt: info.timestamp_posted,
+            // confirmedAt: info.timestampPosted * 1000,
+            confirmedAt: typeof info.timestampPosted === 'number' ? 
+                info.timestampPosted * 1000 : Date.now(),
             ...info,
         }
         localStorage.setItem(
             this.STORAGE_KEYS.CONFIRMED_RELAYS,
             JSON.stringify(confirmed)
         )
+        // Fire an event to trigger re-render of memoized values
+        this._emit(this.EVENTS.CONFIRMED_UPDATED, { source: 'markMessageConfirmed'})
+
         console.log(`Marked relay as confirmed: ${relayHash}`)
     }
 
@@ -505,10 +555,11 @@ class DisasterStorage {
             JSON.stringify(filtered)
         )
 
+        // Fire event to trigger re-render
+        this._emit(this.EVENTS.QUEUE_UPDATED, { source: 'pruneConfirmedFromQueue' })
+
         // DEV LOG
-        console.log(
-            `Pruned ${queue.length - filtered.length} confirmed messages from queue`
-        )
+        console.log(`Pruned ${queue.length - filtered.length} confirmed messages from queue`)
 
         return filtered
     }
@@ -541,6 +592,10 @@ class DisasterStorage {
                 this.STORAGE_KEYS.CONFIRMED_RELAYS,
                 JSON.stringify(confirmed)
             )
+            
+            // Fire event to trigger re-render
+            this._emit(this.EVENTS.CONFIRMED_UPDATED, {source: 'syncConfirmedFromTransactions',})
+
             this.pruneConfirmedFromQueue()
         }
     }
@@ -602,18 +657,15 @@ class DisasterStorage {
             // Look at our locally cached blockchain to expose a simple "tip"
             // pointer and a small suffix of canonical blocks.
             const blocks = this.getBlockchain() || []
-            const lastBlock =
-                Array.isArray(blocks) && blocks.length > 0
-                    ? blocks[blocks.length - 1]
-                    : null
+            const lastBlock = Array.isArray(blocks) && blocks.length > 0 ? 
+                blocks[blocks.length - 1] : null
 
             // Share only the last N canonical blocks to limit payload size.
             // Later, we can make this configurable (battery / storage policy).
             const MAX_BLOCKS_SHARE = 10
             const blocksToShare =
-                Array.isArray(blocks) && blocks.length > 0
-                    ? blocks.slice(-MAX_BLOCKS_SHARE)
-                    : []
+                Array.isArray(blocks) && blocks.length > 0 ? 
+                    blocks.slice(-MAX_BLOCKS_SHARE) : []
 
             return {
                 version: 1,
@@ -676,10 +728,7 @@ class DisasterStorage {
         const { queued: incomingQueued, confirmed: incomingConfirmed } =
             this.sanitizeSyncPayload(payload)
 
-        if (
-            !Array.isArray(incomingQueued) ||
-            typeof incomingConfirmed !== 'object'
-        ) {
+        if (!Array.isArray(incomingQueued) || typeof incomingConfirmed !== 'object') {
             return
         }
 
@@ -695,9 +744,7 @@ class DisasterStorage {
         const localConfirmed = this.getConfirmedRelays()
         let confirmedChanged = false
 
-        for (const [relayHash, info] of Object.entries(
-            incomingConfirmed
-        )) {
+        for (const [relayHash, info] of Object.entries(incomingConfirmed)) {
             if (!relayHash) continue
 
             const existing = localConfirmed[relayHash]
@@ -705,7 +752,8 @@ class DisasterStorage {
                 // No local entry yet: just take incoming
                 localConfirmed[relayHash] = info
                 confirmedChanged = true
-            } else {
+            } 
+            else {
                 // If both have entries, keep the earlier confirmedAt if provided
                 const existingTime = existing.confirmedAt || Infinity
                 const incomingTime = info.confirmedAt || existingTime
@@ -724,6 +772,8 @@ class DisasterStorage {
                 this.STORAGE_KEYS.CONFIRMED_RELAYS,
                 JSON.stringify(localConfirmed)
             )
+            // Fire event to trigger re-render
+            this._emit(this.EVENTS.CONFIRMED_UPDATED, { source: 'importSyncPayload' })
         }
 
         /* 2) Merge incoming queued messages
@@ -764,6 +814,8 @@ class DisasterStorage {
                 this.STORAGE_KEYS.MESSAGE_QUEUE,
                 JSON.stringify(queue)
             )
+            // Fire event to trigger re-render
+            this._emit(this.EVENTS.QUEUE_UPDATED, { source: 'importSyncPayload' })
         }
 
         // 3) Final cleanup: remove any now-confirmed items from queue

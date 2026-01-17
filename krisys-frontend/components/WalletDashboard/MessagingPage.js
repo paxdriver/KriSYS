@@ -17,6 +17,29 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
     const [error, setError] = useState('')
     const searchParams = useSearchParams()
 
+    // DEV NOTE: Consider changing this to a custom hook to allow re-renders throughout the app on custom event emissions if needed in other parts of the app
+    // Set up state counter and event listener to trigger re-renders on localStorage updates
+    const [queueVersion, setQueueVersion] = useState(1)
+    useEffect(() => {
+        const onLocalDataChanged = () => {
+            setQueueVersion((v) => v + 1)
+        }
+
+        window.addEventListener('krisys:queue_updated', onLocalDataChanged)
+        window.addEventListener('krisys:confirmed_updated', onLocalDataChanged)
+
+        return () => {
+            window.removeEventListener(
+                'krisys:queue_updated',
+                onLocalDataChanged
+            )
+            window.removeEventListener(
+                'krisys:confirmed_updated',
+                onLocalDataChanged
+            )
+        }
+    }, [])
+
     const myAddresses = useMemo(
         () => walletData?.members?.map((m) => m.address) || [],
         [walletData?.members]
@@ -36,13 +59,8 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
         return transactions.filter((tx) => {
             if (tx.type_field !== 'message') return false
 
-            const fromMe =
-                tx.station_address &&
-                myAddresses.includes(tx.station_address)
-            const toMe =
-                Array.isArray(tx.related_addresses) &&
-                tx.related_addresses.some((addr) =>
-                    myAddresses.includes(addr)
+            const fromMe = tx.station_address && myAddresses.includes(tx.station_address)
+            const toMe = Array.isArray(tx.related_addresses) && tx.related_addresses.some((addr) => myAddresses.includes(addr)
                 )
 
             return fromMe || toMe
@@ -66,18 +84,14 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
                 return false
             }
 
-            const fromMe =
-                msg.station_address &&
-                myAddresses.includes(msg.station_address)
-            const toMe =
-                Array.isArray(msg.related_addresses) &&
-                msg.related_addresses.some((addr) =>
-                    myAddresses.includes(addr)
-                )
+            const fromMe = msg.station_address && myAddresses.includes(msg.station_address)
+            const toMe = Array.isArray(msg.related_addresses) && msg.related_addresses.some( 
+                (addr) => myAddresses.includes(addr)
+            )
 
             return fromMe || toMe
         })
-    }, [myAddresses])
+    }, [myAddresses, queueVersion])
 
     // Merge canonical and queued into a single list for display
     const allMessages = useMemo(() => {

@@ -4,9 +4,7 @@ import axios from 'axios'
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'
 
 // Create axios instance with interceptor for dev overrides
-const apiClient = axios.create({
-    baseURL: API_BASE
-})
+const apiClient = axios.create({ baseURL: API_BASE })
 
 // blockchain's private_key
 const ADMIN_TOKEN = process.env.NEXT_PUBLIC_ADMIN_TOKEN // this should be taken from blockchain/master_private_key.asc

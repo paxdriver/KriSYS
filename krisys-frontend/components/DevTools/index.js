@@ -367,6 +367,10 @@ export default function DevTools({ onRefresh }) {
                 throw new Error(`Station sync failed: ${syncRes.status} ${text}`)
             }
 
+            // Simulated receiving unconfirmed messages from an offline station
+            // A sends to B while offline, A station sync's in DevTools
+            // then B station syncs whether on or offline, and receives unconfirmed messages until station flushes to the service provider (station flush in DevTools)
+            // the block can then be mined with those messages included, thus changing messages to status confirmed.
             const stationPayload = await syncRes.json()
             await disasterStorage.importSyncPayloadAsync(stationPayload)
 

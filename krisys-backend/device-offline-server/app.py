@@ -328,9 +328,35 @@ def db_put_queued(msg: dict) -> bool:
 
 def db_update_queued_status(relay_hash: str, status: str) -> None:
     with station_db() as conn:
+        row = conn.execute(
+            "SELECT json FROM queued WHERE relay_hash = ?",
+            (relay_hash,),
+        ).fetchone()
+
+        if not row:
+            return
+
+        try:
+            msg = json.loads(row["json"])
+        except Exception:
+            msg = {"relay_hash": relay_hash}
+
+        msg["status"] = status
+
+        if status == "sent":
+            msg["sentAt"] = int(time.time() * 1000)
+
         conn.execute(
-            "UPDATE queued SET status = ? WHERE relay_hash = ?",
-            (status, relay_hash),
+            """
+            UPDATE queued
+            SET status = ?, json = ?
+            WHERE relay_hash = ?
+            """,
+            (
+                status,
+                json.dumps(msg, separators=(",", ":"), ensure_ascii=False),
+                relay_hash,
+            ),
         )
         conn.commit()
 
@@ -870,55 +896,79 @@ def mesh_sync():
 
 @app.route("/station/flush", methods=["POST"])
 def station_flush():
-    """
-    When internet connectivity is available, station posts queued messages to
-    central backend and deletes from local queue only on HTTP 201 success.
-    """
-    queued = db_list_queued(limit=MAX_QUEUED_PER_PAYLOAD)
+	"""
+	When internet connectivity is available, station posts queued messages to
+	central backend and marks them as "sent" on HTTP 201 success.
 
-    pending = [m for m in queued if (m.get("status") or "pending") == "pending"]
+	This endpoint also attempts to pull the latest blocks from central and
+	process them (verify + store + confirm relay_hashes). This happens even
+	if there are no pending messages, so a second flush after mining can
+	update station confirmations without needing a client to bring blocks.
+	"""
+	def pull_blocks_from_central() -> tuple[int, str | None]:
+		try:
+			resp = requests.get(f"{CENTRAL_URL}/blockchain", timeout=15)
+			resp.raise_for_status()
+			chain = resp.json()
 
-    if not pending:
-        return jsonify({"status": "ok", "message": "No pending messages"}), 200
+			if not isinstance(chain, list) or not chain:
+				return 0, "Central /blockchain returned empty or invalid chain"
 
-    success = 0
-    failed = 0
-    errors = []
+			suffix = chain[-MAX_BLOCKS_STORED:]
+			stored_blocks = process_incoming_blocks(suffix)
+			return stored_blocks, None
+		except Exception as e:
+			return 0, str(e)
 
-    for msg in pending:
-        relay_hash = msg.get("relay_hash")
+	queued = db_list_queued(limit=MAX_QUEUED_PER_PAYLOAD)
+	pending = [m for m in queued if (m.get("status") or "pending") == "pending"]
 
-        try:
-            url = f"{CENTRAL_URL}/transaction"
-            headers = {
-                "Content-Type": "application/json",
-                "X-Dev-Rate-Override": "true",
-            }
-            resp = requests.post(url, json=msg, headers=headers, timeout=5)
+	success = 0
+	failed = 0
+	errors: list[str] = []
 
-            if resp.status_code == 201:
-                success += 1
+	for msg in pending:
+		relay_hash = msg.get("relay_hash")
 
-                if isinstance(relay_hash, str) and relay_hash:
-                    # Don’t delete yet; keep it as dedupe memory until confirmed.
-                    db_update_queued_status(relay_hash, "sent")
-            else:
-                failed += 1
-                errors.append(
-                    f"{relay_hash}: HTTP {resp.status_code} {resp.text}"
-                )
-        except Exception as e:
-            failed += 1
-            errors.append(f"{relay_hash}: {relay_hash}: {e}")
+		try:
+			url = f"{CENTRAL_URL}/transaction"
+			headers = {
+				"Content-Type": "application/json",
+				"X-Dev-Rate-Override": "true",
+			}
+			resp = requests.post(url, json=msg, headers=headers, timeout=5)
 
-    return jsonify({
-            "status": "ok",
-            "central_url": CENTRAL_URL,
-            "attempted": len(pending),
-            "success": success,
-            "failed": failed,
-            "errors": errors,
-        }), 200
+			if resp.status_code == 201:
+				success += 1
+
+				if isinstance(relay_hash, str) and relay_hash:
+					# Keep it for dedupe until confirmed by verified blocks.
+					db_update_queued_status(relay_hash, "sent")
+			else:
+				failed += 1
+				errors.append(f"{relay_hash}: HTTP {resp.status_code} {resp.text}")
+		except Exception as e:
+			failed += 1
+			errors.append(f"{relay_hash}: {e}")
+
+	# Always try to pull blocks (even if pending was empty)
+	pulled_blocks, pull_error = pull_blocks_from_central()
+
+	return (
+		jsonify(
+			{
+				"status": "ok",
+				"central_url": CENTRAL_URL,
+				"attempted": len(pending),
+				"success": success,
+				"failed": failed,
+				"errors": errors,
+				"pulled_blocks_stored": pulled_blocks,
+				"pull_error": pull_error,
+			}
+		),
+		200,
+	)
 
 
 if __name__ == "__main__":
