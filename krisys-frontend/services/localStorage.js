@@ -351,6 +351,9 @@ class DisasterStorage {
     // CRISIS METADATA STORAGE - e.g. crisis id, name, block_public_key
     saveCrisisMetadata(meta) {
         try {
+            // Get the old crisis metadata before we write the new one
+            const prev = this.getCrisisMetadata()
+            
             localStorage.setItem(
                 this.STORAGE_KEYS.CRISIS_METADATA,
                 JSON.stringify({

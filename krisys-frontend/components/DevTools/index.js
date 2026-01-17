@@ -473,13 +473,20 @@ export default function DevTools({ onRefresh }) {
 
     const sendTestAlert = async () => {
         try {
-            await api.adminAlert(
-                'TEST ALERT: Development emergency broadcast test',
-                1
-            )
-            alert('Test emergency alert sent!')
-            if (onRefresh) onRefresh()
-        } catch (error) {
+            const result = await adminProxy('alert', 'POST', {
+                message: 'TEST ALERT: Development emergency broadcast test',
+                priority: 1,
+            })
+
+            if (result?.status === 'success') {
+                alert('Test emergency alert queued (mine a block to confirm).')
+                if (onRefresh) onRefresh()
+                return
+            }
+
+            throw new Error(result?.error || 'Admin alert failed')
+        } 
+        catch (error) {
             alert(`Test alert failed: ${error.message}`)
         }
     }
