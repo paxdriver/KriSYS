@@ -1,5 +1,5 @@
 // services/localStorage.js
-import { verifyBlockSignature, verifyBlockCanonical } from './blockVerifier'
+import { verifyBlockCanonical } from './blockVerifier'
 
 /*
   LOCAL STORAGE FOR DISASTER COMMUNICATION

@@ -32,8 +32,6 @@ export default function WalletDashboard({ walletData, transactions, familyId, on
         }
     }, [searchParams])
 
-    
-
     useEffect(() => {
         if (privateKey) {
             setIsUnlocked(true)

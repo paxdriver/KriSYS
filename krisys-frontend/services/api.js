@@ -20,7 +20,7 @@ apiClient.interceptors.request.use(config => {
 })
 // SIMULATED OFFLINE MODE FOR DEVELOPMENT ONLINE
 
-// Add request interceptor to include dev headers
+// Add request interceptor to include dev headers (used in production with verified stations)
 apiClient.interceptors.request.use((config) => {
     // Add rate limit override header if enabled
     if (localStorage.getItem('dev_bypass_rate_limit') === 'true') {
