@@ -23,9 +23,7 @@ export default function DevTools({ onRefresh }) {
     useEffect(() => {
         const updateQueueCount = () => {
             const queue = disasterStorage.getMessageQueue()
-            setQueuedMessages(
-                queue.filter((msg) => msg.status === 'pending').length
-            )
+            setQueuedMessages(queue.filter((msg) => msg.status === 'pending').length)
         }
 
         updateQueueCount()
@@ -70,9 +68,7 @@ export default function DevTools({ onRefresh }) {
                     hasPrivateKey
                 })
             }   
-            catch (e) {
-                console.error('Failed to derive mesh status:', e)
-            }
+            catch (e) { console.error('Failed to derive mesh status:', e) }
         }
 
         updateMeshInfo()
@@ -102,12 +98,8 @@ export default function DevTools({ onRefresh }) {
             else alert(`${result.error}`)
             if (onRefresh) onRefresh()
         } 
-        catch (error) {
-            alert(`Mining failed: ${error.message}`)
-        } 
-        finally {
-            setMining(false)
-        }
+        catch (error) { alert(`Mining failed: ${error.message}`) } 
+        finally { setMining(false) }
     }
 
     const createAlert = async () => {
@@ -129,20 +121,28 @@ export default function DevTools({ onRefresh }) {
             if (!stationChoice) return
 
             let stationId
-            if (stationChoice === '1') {
-                stationId = 'STATION_001'
-            } 
-            else if (stationChoice === '2') {
-                stationId = 'HOSPITAL_SE_001'
-            } 
+            if (stationChoice === '1') { stationId = 'STATION_001' } 
+            else if (stationChoice === '2') { stationId = 'HOSPITAL_SE_001' } 
             else {
                 alert('Unknown station selection')
                 return
             }
 
-            const apiKey = prompt(
-                `Enter API key for ${stationId} (DEV ONLY, from backend logs):`
-            )
+            // DEV NOTE:
+            // Stations are verified API key from provider instead of unlocking wallet by password like normal wallets. 
+            // This key is generated only once and stored on device so the station gets one when the blockchain is created while in development mode.
+            let apiKey = null
+            const res = await fetch(`${STATION_URL}/dev/station-identity?station_id=${encodeURIComponent(stationId)}`)
+            if (res.ok) {
+                const identity = await res.json()
+                console.log("****************")
+                console.log(identity)
+                console.log(res)
+                console.log("****************")
+                apiKey = identity?.api_key || null
+            }
+
+            if (!apiKey) apiKey = prompt(`Enter API key for ${stationId} (DEV ONLY, fallback):`)
             if (!apiKey) return
 
             try {
@@ -154,22 +154,12 @@ export default function DevTools({ onRefresh }) {
                 const data = result.data || result
 
                 if (data.status === 'success') {
-                    alert(
-                        `Check-in OK:\n${data.message}\ntransaction_id: ${data.transaction_id}`
-                    )
+                    alert(`Check-in OK:\n${data.message}\ntransaction_id: ${data.transaction_id}`)
                     if (onRefresh) onRefresh()
                 } 
-                else {
-                    alert(
-                        `Check-in failed: ${
-                            data.error || JSON.stringify(data)
-                        }`
-                    )
-                }
+                else alert(`Check-in failed: ${data.error || JSON.stringify(data)}`)
             } 
-            catch (error) {
-                alert(`Check-in failed: ${error.message}`)
-            }
+            catch (error) { alert(`Check-in failed: ${error.message}`) }
 
             return
         }

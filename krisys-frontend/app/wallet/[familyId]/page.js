@@ -12,124 +12,124 @@ import { filterCanonicalBlocks } from '@/services/blockVerifier'
 // DEV NOTE: This is ensuring we get canonical block data, and it includes alerts and sent messages now
 // Allows for family check-in from one scan, alert broadcast to family instead of members, obfuscates number of individuals in family thus reducing some chain bloat over time
 const deriveWalletTransactionsFromBlocks = (wallet, blocks) => {
-  const memberAddresses = wallet?.members?.map((m) => m.address) || []
-  const walletId = wallet?.family_id || null
-  const derived = []
+	const memberAddresses = wallet?.members?.map((m) => m.address) || []
+	const walletId = wallet?.family_id || null
+	const derived = []
 
-  for (const block of blocks || []) {
-    const txList = block?.transactions || []
+	for (const block of blocks || []) {
+		const txList = block?.transactions || []
 
-    for (const tx of txList) {
-      if (!tx) continue
+		for (const tx of txList) {
+			if (!tx) continue
 
-      // Alerts are global: every wallet should see them
-      if (tx.type_field === 'alert') {
-        derived.push(tx)
-        continue
-      }
+			// Alerts are global: every wallet should see them
+			if (tx.type_field === 'alert') {
+				derived.push(tx)
+				continue
+			}
 
-    const fromMe = tx.station_address && memberAddresses.includes(tx.station_address)
-    const toMember = Array.isArray(tx.related_addresses) && tx.related_addresses.some((addr) => memberAddresses.includes(addr))
-    const toWallet = walletId && Array.isArray(tx.related_addresses) && tx.related_addresses.includes(walletId)
+			const fromMe = tx.station_address && memberAddresses.includes(tx.station_address)
+			const toMember = Array.isArray(tx.related_addresses) && tx.related_addresses.some((addr) => memberAddresses.includes(addr))
+			const toWallet = walletId && Array.isArray(tx.related_addresses) && tx.related_addresses.includes(walletId)
 
-    if (fromMe || toMember || toWallet) derived.push(tx)
-  }
-}
+			if (fromMe || toMember || toWallet) derived.push(tx)
+		}
+	}
 
-  return derived
+	return derived
 }
 
 export default function WalletDashboardPage() {
-  const params = useParams()
-  const familyId = params.familyId
+	const params = useParams()
+	const familyId = params.familyId
 
-  const [walletData, setWalletData] = useState(null)
-  const [transactions, setTransactions] = useState([])
-  const [loading, setLoading] = useState(true)
+	const [walletData, setWalletData] = useState(null)
+	const [transactions, setTransactions] = useState([])
+	const [loading, setLoading] = useState(true)
 
-const loadWalletData = useCallback(async () => {
-  setLoading(true)
+	const loadWalletData = useCallback(async () => {
+		setLoading(true)
 
-  try {
-    // 1) Load wallet metadata (still needed)
-    const walletResponse = await api.getWallet(familyId)
-    const wallet = walletResponse.data
-    setWalletData(wallet)
-    disasterStorage.saveWalletData(familyId, wallet)
+		try {
+			// 1) Load wallet metadata (still needed)
+			const walletResponse = await api.getWallet(familyId)
+			const wallet = walletResponse.data
+			setWalletData(wallet)
+			disasterStorage.saveWalletData(familyId, wallet)
 
-    // 2) Load crisis metadata (block_public_key) + chain in parallel
-    const [crisisRes, chainRes] = await Promise.all([
-      api.getCrisisInfo(),
-      api.getBlockchain(),
-    ])
+			// 2) Load crisis metadata (block_public_key) + chain in parallel
+			const [crisisRes, chainRes] = await Promise.all([
+				api.getCrisisInfo(),
+				api.getBlockchain(),
+			])
 
-    // Cache crisis metadata for offline verification
-    if (crisisRes?.data?.block_public_key) disasterStorage.saveCrisisMetadata(crisisRes.data)
+			// Cache crisis metadata for offline verification
+			if (crisisRes?.data?.block_public_key) disasterStorage.saveCrisisMetadata(crisisRes.data)
 
-    const blockPublicKey = crisisRes?.data?.block_public_key
-    const allBlocks = chainRes?.data || []
+			const blockPublicKey = crisisRes?.data?.block_public_key
+			const allBlocks = chainRes?.data || []
 
-    // 3) Filter to canonical (signature-verified) blocks
-    const canonicalBlocks = blockPublicKey ? await filterCanonicalBlocks(allBlocks, blockPublicKey) : []
+			// 3) Filter to canonical (signature-verified) blocks
+			const canonicalBlocks = blockPublicKey ? await filterCanonicalBlocks(allBlocks, blockPublicKey) : []
 
-    // Cache canonical blocks for offline use
-    if (canonicalBlocks.length > 0) disasterStorage.saveBlockchain(canonicalBlocks)
+			// Cache canonical blocks for offline use
+			if (canonicalBlocks.length > 0) disasterStorage.saveBlockchain(canonicalBlocks)
 
-    // 4) Derive wallet-relevant transactions from canonical blocks
-    const txs = deriveWalletTransactionsFromBlocks(wallet, canonicalBlocks)
-    setTransactions(txs)
+			// 4) Derive wallet-relevant transactions from canonical blocks
+			const txs = deriveWalletTransactionsFromBlocks(wallet, canonicalBlocks)
+			setTransactions(txs)
 
-    // 5) Mark relay_hashes from confirmed txs and prune queue
-    disasterStorage.syncConfirmedFromTransactions(txs)
-  } 
-  catch (error) {
-    console.error('Error loading wallet data (online path failed):', error)
+			// 5) Mark relay_hashes from confirmed txs and prune queue
+			disasterStorage.syncConfirmedFromTransactions(txs)
+		}
+		catch (error) {
+			console.error('Error loading wallet data (online path failed):', error)
 
-    // Offline fallback: use cached wallet + cached canonical blocks
-    const cachedWallet = disasterStorage.getWalletData(familyId)
-    if (!cachedWallet) {
-      setWalletData(null)
-      setTransactions([])
-      return
-    }
+			// Offline fallback: use cached wallet + cached canonical blocks
+			const cachedWallet = disasterStorage.getWalletData(familyId)
+			if (!cachedWallet) {
+				setWalletData(null)
+				setTransactions([])
+				return
+			}
 
-    setWalletData(cachedWallet)
+			setWalletData(cachedWallet)
 
-    const cachedBlocks = disasterStorage.getBlockchain() || []
-    const derivedTxs = deriveWalletTransactionsFromBlocks(
-      cachedWallet,
-      cachedBlocks
-    )
-    setTransactions(derivedTxs)
-    disasterStorage.syncConfirmedFromTransactions(derivedTxs)
-  } 
-  finally {
-    setLoading(false)
-  }
-}, [familyId])
+			const cachedBlocks = disasterStorage.getBlockchain() || []
+			const derivedTxs = deriveWalletTransactionsFromBlocks(
+				cachedWallet,
+				cachedBlocks
+			)
+			setTransactions(derivedTxs)
+			disasterStorage.syncConfirmedFromTransactions(derivedTxs)
+		}
+		finally {
+			setLoading(false)
+		}
+	}, [familyId])
 
-  useEffect(() => {
-    loadWalletData()
-  }, [loadWalletData])
+	useEffect(() => {
+		loadWalletData()
+	}, [loadWalletData])
 
-  if (loading) {
-    return <div className="loading-page">Loading wallet data...</div>
-  }
+	if (loading) {
+		return <div className="loading-page">Loading wallet data...</div>
+	}
 
-  if (!walletData) {
-    return (
-      <div className="error-page">
-        Wallet not found (and no cached data available)
-      </div>
-    )
-  }
+	if (!walletData) {
+		return (
+			<div className="error-page">
+				Wallet not found (and no cached data available)
+			</div>
+		)
+	}
 
-  return (
-    <WalletDashboard
-      walletData={walletData}
-      transactions={transactions}
-      familyId={familyId}
-      onRefresh={loadWalletData}
-    />
-  )
+	return (
+		<WalletDashboard
+			walletData={walletData}
+			transactions={transactions}
+			familyId={familyId}
+			onRefresh={loadWalletData}
+		/>
+	)
 }
