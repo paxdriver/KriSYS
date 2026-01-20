@@ -1,524 +1,479 @@
-# KriSYS – Crisis Communication Blockchain System
+# KriSYS – Crisis Communication Ledger (Blockchain-Verified Messaging)
 
-A humanitarian blockchain system enabling crisis organizations to coordinate aid, reunite families, and maintain communication during disasters when traditional infrastructure fails.
+KriSYS is a humanitarian crisis communication system designed to keep working
+during disasters and hostile conditions (rolling blackouts, poor cell service,
+warzone interference). It behaves like a blockchain-based message ledger where
+a crisis organization mines a single canonical chain, and everyone can verify
+confirmed history offline. This enables victims to supply family members and
+friends abroad with their wallet addresses so that concerned loved ones can
+efficiently check in on their loved ones enduring any crisis ranging from war
+zone to national disaster relief and everything in between.
 
-System designed for humanitarian crises – prioritizing reliability, privacy, and simplicity for people operating under extreme stress with limited technical resources.
+The goal is *not* cryptocurrency. “Transactions” are:
+- encrypted family/group messages
+- authorized station check-ins (aid trucks, hospitals, camps, etc.)
+- emergency alerts
+
+KriSYS emphasizes:
+- offline-first operation
+- deterministic verification (bit-for-bit hashing and signature checks)
+- privacy by default (no personal names on-chain; local-only contact labels)
 
 ---
 
 ## Primary Use Cases
 
-- Crisis organization resource management: real-time coordination of supplies, personnel, and aid distribution
-- Inventory and aid distribution: supply chain tracking and resource allocation management
-- Reuniting missing persons: remote family tracking and check-in system with QR code identification
-- Offline message delivery: encrypted personal communications and emergency alerts without internet or power
-- QR code check-in stations: simple identification using bracelets, necklaces, or printed codes
+- Aid coordination: alerts and operational messaging
+- Inventory of supplies by location
+- Data for administration and political accountability
+- Check-in by QR codes
+- Help identifying unconscious / deceased victims
+- Reuniting families: QR-based identity and check-ins
+- Offline message delivery: send/relay messages without internet
+- Offline proof: verify mined history offline via signed blocks
+- Low-complexity workflows: designed for high-stress, low-tech environments
 
 ---
 
-## **Current Status: Phase 2 Complete**
+## Current Status
 
-### ✅ Completed Features
-- Flask backend API with custom blockchain implementation
-- React/Next.js frontend with component-based architecture
-- PGP key management system with KeyManager abstraction
-- Contact management (names replacing addresses, edited and stored locally)
-- Sent From and multiple recipients in messages
-- Client-side message encryption and decryption
-- Docker containerized development environment
-- Real-time blockchain explorer
-- Family wallet management with passphrase protection
-- QR code generation for member identification
-- Offline message queuing system
-- Local relay/confirmation tracking (relay_hash per message) 
-- Block signing for canonical chain verification by users offline & online
+### Current milestone: Phase 3.7 complete
+Phase 3.7 completed the “station pooled rendezvous” architecture:
+- offline message queuing on clients
+- station-side pooled relay and dedupe
+- station flush to central when connectivity returns
+- mined block confirmation propagation back through stations
+- offline check-in intake and flush via station
+- verified block propagation and confirmation pruning (relay_hash based)
 
-- DevTools banner for:  
-  - manually mining a block
-  - sending admin alerts / check-ins
-  - simulated offline mode
-  - processing offline message queue
-  - experimental sync payload export/import
-  - Rate limiting ovverride
+Next milestone: Phase 3.8
+- Expand pooled rendezvous syncing to work without an authorized station
+  (untrusted pool hosts and “dumb relays”), using the same inventory/sync rules.
 
 ---
 
-### Anticipated Future Features
-- Device registration
-- Notifications
+## Core Architecture
 
-- Station api key revocation
-- Provider setup wizard
-- Message threads
-- Blockchain explorer culling / sorting / filtering
-- QR code sharing to display / read codes between users for contact management
+### Central backend (crisis authority)
+- Single canonical chain
+- Only the aid organization mines blocks (no forks)
+- Every mined block is signed by a crisis master key
+- Clients verify blocks offline using the public key pinned in genesis metadata
 
-### Phase IN-sensitive TO-DO's
-- QR scanner implementation for check-in stations  
-- Wallet creation at stations
-- Advanced contact management features  
-- Mobile-responsive optimizations and UX features/flow
-- Refinement of offline sync UX (beyond dev-only JSON copy/paste)  
+### Clients (browsers, later native)
+- Encrypt/decrypt messages client-side
+- Maintain a local cache of canonical blocks for offline access
+- Maintain a local queue of unconfirmed transactions
+- Prune local queue when relay_hash is confirmed by a verified block
 
----
+### Pooled rendezvous relays (offline infrastructure)
+KriSYS does not require pairwise peer-to-peer gossip as the primary model.
+Instead, it uses pooled rendezvous sync:
+- Devices connect to a pool host (station / untrusted relay / temporary user pool)
+- Clients perform an inventory handshake (relay_hash lists)
+- Clients send only missing items
+- Pool host dedupes and redistributes
 
-## **Phase 3 - Offline Data Propagation Between Users **
-
-### Overview
-- Peer-to-peer WiFi or local-network sync for offline device communication  
-- Enhanced station templates and check-in types  
-- Message threading and reply chains  
-- Optional embedding of public keys in QR codes to reduce server lookups  
-
-### Phase 3 Steps - Mesh & Offline Sync
-1. Show unconfirmed messages locally
-Display locally queued messages alongside confirmed on‑chain ones.
-(Done ✓)
-
-2. Offline blockchain access
-Load chain and wallet data from local cache when no network connection is available.
-
-3. Peer sync payload definition
-Define a precise JSON structure for what is exchanged between devices
-(e.g. queued messages + confirmed relay map + blocks + metadata).
-
-4. Peer sync merge logic
-Implement how devices merge those payloads and resolve conflicts safely
-(using signatures, timestamps, relay hashes, etc.).
-
-5. Manual payload transfer
-Add simple import/export options (QR, copy/paste, file) so users can sync devices manually offline.
-
-6. Automatic mesh transport (optional later)
-Add WebRTC / Bluetooth / Wi‑Fi Direct, etc., to do automatic peer‑to‑peer sync using the same payload format.
-
-7. Testing & validation
-Test network loss → message queue → peer sync → reconfirmation → server reconciliation end‑to‑end.
----
-
-# Architecture Overview
-
-## Backend (Flask – port 5000)
-- Custom blockchain with configurable block intervals and automatic background mining thread  
-- Transaction types: `check_in`, `message`, `alert`, `damage_report`  
-- Policy system with crisis-specific configurations, transaction size limits, rate limiting, and allowed transaction types  
-- PGP key management with 4096-bit RSA master keypair per crisis  
-- SQLite database with separate tables for blocks, transactions, wallets, crises, and wallet keys  
-
-## Frontend (React/Next.js – port 3000)
-- Modular component architecture  
-- Client-side decryption (all message decryption happens in browser)  
-- KeyManager abstraction for crypto operations  
-- Offline storage (`disasterStorage`)  
-  - Blockchain snapshot  
-  - Message queue  
-  - Public key cache  
-  - Confirmed-relay map for deduplication  
-- Privacy-first contact storage (`contactStorage`)  
+This avoids N×N pairwise syncing and scales much better for camps/shelters.
 
 ---
 
-# Project Structure
+## Trust Model (Non-negotiable)
 
-```
-krisys/
-├── docker-compose.yml              # Development environment
-├── blockchain/                     # Shared database volume
-├── krisys-backend/                # Flask API server
-│   ├── app.py                     # Main Flask application & routes
-│   ├── blockchain.py              # Blockchain, Policy, and Wallet classes
-│   ├── database.py                # SQLite schema and connections
-│   └── requirements.txt           # Python dependencies
-├── krisys-frontend/               # React application
-│   ├── app/
-│   │   ├── page.js               # Landing page with blockchain explorer
-│   │   └── wallet/[familyId]/    # Dynamic wallet dashboard route
-│   ├── components/
-│   │   ├── BlockchainExplorer/   # Public blockchain viewing components
-│   │   ├── WalletDashboard/      # Multi-page wallet interface
-│   │   │   ├── index.js          # Main dashboard router
-│   │   │   ├── MessagingPage.js  # Encrypted messaging interface
-│   │   │   ├── MessageDisplay.js # Message decryption and rendering
-│   │   │   ├── ContactPage.js    # Private contact management
-│   │   │   ├── UnlockForm.js     # Wallet authentication
-│   │   │   └── TransactionItem.js # Reusable transaction display
-│   │   └── DevTools/             # Development controls and mining
-│   ├── pages/api/                # Next.js API routes
-│   │   ├── admin.js              # Admin proxy for development
-│   │   └── public-key.js         # Public key fetching proxy
-│   ├── services/
-│   │   ├── api.js                # Flask backend integration
-│   │   ├── blockVerifier.js      # User verification of block's signature (signed by provider server-side when mined)
-│   │   ├── keyManager.js         # PGP crypto operations abstraction
-│   │   ├── localStorage.js       # Disaster-specific offline storage
-│   │   └── contactStorage.js     # Privacy-first contact management
-│   └── styles/                   # Custom CSS (no frameworks)
-```
+### Trust anchor
+- The trust anchor is the crisis `block_public_key` (public key used to verify
+  signatures on mined blocks).
+- The `block_public_key` is published in genesis metadata.
+- Devices must bootstrap from a trusted central source at least once (TLS /
+  trusted provisioning). Without the correct key, nothing can be verified.
 
-<br>
+### Untrusted offline relays
+Offline peers (including untrusted pool hosts) are untrusted. They can:
+- relay unconfirmed encrypted payloads
+- relay signed blocks (which can be verified offline)
 
----
----
-
-# PGP and Key Management
-
-## Master Key and Admin Authentication
-- 4096-bit RSA master keypair generated on initialization:  
-  - `master_public_key.asc` stored publicly  
-  - `master_private_key.asc` stored securely  
-- Public key encrypts user wallet keys before storing in DB  
-- Private key decrypts those wallet keys on `/auth/unlock` requests  
-- Development admin access uses `X-Admin-Token` header containing base64-encoded master private key  
+They cannot:
+- forge confirmations (confirmations are derived only from verified blocks)
+- forge canonical blocks (signatures won’t verify)
 
 ---
 
-## Wallet Key Storage (Dual-Layer)
-1. Generate user PGP keypair with passphrase  
-2. Serialize passphrase-protected private key  
-3. Encrypt that result again with blockchain master public key  
-4. Store only encrypted private key and user’s public key  
+## IDs and Timestamp Units (Strict)
 
-Wallet unlock process:
-1. Server decrypts the outer layer with master private key  
-2. Returns still passphrase-protected private key to client  
-3. Client decrypts with passphrase locally for message reading  
+### IDs
+- relay_hash:
+	- UUID generated at the edge (client or station)
+	- stable identity for offline relay, dedupe, and later confirmation
+	- mesh logic depends on relay_hash, not transaction_id
+- transaction_id:
+	- server-generated UUID after central acceptance
+	- exists only after posting to the central backend
 
-Server never stores decrypted private keys; all decryption happens on client.
+### Timestamp units
+Blockchain (deterministic; integer seconds):
+- Transaction.timestamp_created: seconds
+- Transaction.timestamp_posted: seconds
+- Block.timestamp: seconds
 
----
+Local bookkeeping (non-deterministic; integer milliseconds):
+- queuedAt: ms
+- generatedAt: ms
+- confirmedAt: ms
 
-## Message Encryption and Delivery
-- Client encrypts with recipient’s public key using KeyManager  
-- Server stores encrypted payload only (message_data field)  
-- Recipient decrypts with their private key (protected by passphrase)  
-
-First contact requires being online once to fetch recipient public key via `/wallet/{family_id}/public-key`.  
-After that, it is cached in localStorage and usable offline.  
-
----
-
-# Offline Queue, Relay, and Sync Design
-
-- Each outgoing message has a unique `relay_hash` used for deduplication and confirmation.
-- Local queue (`MESSAGE_QUEUE`) holds unsent messages while offline.
-- Confirmed messages stored in `CONFIRMED_RELAYS` and automatically pruned.
-- Export/import sync payload allows two devices to share:
-  - unconfirmed queued messages
-  - confirmed relay list
-
-## Example Sync Payload
-### These payloads can be copy/pasted using DevTools Export/Import to simulate peer-to-peer sync.
-{
-	"deviceId": "device_123456_xyz",
-	"queued": [ ... message objects ... ],
-	"confirmed": { "relay_hash": { "confirmedAt": 1234567890 } }
-}
-<br><br>
----
-
-# CHECK-IN STATION AUTH FLOW
-Check-in and Station Authentication
-===================================
-
-Overview
---------
-Aid stations (e.g. hospitals, food distribution points, registration tents) act
-as "check-in" points for victims and families. Each station has a human-readable
-station ID (e.g. "HOSPITAL_SE_001") and is responsible for scanning victim/family
-QR codes and submitting check-in transactions to the crisis blockchain.
-
-The KriSYS system treats stations as special, authenticated senders of
-check-in data. Stations DO NOT sign blocks (only the crisis master key signs
-blocks), but stations must authenticate themselves in order to post check-ins.
-
-This avoids trivial spoofing of station activity (e.g. a malicious client
-claiming to be "HOSPITAL_SE_001") while keeping the deployment and UX simple
-for non-technical aid workers.
-
-Station Data Model
-------------------
-Each station is stored in the backend database in a "stations" table, keyed by:
-
-- crisis_id           : ID of the crisis/blockchain instance
-- station_id          : human-readable identifier, e.g. "HOSPITAL_SE_001"
-- name                : descriptive name, e.g. "Southeast Field Hospital"
-- type                : "hospital", "shelter", "food", etc.
-- location            : optional descriptive location
-- registration_code_hash : hash of a one-time activation code (future use)
-- api_key_hash        : hash of the station's long-term API key
-- status              : "pending", "active", or "revoked"
-- created_at          : timestamp of creation
-
-Important design points:
-
-- Stations are referenced by `station_id` in transactions. This remains
-  human-readable and is visible in on-chain data.
-- The ability to USE a station_id is gated by `api_key_hash` and `status`,
-  not by the station_id string alone.
-- KriSYS does NOT rely on station secrets to protect the entire blockchain.
-  Canonical chain integrity is guaranteed by a separate crisis master key
-  that signs blocks. Station keys only authenticate the origin of check-ins.
-
-One-Time Station Registration (Design)
---------------------------------------
-In the final design, each station will go through a one-time activation process:
-
-1. Crisis admin creates a station:
-
-   - Picks a station_id, name, type, and location.
-   - KriSYS generates a random one-time registration code.
-   - The server stores hash(registration_code) in `registration_code_hash`.
-   - The station is initially `status = "pending"`.
-
-2. The registration code is delivered to the station admin out-of-band
-   (e.g. printed on paper or as a QR code), separate from the physical device.
-
-3. In the field, when the station device (e.g. a Raspberry Pi kiosk) is first
-   powered on and connected, it runs in "unregistered" mode:
-
-   - Prompts the user to enter the station_id and registration code,
-     or scan a QR containing them.
-
-4. The device sends a registration request to the backend:
-
-   - `{ station_id, registration_code }`.
-
-5. The server validates:
-
-   - There is a station row for this crisis_id + station_id.
-   - status == "pending".
-   - hash(registration_code) matches `registration_code_hash`.
-
-   If valid:
-
-   - The server generates a long random API key.
-   - Stores hash(api_key) in `api_key_hash`.
-   - Clears `registration_code_hash`.
-   - Sets status = "active".
-   - Returns the plain API key ONCE to the device.
-
-6. The device stores the API key locally (e.g. on disk) and switches into
-   normal "scanning" mode. Operators never need to remember passwords.
-
-If someone intercepts the device image before activation:
-
-- The SD card image itself contains no API key.
-- They would also need the registration code.
-- Once the real station successfully activates with that code, the code is
-  invalidated. Any later attempts with the same station_id/code are rejected.
-
-If the device is stolen AFTER activation:
-
-- The thief gains the station's API key and can impersonate that station until
-  the crisis admin revokes it (status = "revoked") or rotates to a new station.
-
-Day-to-Day Operation: Authenticated Check-ins
----------------------------------------------
-Once a station is active, all check-in requests it sends must be authenticated
-with its API key.
-
-For each /checkin request, the station device sends:
-
-- JSON body:
-  - address    : victim/family address scanned from QR code
-  - station_id : station_id string (e.g. "HOSPITAL_SE_001")
-
-- HTTP header:
-  - X-Station-API-Key: <long random API key>
-
-The backend /checkin handler enforces:
-
-1. station_id must exist in the stations table for the current crisis_id.
-2. status for that station must be "active".
-3. hash(provided_api_key) must match `api_key_hash` for that station.
-
-Only then does the server create a `check_in` transaction with:
-
-- type_field      : "check_in"
-- related_addresses : [address]
-- station_address : station_id
-- timestamp_created : now
-- priority_level  : appropriate value (often highest or high priority)
-
-These transactions are then subject to the usual rules:
-
-- They are unconfirmed until included in a crisis master-key-signed block.
-- Once in a signed block, they become canonical and can be trusted as
-  "station-verified check-ins" for families and aid coordinators.
-
-Relationship to Block Signatures
---------------------------------
-Station authentication (API keys) and crisis block signatures serve different
-but complementary purposes:
-
-- Station API keys:
-  - Prove that a given check-in originated from a specific, approved station
-    (as long as that station's device/secret is not compromised).
-  - Prevent trivial spoofing of station IDs by random clients.
-
-- Crisis block signature (block_public_key):
-  - Proves that a block and all its transactions have been accepted by the
-    crisis authority (aid organization) and fixed into the canonical history.
-  - Prevents malicious peers from forging or modifying blocks, regardless of
-    station behavior.
-
-Clients and offline devices should treat:
-
-- Station-authenticated but unconfirmed check-ins as "unconfirmed reports"
-  that may still be pending inclusion.
-- Check-ins in validly signed blocks as fully confirmed facts.
-
-Current Implementation Status
------------------------------
-At this stage of KriSYS development:
-
-- The database schema includes fields for registration_code_hash, api_key_hash,
-  and station status.
-- Station auth for /checkin requests uses the stored api_key_hash and status
-  to accept or reject check-ins.
-- In development, stations may be pre-provisioned with API keys (generated at
-  startup and logged for testing) instead of going through the full one-time
-  registration flow.
-
-The one-time registration workflow described above is planned but not yet
-implemented in full. The data model and auth checks are designed so that this
-workflow can be wired in later without changing the core check-in semantics
-or the blockchain trust model.
-
-----------
-
-# Quick Start
-
-### Clone repository
-a) git clone <repo-url> <br>
-b) cd krisys<br>
-c) docker-compose up --build<br>
-
-React Frontend: http://localhost:3000<br>
-Flask Backend: http://localhost:5000
-
-Frontend: http://localhost:3000  
-Backend: http://localhost:5000  
-
-### Testing Workflow
-1. Create two wallets (A and B).  
-2. Unlock both wallets.  
-3. Send message A → B while online (to cache B’s public key).  
-4. Go offline in wallet A and send another message.  
-5. Come back online and use “Queue” in DevTools to send queued message.  
-6. Mine a block (wallet B’s DevTools) to confirm it.  
+Avoid floats anywhere.
 
 ---
 
-# Development Phases
+## Deterministic Hashing and Signatures (Bit-for-bit)
 
-### **Phase 1 – Core Infrastructure**
-- Blockchain, transactions, SQLite persistence, policy system.
+All canonical verification depends on deterministic encoding. Bytes must match
+exactly between Python and JavaScript.
 
-### **Phase 2 – Wallet System**
-- Family wallets, members, QR codes, passphrase-protected keys.
+### Block hash (body)
+Block hash is SHA-256 of UTF-8 bytes of canonical JSON of:
 
-### **Phase 2.5 – Messaging System**
-- End-to-end encryption.
-- Offline queue.
-- Contact management.
-- Real-time message display.
+- { block_index, timestamp, transactions, previous_hash, nonce }
 
-### **Phase 2.7 – Offline Sync (Current)**
-- `relay_hash` deduplication.
-- Confirmed relay tracking.
-- Export/import sync payload JSON.
+Canonical JSON rules:
+- sorted keys
+- separators=(",", ":")
+- ensure_ascii=False
+- UTF-8 encoding
 
-### **Phase 3 - Peer Discovery and WiFi sync**
-- Implement connections between offline devices
-- Handle queue clearing and confirmation checks
-- Implement downloading and diff of blockchain between offline devices
+### Block signature (header)
+Block signature is a detached PGP signature over canonical JSON of:
 
-### **Phase 4 – Advanced Features (Planned)**
-- Multiple station types (medical, food, shelter).
-- Message threading, attachments.
-- Chain pruning optimization.
+- { block_index, previous_hash, hash }
 
----
+Same canonical JSON rules as above.
 
-# Core API Endpoints
-
-### Public
-- `GET /blockchain` – full blockchain data  
-- `GET /crisis` – crisis metadata and current policy  
-- `GET /policy` – current crisis policy config  
-- `POST /wallet` – create family wallet  
-- `POST /transaction` – submit message or check-in  
-- `POST /checkin` – process QR check-in  
-
-### Wallet
-- `GET /wallet/{family_id}` – wallet metadata  
-- `GET /wallet/{family_id}/transactions` – transaction list  
-- `GET /wallet/{family_id}/public-key` – get wallet public key  
-- `GET /wallet/{family_id}/qr/{address}` – get member QR image  
-- `POST /auth/unlock` – unlock wallet with passphrase  
-
-### Admin (Development)
-- `POST /admin/mine` – mine pending transactions  
-- `POST /admin/alert` – broadcast alert  
-- `POST /admin/policy` – change current crisis policy  
+### Canonical chain verification (client/station)
+A block is canonical iff:
+- recomputed hash(body) equals block.hash
+- PGP signature verifies over the canonical header using pinned block_public_key
+- chain linkage is correct when appending:
+	- previous_hash matches current tip hash
+	- block_index increments by 1
+- no forks are allowed; conflicts are ignored
 
 ---
 
-# Security and Privacy Model
+## Addressing and Privacy Semantics
 
-### Development
-- Allows blank passphrases for testing  
-- Admin auth via base64-encoded master private key  
-- Rate limiting can be disabled via DevTools  
-- Simulated offline mode through request interceptor  
+Wallets represent families/groups.
+- family_id: the wallet identifier
+- member addresses: family_id + “-suffix” (one per member)
 
-### Production Considerations
-- Require strong passphrase (8+ chars)  
-- HTTPS/TLS encryption  
-- Master key rotation and secure storage  
-- Key revocation support  
-- Strict rate limit enforcement  
+related_addresses may contain:
+- individual member addresses (family_id-suffix)
+- the family_id itself (family-scoped)
 
-### Privacy
-- No PII stored on blockchain  
-- Names and contacts stored only locally  
-- All personal messages encrypted client-side  
+Privacy constraint:
+- Do not expand a family-scoped event into all member addresses, because that
+  leaks family size and increases chain bloat.
 
----
-
-# Technology Stack
-
-**Backend**
-- Python 3.11 / Flask  
-- SQLite  
-- PGP via `pgpy`  
-- QR generation via `qrcode`  
-
-**Frontend**
-- React 18 / Next.js 14  
-- OpenPGP.js  
-- Plain CSS (no frameworks)  
-
-**Deployment**
-- Docker containers with shared volume for blockchain data  
+UI rule:
+- Wallet dashboards consider a transaction relevant if related_addresses includes
+  either:
+	- any member address in the wallet, or
+	- the wallet’s family_id (family-scoped events)
 
 ---
 
-# Crisis Response Workflow
+## Offline Message and Confirmation Semantics
 
-1. Crisis setup – deploy KriSYS instance with crisis policy and master keypair.  
-2. Family registration – create wallets and distribute QR codes.  
-3. Deploy stations – setup check-in scanners at aid hubs.  
-4. Active response – families check-in, exchange encrypted messages, receive alerts.  
-5. Recovery – assess data and coordinate resources based on recorded transactions.  
+### Unconfirmed transactions
+- Stored locally in a queue (relay_hash is the dedupe identity).
+- Can be exchanged through pooled rendezvous syncing while offline.
+- Must pass smell tests before being stored/relayed:
+	- bounded sizes
+	- bounded counts
+	- shape validation
+	- dedupe by relay_hash
+
+### Confirmations
+- A message/check-in is “confirmed” only when its relay_hash appears in a
+  verified mined block.
+- Confirmations propagate offline by relaying verified blocks.
+- Queue pruning happens when a relay_hash is confirmed.
 
 ---
 
-# License & Contact
+## Pooled Rendezvous Relay Modes (Phase 3.8 direction)
 
-**License:** MIT  
-**Author:** Kristopher Driver  
-**Website:** [https://krisdriver.com](https://krisdriver.com)  
-**Social:** @paxdriver  
-**Email:** kris@krisdriver.com
+KriSYS uses pooled rendezvous syncing rather than requiring pairwise peer gossip.
+
+Mode A — Authorized Station (operationally trusted pool host)
+- Has a verified station API key (for central /checkin).
+- Can submit check-ins to central.
+- Can flush queued data to central.
+- Can pull blocks from central when connectivity returns.
+- Cannot forge confirmations (still derived only from signed blocks).
+- Trust: operationally trusted, cryptographically untrusted.
+
+Mode B — Untrusted Relay (dumb rendezvous box)
+- No blockchain credentials.
+- No private keys.
+- Cannot decrypt messages.
+- Stores and redistributes:
+	- unconfirmed encrypted payloads (dedupe by relay_hash)
+	- verified blocks (propagate confirmations)
+- Cannot submit check-ins to central.
+- Trust: fully untrusted, but safe because blocks are verifiable and messages are
+  encrypted.
+
+Mode C — Temporary User Pool (untrusted, user-hosted pool)
+- A user can choose to open a temporary pool/room during a sync window.
+- Other users opt-in to sync with it.
+- Same capabilities and trust limitations as Mode B.
+
+Operational model for safety and privacy:
+- No background discovery or continuous beaconing by default.
+- Scheduled sync windows (user opt-in) rather than continuous scanning.
+- “Always-on” operation is an explicit user choice for special cases
+  (rescue/search, stranded users).
+
+---
+
+## Check-in Stations (Authentication and Offline Behavior)
+
+Stations authenticate check-ins to the central backend via API key:
+- Header: X-Station-API-Key
+- Body includes:
+	- address (member address or family_id)
+	- station_id
+	- relay_hash (for offline dedupe/confirmation)
+	- timestamp_created (seconds; preserve offline scan time)
+
+Offline check-ins:
+- The station device can accept check-ins locally while offline and queue them.
+- When connectivity returns, the station flushes queued check-ins to central.
+- Confirmations are derived when the relay_hash appears in a verified block.
+
+Development note:
+- Station plaintext API keys are stored in:
+	station_identity_<STATION_ID>.json
+  in the station’s mounted volume so the station can flush check-ins without
+  manual copy/paste in dev.
+
+---
+
+## Dev Reset / Clean Slate Behavior (Strict)
+
+To reset the entire crisis instance in development:
+- delete: blockchain/dev_policy_id.txt
+
+This triggers regeneration of:
+- central blockchain DB
+- master key files
+- station DB
+- station identity files
+
+This prevents accidental mixing of:
+- different crisis_id values
+- different block_public_key trust anchors
+- stale station provisioning data
+
+---
+
+## Development and Testing Notes (High level)
+
+Typical offline workflow tests:
+- create two wallets (A and B)
+- unlock once to cache needed keys
+- send messages while “offline mode” is enabled (queued locally)
+- sync to a pool (authorized station in Phase 3.7)
+- flush station to central
+- mine a block
+- sync again to propagate blocks and confirmations
+- verify queues prune only on confirmed relay_hash in verified blocks
+
+Phase 3.8 testing goal:
+- replicate “camp LAN” conditions using an isolated local network where a pool
+  host exists but central internet does not.
+- validate pooled rendezvous sync without manual copy/paste where possible
+  (local rendezvous host for signaling and/or pooled HTTP sync).
+
+---
+
+## API Overview (Selected)
+
+Central backend:
+- GET /crisis
+- GET /blockchain
+- POST /transaction (messages)
+- POST /checkin (station-authenticated check-ins)
+- POST /admin/mine
+- POST /admin/alert
+- POST /auth/unlock
+- POST /wallet
+
+Station server:
+- POST /mesh/inventory
+- POST /mesh/sync
+- POST /station/checkin (offline intake)
+- POST /station/flush (flush + pull blocks + derive confirmations)
+
+---
+
+## File Structure (comprehensive)
+
+./krisys-backend
+├── app.py
+├── blockchain
+│   ├── master_private_key.asc
+│   ├── master_private_key.asc
+│   └── dev_policy_id.txt
+├── device-offline-server (simulating an offline registered station, relaying unconfirmed messages and maintaining latest blocks from anyone who visits and has a newer block that the station can verify and propagate throughout the rest of the network while offline)
+│   ├── station-data  (simulating offline station persistent storage for blockchain and message queues when gathering offline unconfirmed transactions)
+│   │   └── station.db
+│   │   └── station_identity_*.json (the persistent api keys for authorized stations in lieu of wallet passphrases)
+│   ├── app.py
+│   └── Dockerfile
+├── blockchain.db
+├── blockchain.py
+├── database.py
+├── Dockerfile
+├── requirements.txt
+├── templates
+│   ├── admin.html
+│   ├── error.html
+│   ├── index.html
+│   ├── scanner.html
+│   └── wallet_dashboard.html
+./krisys-frontend
+├── app
+│   ├── globals.css
+│   ├── layout.js
+│   ├── page.js
+│   ├── page.module.css
+│   └── wallet
+│       └── [familyId]
+│           └── page.js
+├── blockchain
+├── components
+│   ├── BlockchainExplorer
+│   │   ├── BlockchainMeta.js
+│   │   ├── BlockList.js
+│   │   ├── index.js
+│   │   └── WalletCreator.js
+│   ├── DevTools
+│   │   ├── devtools.css
+│   │   └── index.js
+│   ├── Scanner
+│   │   └── QRScanner.js
+│   └── WalletDashboard
+│       ├── ContactName.js
+│       ├── ContactPage.js
+│       ├── index.js
+│       ├── MembersOverview.js
+│       ├── MembersPage.js
+│       ├── MessageDisplay.js
+│       ├── MessagingPage.js
+│       ├── Overview.js
+│       ├── RecentActivity.js
+│       ├── Sidebar.js
+│       ├── TransactionItem.js
+│       └── UnlockForm.js
+├── Dockerfile
+├── package.json
+├── package-lock.json
+├── pages
+│   └── api
+│       ├── admin.js
+│       └── public-key.js
+├── README.md
+├── services
+│   ├── api.js
+│   ├── blockVerifier.js
+│   ├── contactStorage.js
+│   ├── keyManager.js
+│   └── localStorage.js
+├── styles
+│   ├── components
+│   │   ├── scanner.css
+│   │   └── wallet.css
+│   ├── index.css
+│   ├── landing.css
+│   └── wallet_dashboard.css
+
+LOCAL PORTS (DEV)
+- backend: http://localhost:5000
+- frontend: http://localhost:3000
+- station: http://localhost:6001
+
+---
+
+## Security and Privacy (What KriSYS tries to guarantee)
+
+- Canonical history is verifiable offline:
+	- blocks must pass hash + signature verification
+- Offline relays are untrusted:
+	- no relay can “assert confirmation” without providing signed blocks
+- Personal messages are encrypted end-to-end:
+	- relays can store/forward ciphertext only
+- No personal names are stored on-chain:
+	- contact names are local-only
+
+What KriSYS does not guarantee (realistic constraints):
+- RF-layer tracking resistance:
+	- WiFi/Bluetooth radios can leak physical presence at the network layer.
+- Full metadata secrecy:
+	- addresses and timing patterns can still leak under active surveillance.
+
+KriSYS mitigations:
+- scheduled sync windows and opt-in participation by default
+- avoid stable device identifiers in payloads
+- bounded payload sizes and strict validation
+
+---
+
+## Roadmap (Updated)
+
+Phase 1: Core chain and persistence
+- blocks/transactions
+- SQLite persistence
+- deterministic hashing
+- mining
+
+Phase 2: Wallets and messaging
+- family wallets
+- PGP key management
+- client-side encryption/decryption
+- local contact names
+
+Phase 3.0–3.7: Offline pooling via authorized stations (complete)
+- relay_hash queue + confirmation pruning
+- station pooled relay (inventory/sync)
+- station flush to central
+- offline check-ins queued and flushed
+- family-scoped addressing in UI
+
+Phase 3.8: Pooled rendezvous without authorized stations (next)
+- untrusted pool host mode (user-hosted or dumb relay boxes as no-trust stations)
+- scheduled sync window UX, push notification reminders of manual opt-in sync sessions
+- transport experimentation (likely WebRTC data channels, but protocol stays the same)
+- prioritizing transactions and sync'ed data (blocks, alerts, station check-ins, then people)
+
+Phase 4: Enhancements
+- UX polish (threads, notifications, user preferences including offline connectivity mode selection)
+- pruning strategies for local block storage
+- station registration wizard (one-time codes for api keys)
+- revocation workflows and operational tooling (esp. RE: stations)
+- decommission wallets in case compromised or joining another active wallet (helps data analysts)
+- automating relay nodes
+- automating station 
+
+Phase 5: Testing
+- UI flows to and fro features of the app
+- handling of corrupted blocks
+- hanlding of hash_relay conflicts
+- local storage management, pruning, manual purging
+- rate limiting under load and abuse (automating address bans?)
+- station relays
+- user relays
+- local database permissions
+- sandboxing
+- DoS, command injections, XSS, and malicious attacks
+
+---
