@@ -2,22 +2,47 @@
 
 KriSYS is a humanitarian crisis communication system designed to keep working
 during disasters and hostile conditions (rolling blackouts, poor cell service,
-warzone interference). It behaves like a blockchain-based message ledger where
+warzone interference). 
+
+It behaves like a blockchain-based message ledger where
 a crisis organization mines a single canonical chain, and everyone can verify
-confirmed history offline. This enables victims to supply family members and
+confirmed history offline.
+
+This enables victims to supply family members and
 friends abroad with their wallet addresses so that concerned loved ones can
 efficiently check in on their loved ones enduring any crisis ranging from war
 zone to national disaster relief and everything in between.
 
-The goal is *not* cryptocurrency. “Transactions” are:
-- encrypted family/group messages
+## <center> The goal is *not* cryptocurrency. </center>
+
+<br>
+
+“Transactions” are:
+- encrypted family/group/individual messages (obfuscation, as are wallet/individuals' addresses)
 - authorized station check-ins (aid trucks, hospitals, camps, etc.)
-- emergency alerts
+- emergency alerts issued by the blockchain service provider (aid organization)
 
 KriSYS emphasizes:
-- offline-first operation
+- offline operation in the event of network outages, communications propagate and persist
 - deterministic verification (bit-for-bit hashing and signature checks)
 - privacy by default (no personal names on-chain; local-only contact labels)
+
+---
+
+What “blockchain” means here:
+- No tokens
+- No mining incentives
+- No peer consensus
+- No forks
+- No financial layer
+
+Instead:
+- A cryptographically signed, append-only ledger
+- One canonical chain per crisis
+- Used for:
+	- verification
+	- accountability
+	- offline trust propagation
 
 ---
 
@@ -32,6 +57,37 @@ KriSYS emphasizes:
 - Offline message delivery: send/relay messages without internet
 - Offline proof: verify mined history offline via signed blocks
 - Low-complexity workflows: designed for high-stress, low-tech environments
+- Families, NGOs, journalists, and auditors can independently verify:
+	- when and where a person was last checked in
+	- where aid stations reported activity
+	- which alerts were issued, by whom, and when
+
+---
+
+## Why KriSYS exists
+- Traditional messaging fails under:
+	- internet shutdowns
+	- infrastructure collapse
+	- censorship or surveillance
+  - rolling power loss
+- Centralized messengers require:
+	- live servers
+	- continuous connectivity
+	- trust in third-party operators
+  - vulnerability to man-in-the-middle interception
+- Paper logs and ad-hoc radio communication are:
+  - unverifiable
+	- not portable
+	- easily lost or tampered with
+- Accountability and auditability:
+  - Check-ins and alerts become immutable once confirmed
+  - Offline verification prevents later rewriting of history
+
+KriSYS exists to provide verifiable, offline-capable communication and
+accountability for humanitarian crises, even when the network, the grid, or
+the government is hostile or absent. The anonymized data collected further
+helps train future relief efforts to make the best use of limited resources
+during future events of crisis requiring deployment of aid and volunteers.
 
 ---
 
@@ -136,7 +192,6 @@ Block hash is SHA-256 of UTF-8 bytes of canonical JSON of:
 
 Canonical JSON rules:
 - sorted keys
-- separators=(",", ":")
 - ensure_ascii=False
 - UTF-8 encoding
 
@@ -162,11 +217,11 @@ A block is canonical iff:
 
 Wallets represent families/groups.
 - family_id: the wallet identifier
-- member addresses: family_id + “-suffix” (one per member)
+- member addresses: family_id + “-suffix” (intended one per person, but not restricted)
 
 related_addresses may contain:
 - individual member addresses (family_id-suffix)
-- the family_id itself (family-scoped)
+- the family_id itself (family/group-scoped for group check-in or messages)
 
 Privacy constraint:
 - Do not expand a family-scoped event into all member addresses, because that
@@ -317,7 +372,7 @@ Station server:
 ---
 
 ## File Structure (comprehensive)
-
+```
 ./krisys-backend
 ├── app.py
 ├── blockchain
@@ -396,7 +451,7 @@ Station server:
 │   ├── index.css
 │   ├── landing.css
 │   └── wallet_dashboard.css
-
+```
 LOCAL PORTS (DEV)
 - backend: http://localhost:5000
 - frontend: http://localhost:3000
@@ -428,34 +483,150 @@ KriSYS mitigations:
 
 ---
 
+## Security and Privacy (in plain-er language)
+
+KriSYS assumes:
+- Devices may be lost, stolen, damaged, or inspected
+- Networks may be monitored or disrupted
+- Offline relays may be malicious or compromised
+- Users may be non-technical and under stress
+
+KriSYS does not assume:
+- Always-on internet
+- Trusted local infrastructure
+- Secure physical environments (messages are PGP encrypted on publicly visible blockchain)
+- Unlimited access to reliable power (conscious of mobile battery usage)
+
+KriSYS is designed so that compromise of any single relay, device, or pool does
+not compromise the integrity of confirmed history or the privacy of messages; it also can't
+guarantee that messages never be de-obfuscated over time, since the chain is still public.
+
+* Encyption used for messages simply enables users to reunite before messages can be decrypted,
+but they are not secure enough to pass sensitive information such as banking details or personally
+identifying credentials.
+
+## What KriSYS does *NOT* do:
+- Cost money beyond the servers and verified check-in stations supplied by the blockchain host (usually the aid organization in charge of relief efforts):
+  - FEMA (in USA)
+  - Canadian Disaster Response Organization (EMOs)
+  - Red Cross, etc.
+- No background peer discovery by default
+- No device tracking or redistribution
+- No location tracking unless explicitly encoded in a transaction
+- No automatic trust of unverified data
+- No global peer-to-peer mesh without user consent
+
+*NOTE: This does not prevent long‑term metadata correlation by powerful adversaries, but it ensures KriSYS itself does not add new tracking surfaces.*
+
+---
+
 ## Roadmap (Updated)
 
-Phase 1: Core chain and persistence
+### Phase 1: Core chain and persistence
 - blocks/transactions
 - SQLite persistence
 - deterministic hashing
 - mining
 
-Phase 2: Wallets and messaging
+### Phase 2: Wallets and messaging
 - family wallets
 - PGP key management
 - client-side encryption/decryption
 - local contact names
 
-Phase 3.0–3.7: Offline pooling via authorized stations (complete)
+### Phase 3.0–3.7: Offline pooling via authorized stations (complete)
 - relay_hash queue + confirmation pruning
 - station pooled relay (inventory/sync)
 - station flush to central
 - offline check-ins queued and flushed
 - family-scoped addressing in UI
 
-Phase 3.8: Pooled rendezvous without authorized stations (next)
+### Phase 3.8: Pooled rendezvous without authorized stations (next)
 - untrusted pool host mode (user-hosted or dumb relay boxes as no-trust stations)
 - scheduled sync window UX, push notification reminders of manual opt-in sync sessions
 - transport experimentation (likely WebRTC data channels, but protocol stays the same)
-- prioritizing transactions and sync'ed data (blocks, alerts, station check-ins, then people)
+- prioritizing transactions and synced data (blocks, alerts, station check-ins, then people)
 
-Phase 4: Enhancements
+---
+
+# Offline Data Propagation Diagrams
+
+### Legend:
+- Clients upload INVENTORY (relay_hash list)
+- Pool hosts request only missing payloads
+- Pool hosts dedupe by relay_hash
+- Pool hosts exchange inventory + missing payloads
+- Verified blocks propagate across all pool hosts
+- Confirmations are derived ONLY from verified blocks
+- Blocks propagate outward
+
+---
+## SYNC WINDOW (OFFLINE) - ASCII VERSION
+
+```
+
+    CLIENTS                     POOL HOSTS / STATIONS
+
+ [ Client A ] ──┐
+ [ Client B ] ──┼──>  [ Pool Host #1 ]  <────┐
+ [ Client C ] ──┘             │              │
+                              │              │
+ [ Client D ] ──┐             │              │
+ [ Client E ] ──┼──>  [ Pool Host #2 ]  <────┼── inter‑pool sync
+ [ Client F ] ──┘             │              │
+                              │              │
+ [ Client G ] ──┐             │              │
+ [ Client H ] ──┼──>  [ Pool Host #3 ]  <────┘
+ [ Client I ] ──┘
+```
+
+---
+
+## SYNC WINDOW (OFFLINE) - GitHub VERSION
+
+CLIENTS                        POOL HOSTS (RENDEZVOUS)
+
+Client A  ─┐
+Client B  ─┼─▶ Pool Host #1
+Client C  ─┘          │
+                       │
+Client D  ─┐          │
+Client E  ─┼─▶ Pool Host #2
+Client F  ─┘          │
+                       │
+Client G  ─┐          │
+Client H  ─┼─▶ Pool Host #3
+Client I  ─┘
+
+POOL‑TO‑POOL EXCHANGE (DURING SAME SYNC WINDOW)
+
+Pool Host #1  ⇄  Pool Host #2  ⇄  Pool Host #3
+
+---
+
+## SYNC WINDOW (OFFLINE) - MERMAID VERSION
+
+flowchart LR
+	A[Client A] --> P1[Pool Host #1]
+	B[Client B] --> P1
+	C[Client C] --> P1
+
+	D[Client D] --> P2[Pool Host #2]
+	E[Client E] --> P2
+	F[Client F] --> P2
+
+	G[Client G] --> P3[Pool Host #3]
+	H[Client H] --> P3
+	I[Client I] --> P3
+
+	P1 <--> P2
+	P2 <--> P3
+
+---
+##### ^^^^^^ [end of diagrams] ^^^^^^
+---
+
+### Phase 4: Enhancements
 - UX polish (threads, notifications, user preferences including offline connectivity mode selection)
 - pruning strategies for local block storage
 - station registration wizard (one-time codes for api keys)
@@ -464,10 +635,10 @@ Phase 4: Enhancements
 - automating relay nodes
 - automating station 
 
-Phase 5: Testing
+### Phase 5: Testing
 - UI flows to and fro features of the app
 - handling of corrupted blocks
-- hanlding of hash_relay conflicts
+- handling of hash_relay conflicts
 - local storage management, pruning, manual purging
 - rate limiting under load and abuse (automating address bans?)
 - station relays
