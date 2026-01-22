@@ -68,71 +68,90 @@ export class KeyManager {
     static async getPrivateKey(familyId, passphrase) {
         console.log('Getting private key for message decryption...')
 
-        // 1. Check localStorage first (offline-friendly)
+        // 1) Check localStorage first (offline-friendly)
         const cachedKey = disasterStorage.getPrivateKey(familyId)
         if (cachedKey) {
-            console.log('Found cached private key in local storage; using without re-validation (was validated when first stored).')
+            console.log('Found cached private key in local storage; using without re-validation.')
             return cachedKey
         }
 
-        // 2. Request from server (online unlock / first time on this device)
-        console.log('🌐 Requesting private key from server...')
+        // 2) Request from server (online unlock / first time on this device)
+        console.log('Requesting private key from server...')
         try {
-            const response = await fetch(
-                `${process.env.NEXT_PUBLIC_API_URL}/auth/unlock`,
+            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/auth/unlock`,
                 {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         family_id: familyId,
-                        passphrase: passphrase || ''
-                    })
+                        passphrase: passphrase || '',
+                    }),
                 }
             )
+
             const data = await response.json()
 
             if (!data.private_key) {
                 throw new Error('No private key received from server')
             }
 
-            // 3. The server returns the private key already decrypted from master key
-            // But it might still be encrypted with user passphrase
             let actualPrivateKey = data.private_key
 
-            // 4. Try to decrypt with passphrase if needed
+            // 3) If needed, decrypt with passphrase (dev may use empty)
             try {
-                const keyObj = await openpgp.readPrivateKey({armoredKey: actualPrivateKey})
+                const keyObj = await openpgp.readPrivateKey({armoredKey: actualPrivateKey,})
+
                 if (!keyObj.isDecrypted() && passphrase) {
                     const decryptedKeyObj = await openpgp.decryptKey({
                         privateKey: keyObj,
-                        passphrase: passphrase
+                        passphrase: passphrase,
                     })
                     actualPrivateKey = decryptedKeyObj.armor()
                 }
             } 
-            catch (error) {
-                // If decryption fails, maybe the key is already decrypted
-                console.log('Key might already be decrypted, proceeding with validation...')
+            catch {
+                // If parsing/decryption fails, we still try validation below.
             }
 
-            // 5. Validate the key before caching (online only, once)
+            // 4) Validate (online) and cache wallet public key during validation
             const isValid = await KeyManager.validatePrivateKey(
                 familyId,
                 actualPrivateKey
             )
             if (!isValid) {
-                throw new Error(
-                    'Retrieved private key does not match wallet'
-                )
+                throw new Error('Retrieved private key does not match wallet')
             }
 
-            // 6. Cache validated key in localStorage
+            // 5) Cache validated private key locally
             disasterStorage.savePrivateKey(familyId, actualPrivateKey)
-            console.log('✅ Private key validated and cached locally')
 
+            // 6) Ensure wallet public key is cached (needed for offline send)
+            // validatePrivateKey() already fetches/caches it, but we do this as a
+            // belt-and-suspenders guarantee in case the unlock flow changes later.
+            try {
+                await KeyManager.getPublicKey(familyId)
+            } 
+            catch (e) {
+                console.warn('Failed to cache wallet public key:', e)
+            }
+
+            // 7) Ensure crisis metadata is cached (needed for offline block verification)
+            try {
+                const crisisRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/crisis`)
+                if (crisisRes.ok) {
+                    const crisis = await crisisRes.json()
+                    disasterStorage.saveCrisisMetadata(crisis)
+                }
+            } 
+            catch (e) {
+                console.warn('Failed to cache crisis metadata:', e)
+            }
+
+            console.log('Private key validated and cached locally')
             return actualPrivateKey
-        } catch (error) {
-            console.error('❌ Failed to get private key:', error)
+        } 
+        catch (error) {
+            console.error('Failed to get private key:', error)
             throw new Error(`Key retrieval failed: ${error.message}`)
         }
     }
@@ -143,15 +162,13 @@ export class KeyManager {
             console.log('🔓 KeyManager decrypting message...')
 
             // Prepare private key
-            let privateKeyObj = await openpgp.readPrivateKey({
-                armoredKey: privateKey
-            })
+            let privateKeyObj = await openpgp.readPrivateKey({armoredKey: privateKey})
 
             // Unlock if needed
             if (!privateKeyObj.isDecrypted()) {
                 privateKeyObj = await openpgp.decryptKey({
                     privateKey: privateKeyObj,
-                    passphrase: '' // Empty for development
+                    passphrase: '' // DEV NOTE: Empty for development
                 })
             }
 
@@ -187,17 +204,11 @@ export class KeyManager {
             }
 
             // Encrypt
-            const recipientKey = await openpgp.readKey({
-                armoredKey: publicKeyString
-            })
+            const recipientKey = await openpgp.readKey({armoredKey: publicKeyString})
 
             // Encrypy for both recipient AND for sender, so sender can read sent messages in their own dashboards
             const encryptionKeys = [recipientKey]
             if (senderFamilyId && senderFamilyId !== recipientFamilyId) {    // de-depulication if message is family-to-family member
-                
-                // DEV NOTE: FIX THIS
-
-                // change this keymanager.getpublickey call to just pulling from localstorage first. sender should have their own public key, just hacking this together quick for now.
                 const senderArmored = await KeyManager.getPublicKey(senderFamilyId)
                 const senderKey = await openpgp.readKey({ armoredKey: senderArmored })
                 encryptionKeys.push(senderKey)

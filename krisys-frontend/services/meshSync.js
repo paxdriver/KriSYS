@@ -35,7 +35,12 @@ export async function syncWithMeshHost({
 	label = 'MeshHost',
 	maxQueuedToConsider = 500,
 }) {
-	const base = normalizeBaseUrl(baseUrl)
+    console.log(`baseUrl value in meshsync.js: ${baseUrl}`)
+	
+    const base = normalizeBaseUrl(baseUrl)
+    
+    console.log(`base value in meshsync.js: ${base}`)
+
 	if (!base) throw new Error(`${label}: invalid baseUrl`)
 
 	const crisis = disasterStorage.getCrisisMetadata()

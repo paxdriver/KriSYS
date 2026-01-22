@@ -21,24 +21,18 @@ export default function UnlockForm({ familyId, onUnlock }) {
                 if (cachedKey) {
                     const keyData = JSON.parse(cachedKey)
                     if ( keyData.familyId === familyId && keyData.privateKey) {
-                        console.log(
-                            'Found cached private key for this wallet. Auto-unlocking without server (offline-safe).'
-                        )
+                        console.log('Found cached private key for this wallet. Auto-unlocking without server (offline-safe).')
                         setTimeout( () => onUnlock(keyData.privateKey), 0 )
                         
                         return
                     }
                 }
 
-                console.log(
-                    'No cached key for this wallet - user needs to unlock online at least once.'
-                )
+                console.log('No cached key for this wallet - user needs to unlock online at least once.')
                 setIsFirstTime(true)
             } 
             catch (error) {
-                console.log(
-                    '⚠️ Auto-unlock check failed - user needs to enter passphrase'
-                )
+                console.log('Auto-unlock check failed - user needs to enter passphrase')
                 setIsFirstTime(true)
             } 
             finally {
@@ -55,7 +49,7 @@ export default function UnlockForm({ familyId, onUnlock }) {
         setError('')
 
         try {
-            console.log('🔑 Attempting to unlock wallet with passphrase...')
+            console.log('Attempting to unlock wallet with passphrase...')
             
             // Use KeyManager for the full flow
             const privateKey = await KeyManager.getPrivateKey(familyId, passphrase)
@@ -63,7 +57,8 @@ export default function UnlockForm({ familyId, onUnlock }) {
             if (privateKey) {
                 console.log('✅ Wallet unlocked successfully')
                 setTimeout(() => onUnlock(privateKey), 0)
-            } else {
+            } 
+            else {
                 setError('Unlock failed - no private key returned')
             }
             
@@ -73,14 +68,18 @@ export default function UnlockForm({ familyId, onUnlock }) {
             // More specific error messages
             if (error.message.includes('Invalid passphrase')) {
                 setError('Incorrect passphrase. Please try again.')
-            } else if (error.message.includes('No internet')) {
+            } 
+            else if (error.message.includes('No internet')) {
                 setError('Cannot unlock: No internet connection and no local key found')
-            } else if (error.message.includes('does not match')) {
+            } 
+            else if (error.message.includes('does not match')) {
                 setError('Key validation failed - this may not be your wallet')
-            } else {
+            } 
+            else {
                 setError(error.message || 'Unlock failed')
             }
-        } finally {
+        } 
+        finally {
             setLoading(false)
         }
     }
@@ -91,7 +90,7 @@ export default function UnlockForm({ familyId, onUnlock }) {
             <div className="unlock-form">
                 <h3>Loading Wallet</h3>
                 <div className="loading-spinner">
-                    🔍 Checking for existing keys...
+                    Checking for existing keys...
                 </div>
             </div>
         )

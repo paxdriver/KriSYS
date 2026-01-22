@@ -292,6 +292,7 @@ export default function DevTools({ onRefresh }) {
     // Station sync: send our payload to the station, merge its response back
     const handleStationSync = async () => {
         setSyncingStation(true)
+        console.log(`Station sync STATION_URL: ${STATION_URL}`)
         try {
             await syncWithMeshHost({
                 baseUrl: STATION_URL,
@@ -312,8 +313,12 @@ export default function DevTools({ onRefresh }) {
 	// Relay sync
 	const handleRelaySync = async () => {
 		setSyncingRelay(true)
+        console.log(`Station sync RELAY_URL: ${RELAY_URL}`)
 		try {
-			await syncWithMeshHost(RELAY_URL, 'Relay')
+			await syncWithMeshHost({ 
+                baseUrl: RELAY_URL, 
+                label: 'Relay'}
+            )
 			alert('Relay sync completed.')
 			if (onRefresh) onRefresh()
 		} 
