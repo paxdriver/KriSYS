@@ -97,7 +97,7 @@ export default function WalletDashboard({ walletData, transactions, familyId, on
                             />
                         )}
                     
-                    {/* other pages */}
+                        {/* CONNECTIONS */}
                     
                     </>)
                 }

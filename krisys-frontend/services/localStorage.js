@@ -13,42 +13,6 @@ import { verifyBlockCanonical } from './blockVerifier'
   NOTE: FOR ACTUAL ENCRYPTION users can create their own keypair and use that extra private keypair as the passphrase, so that the decrypted response still needs to be decrypted once more by them manually to get the actual private key from the blockchain. then they can take messages from the blockchain, copy it to Kleopatra or whatever, and decrypt their messages manually without any chance of their private_key being unlocked by just the passphrase alone (but this is not the regular use case, just an option to upgrade from obfuscation to secure)
  */
 
-/*
-PHASE 3.5 - STARTING TO-DO's
-
-To-do (focused on the *next* step: offline gossip + confirmations)
-	1)	Make sync payloads actually carry “proof of confirmation” (signed blocks), not just “trust me” confirmed-relay maps.
-	2)	When a device imports a sync payload, verify any incoming blocks using the crisis `block_public_key`, merge what extends the local chain tip, then mark any `relay_hash` found in those blocks as confirmed (and prune the local queue).
-	3)	Teach the offline station server to *store and re-serve* the `blocks` portion of sync payloads (so confirmations can propagate through camps even while central internet is down).
-	4)	(Next after this) Add “offline check-in intake” on the station device (right now the station device can relay queued `/transaction` messages, but it cannot accept and later flush `/checkin` events).
-
-The most logically sound next step to do now
-	Right now you already have:
-	-	A signed-block trust model (server signs blocks, clients verify signatures).
-	-	A queue/relay model for offline messages (`relay_hash`, `confirmed` map, queue prune).
-	-	A sync payload that *already includes* the last N blocks (`exportSyncPayload()` returns `blocks: blocksToShare`).
-	-	A block-merge function in `DisasterStorage` (`_mergeBlocksFromPayload`) that is implemented… but never called.
-
-	So the next step is to “close that loop”: when you sync via station (or paste/import payload), you must actually merge those blocks, verify them, and then use them to mark queued messages as confirmed.
-
-Part A — Frontend: make `importSyncPayload` also merge blocks + derive confirmations
-	Problem today:
-	-	`exportSyncPayload()` includes `blocks`.
-	-	`importSyncPayload()` ignores `payload.blocks` entirely.
-	-	So confirmations cannot propagate offline unless you go online and fetch `/blockchain`.
-
-	Fix:
-	-	Add an **async** import method that:
-		1) merges `queued` + `confirmed` (your existing behavior),
-		2) then merges `blocks` via `_mergeBlocksFromPayload()` (signature-verified),
-		3) then scans the resulting local blocks for transactions with `relay_hash` and calls `syncConfirmedFromTransactions()` to prune the queue.
-
-	Why it must be async:
-	-	`_mergeBlocksFromPayload` calls `verifyBlockSignature`/ `verifyBlockCanoncial`, which uses OpenPGP and is async.
-	-	If you try to keep everything synchronous, you either skip verification (bad) or block the UI thread awkwardly.
-*/
-
-
 class DisasterStorage {
     constructor() {
         this.STORAGE_KEYS = {

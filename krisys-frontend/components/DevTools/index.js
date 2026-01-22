@@ -6,8 +6,10 @@ import { disasterStorage } from '@/services/localStorage'
 import './devtools.css'
 
 // Station URL for mesh sync and flush (local station backend)
-const STATION_URL =
-    process.env.NEXT_PUBLIC_STATION_URL || 'http://localhost:6001'
+const STATION_URL = process.env.NEXT_PUBLIC_STATION_URL || 'http://localhost:6001'
+
+// Relay/Pool URL for dumb rendezvous cache sync (untrusted relay backend)
+const RELAY_URL = process.env.NEXT_PUBLIC_RELAY_URL || 'http://localhost:6002'
 
 export default function DevTools({ onRefresh }) {
     const [mining, setMining] = useState(false)
@@ -16,8 +18,11 @@ export default function DevTools({ onRefresh }) {
     const [rateLimitOverride, setRateLimitOverride] = useState(false)
     const [sending, setSending] = useState(false)
     const [meshInfo, setMeshInfo] = useState(null)
+    
     const [syncingStation, setSyncingStation] = useState(false)
     const [flushingStation, setFlushingStation] = useState(false)
+
+    const [syncingRelay, setSyncingRelay] = useState(false)
 
     // Update queued message count periodically
     useEffect(() => {
@@ -216,7 +221,9 @@ export default function DevTools({ onRefresh }) {
                 // Allow internal Next.js API routes to work
                 if (u.startsWith('/api/') ||
                     u.startsWith(window.location.origin) ||
-                    u.startsWith(STATION_URL)) {
+                    u.startsWith(STATION_URL) || 
+                    u.startsWith(RELAY_URL)
+                ) {
                     return window.originalFetch(url, options)
                 }
 
@@ -282,6 +289,85 @@ export default function DevTools({ onRefresh }) {
 
         if (onRefresh) onRefresh()
     }
+
+    // Relay sync (as opposed to authorized stations)
+    const syncWithHost = async (baseUrl, label) => {
+        const crisis = disasterStorage.getCrisisMetadata()
+        const crisisId = crisis?.id
+        const blockPublicKey = crisis?.block_public_key
+
+        if (!crisisId) throw new Error('Missing crisisId (fetch /crisis once online first)')
+		// Relay requires this for first-contact pinning. Station will ignore it.
+		if (!blockPublicKey) throw new Error('Missing block_public_key (fetch /crisis once online first)')
+
+		const queue = disasterStorage.getMessageQueue() || []
+		const pending = queue.filter(
+			(m) =>
+				(m.status || 'pending') === 'pending' &&
+				m.relay_hash &&
+				!disasterStorage.isMessageConfirmed(m.relay_hash)
+		)
+
+		const relay_hashes = pending.map((m) => m.relay_hash)
+
+		// 1) Inventory
+		const invRes = await fetch(`${baseUrl}/mesh/inventory`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				crisisId,
+				block_public_key: blockPublicKey,
+				relay_hashes,
+			}),
+		})
+
+		if (!invRes.ok) {
+			const text = await invRes.text()
+			throw new Error(`${label} inventory failed: ${invRes.status} ${text}`)
+		}
+
+		const inv = await invRes.json()
+
+		// Apply confirmed hints (prunes local queue). Still safe because
+		// confirmations ultimately only matter once blocks are verified locally.
+		if (inv?.confirmed && typeof inv.confirmed === 'object') {
+			disasterStorage.importSyncPayload({
+				queued: [],
+				confirmed: inv.confirmed,
+			})
+		}
+
+		const missing = Array.isArray(inv?.missing_relay_hashes)
+			? new Set(inv.missing_relay_hashes)
+			: new Set()
+
+		// 2) Sync: only send missing queued bodies
+		const fullPayload = disasterStorage.exportSyncPayload()
+		const reducedPayload = {
+			...fullPayload,
+			crisisId,
+			block_public_key: blockPublicKey,
+			queued: (fullPayload.queued || []).filter((m) => {
+				const rh = m?.relay_hash
+				return typeof rh === 'string' && rh.length > 0 && missing.has(rh)
+			}),
+		}
+
+		const syncRes = await fetch(`${baseUrl}/mesh/sync`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(reducedPayload),
+		})
+
+		if (!syncRes.ok) {
+			const text = await syncRes.text()
+			throw new Error(`${label} sync failed: ${syncRes.status} ${text}`)
+		}
+
+		const hostPayload = await syncRes.json()
+		await disasterStorage.importSyncPayloadAsync(hostPayload)
+	}
+
 
     // Station sync: send our payload to the station, merge its response back
     const handleStationSync = async () => {
@@ -375,6 +461,23 @@ export default function DevTools({ onRefresh }) {
             setSyncingStation(false)
         }
     }
+
+	// Relay sync
+	const handleRelaySync = async () => {
+		setSyncingRelay(true)
+		try {
+			await syncWithHost(RELAY_URL, 'Relay')
+			alert('Relay sync completed.')
+			if (onRefresh) onRefresh()
+		} 
+        catch (error) {
+			console.error('Relay sync error:', error)
+			alert(`Relay sync failed: ${error.message}`)
+		} 
+        finally {
+			setSyncingRelay(false)
+		}
+	}
 
     // Station flush: ask station to push its queued messages to central
     const handleStationFlush = async () => {
@@ -482,11 +585,7 @@ export default function DevTools({ onRefresh }) {
     }
 
     const clearStorage = () => {
-        if (
-            confirm(
-                'Clear all local storage? This will log you out and clear all offline data.'
-            )
-        ) {
+        if ( confirm('Clear all local storage? This will log you out and clear all offline data.') ) {
             disasterStorage.clearAll()
             localStorage.clear()
             window.location.reload()
@@ -562,6 +661,15 @@ export default function DevTools({ onRefresh }) {
                 >
                     {syncingStation ? 'Syncing...' : 'Sync Station'}
                 </button>
+
+                <button
+					className="dev-btn"
+					onClick={handleRelaySync}
+					disabled={syncingRelay}
+					title={`Sync queued/confirmed state with relay at ${RELAY_URL}`}
+				>
+					{syncingRelay ? 'Syncing...' : 'Sync Relay'}
+				</button>
 
                 <button
                     className="dev-btn"

@@ -77,18 +77,15 @@ def dev_bootstrap_policy_id_and_cleanup() -> str | None:
 
 	db_path = os.getenv("BLOCKCHAIN_DB_PATH", "blockchain.db")
 
-	# Also wipe station DB so it can't stay pinned to an old crisisId/key
-	station_db_host_path = os.path.join(
-		"device-offline-server",
-		"station-data",
-		"station.db",
-	)
- 
+	# Also wipe station & relay DB so it can't stay pinned to an old crisisId/key
+	station_db_host_path = os.path.join("device-offline-server", "station-data", "station.db")
+	relay_db_host_path = os.path.join("relay-offline-server", "relay-data", "relay.db")
 	stale_paths = [
 		db_path,
 		"blockchain/master_public_key.asc",
 		"blockchain/master_private_key.asc",
 		station_db_host_path,
+		relay_db_host_path,
 	]
 
 	identity_glob = os.path.join(

@@ -39,9 +39,20 @@ services:
     environment:
       - FLASK_ENV=development
     volumes:
-      # DEV: local folder where station could store its own mesh DB/cache
+      # DEV: local folder where station stores its own mesh DB/cache
       - ./krisys-backend/device-offline-server/station-data:/app/data
     depends_on:
       - backend
-    # For now, no shared DB or blockchain; this is a separate process
-    # representing a station device. We can add volumes / DB later.
+  relay:
+    build: 
+      context: ./krisys-backend
+      dockerfile: ./relay-offline-server/Dockerfile
+    ports:
+      - "6002:5000"
+    environment:
+      - FLASK_ENV=development
+    volumes:
+      # DEV: local folder where dumb relay stores its own mesh DB/cache
+      - ./krisys-backend/relay-offline-server/relay-data:/app/data
+    depends_on:
+      - backend
