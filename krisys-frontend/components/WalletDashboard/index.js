@@ -6,10 +6,10 @@ import Sidebar from './Sidebar'
 import Overview from './Overview'
 import MembersPage from './MembersPage'
 import ContactsPage from './ContactPage'
-import UnlockForm from './UnlockForm'
 import MessagingPage from './MessagingPage'
-import DevTools from '../DevTools'
+import UnlockForm from './UnlockForm'
 import '../../styles/wallet_dashboard.css'
+import DevTools from '../DevTools'  // DEV NOTE: DEVELOPMENT ONLY
 
 
 export default function WalletDashboard({ walletData, transactions, familyId, onRefresh }) {
@@ -33,16 +33,11 @@ export default function WalletDashboard({ walletData, transactions, familyId, on
     }, [searchParams])
 
     useEffect(() => {
-        if (privateKey) {
-            setIsUnlocked(true)
-        } else {
-            setIsUnlocked(false)
-        }
+        if (privateKey) setIsUnlocked(true)
+        else setIsUnlocked(false)
     }, [privateKey])
 
-    const handleUnlock = key => {
-        setPrivateKey(key)
-    }
+    const handleUnlock = key => setPrivateKey(key)
 
     return (<>
             {/* DEV TOOLS ONLY, NOT FOR PROD */}
@@ -97,7 +92,9 @@ export default function WalletDashboard({ walletData, transactions, familyId, on
                             />
                         )}
                     
-                        {/* CONNECTIONS */}
+                        {currentPage === 'connections' && (
+                            <ConnectionsPage onRefresh={onRefresh} />
+                        )}
                     
                     </>)
                 }

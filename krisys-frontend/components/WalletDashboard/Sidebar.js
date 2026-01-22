@@ -6,6 +6,7 @@ export default function Sidebar({ walletData, currentPage, onPageChange }) {
     { id: 'members', icon: '👨‍👩‍👧‍👦', label: 'Family Members' },
     { id: 'contacts', icon: '📞', label: 'My Contacts' },
     { id: 'messages', icon: '💬', label: 'Messages' },
+		{ id: 'connections', icon: '🔗', label: 'Connections' },  // Phase 3.8: pooled rendezvous / station / relay connections
     { id: 'notifications', icon: '🔔', label: 'Notifications' },
     { id: 'security', icon: '🔒', label: 'Security' },
     { id: 'devices', icon: '📱', label: 'Registered Devices' }

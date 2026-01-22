@@ -2,6 +2,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api } from '@/services/api'
+import { syncWithMeshHost } from '@/services/meshSync'
 import { disasterStorage } from '@/services/localStorage'
 import './devtools.css'
 
@@ -16,7 +17,6 @@ export default function DevTools({ onRefresh }) {
     const [isOnline, setIsOnline] = useState(true)
     const [queuedMessages, setQueuedMessages] = useState(0)
     const [rateLimitOverride, setRateLimitOverride] = useState(false)
-    const [sending, setSending] = useState(false)
     const [meshInfo, setMeshInfo] = useState(null)
     
     const [syncingStation, setSyncingStation] = useState(false)
@@ -268,7 +268,6 @@ export default function DevTools({ onRefresh }) {
             return
         }
 
-        // setSending(true)
         let sent = 0
         for (const msg of pending) {
             try {
@@ -290,167 +289,15 @@ export default function DevTools({ onRefresh }) {
         if (onRefresh) onRefresh()
     }
 
-    // Relay sync (as opposed to authorized stations)
-    const syncWithHost = async (baseUrl, label) => {
-        const crisis = disasterStorage.getCrisisMetadata()
-        const crisisId = crisis?.id
-        const blockPublicKey = crisis?.block_public_key
-
-        if (!crisisId) throw new Error('Missing crisisId (fetch /crisis once online first)')
-		// Relay requires this for first-contact pinning. Station will ignore it.
-		if (!blockPublicKey) throw new Error('Missing block_public_key (fetch /crisis once online first)')
-
-		const queue = disasterStorage.getMessageQueue() || []
-		const pending = queue.filter(
-			(m) =>
-				(m.status || 'pending') === 'pending' &&
-				m.relay_hash &&
-				!disasterStorage.isMessageConfirmed(m.relay_hash)
-		)
-
-		const relay_hashes = pending.map((m) => m.relay_hash)
-
-		// 1) Inventory
-		const invRes = await fetch(`${baseUrl}/mesh/inventory`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({
-				crisisId,
-				block_public_key: blockPublicKey,
-				relay_hashes,
-			}),
-		})
-
-		if (!invRes.ok) {
-			const text = await invRes.text()
-			throw new Error(`${label} inventory failed: ${invRes.status} ${text}`)
-		}
-
-		const inv = await invRes.json()
-
-		// Apply confirmed hints (prunes local queue). Still safe because
-		// confirmations ultimately only matter once blocks are verified locally.
-		if (inv?.confirmed && typeof inv.confirmed === 'object') {
-			disasterStorage.importSyncPayload({
-				queued: [],
-				confirmed: inv.confirmed,
-			})
-		}
-
-		const missing = Array.isArray(inv?.missing_relay_hashes)
-			? new Set(inv.missing_relay_hashes)
-			: new Set()
-
-		// 2) Sync: only send missing queued bodies
-		const fullPayload = disasterStorage.exportSyncPayload()
-		const reducedPayload = {
-			...fullPayload,
-			crisisId,
-			block_public_key: blockPublicKey,
-			queued: (fullPayload.queued || []).filter((m) => {
-				const rh = m?.relay_hash
-				return typeof rh === 'string' && rh.length > 0 && missing.has(rh)
-			}),
-		}
-
-		const syncRes = await fetch(`${baseUrl}/mesh/sync`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify(reducedPayload),
-		})
-
-		if (!syncRes.ok) {
-			const text = await syncRes.text()
-			throw new Error(`${label} sync failed: ${syncRes.status} ${text}`)
-		}
-
-		const hostPayload = await syncRes.json()
-		await disasterStorage.importSyncPayloadAsync(hostPayload)
-	}
-
-
     // Station sync: send our payload to the station, merge its response back
     const handleStationSync = async () => {
         setSyncingStation(true)
-
         try {
-            const crisis = disasterStorage.getCrisisMetadata()
-            const crisisId = crisis?.id
-            if (!crisisId) {
-                throw new Error('Missing crisisId (fetch /crisis once online first)')
-            }
-
-            const queue = disasterStorage.getMessageQueue() || []
-            const pending = queue.filter(
-                (m) =>
-                    (m.status || 'pending') === 'pending' &&
-                    m.relay_hash &&
-                    !disasterStorage.isMessageConfirmed(m.relay_hash)
-            )
-
-            const relay_hashes = pending.map((m) => m.relay_hash)
-
-            // 1) Inventory: cheap check first
-            const invRes = await fetch(`${STATION_URL}/mesh/inventory`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    crisisId,
-                    relay_hashes,
-                }),
+            await syncWithMeshHost({
+                baseUrl: STATION_URL,
+                label: 'Station',
             })
-
-            if (!invRes.ok) {
-                const text = await invRes.text()
-                throw new Error(`Station inventory failed: ${invRes.status} ${text}`)
-            }
-
-            const inv = await invRes.json()
-
-            // Optional: apply confirmed hints (prunes local queue)
-            if (inv?.confirmed && typeof inv.confirmed === 'object') {
-                disasterStorage.importSyncPayload({
-                    queued: [],
-                    confirmed: inv.confirmed,
-                })
-            }
-
-            const missing = Array.isArray(inv?.missing_relay_hashes)
-                ? new Set(inv.missing_relay_hashes)
-                : new Set()
-
-            // 2) Sync: only send missing message bodies
-            const fullPayload = disasterStorage.exportSyncPayload()
-            console.log(`Full Payload\n${JSON.stringify(fullPayload, null, 2)}`)
-            const reducedPayload = {
-                ...fullPayload,
-                crisisId,
-                queued: (fullPayload.queued || []).filter((m) => {
-                    const rh = m?.relay_hash
-                    return typeof rh === 'string' && rh.length > 0 && missing.has(rh)
-                }),
-            }
-            console.log(`Reduced Payload\n${JSON.stringify(reducedPayload, null, 2)}`)
-
-            const syncRes = await fetch(`${STATION_URL}/mesh/sync`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(reducedPayload),
-            })
-
-            if (!syncRes.ok) {
-                const text = await syncRes.text()
-                throw new Error(`Station sync failed: ${syncRes.status} ${text}`)
-            }
-
-            // Simulated receiving unconfirmed messages from an offline station
-            // A sends to B while offline, A station sync's in DevTools
-            // then B station syncs whether on or offline, and receives unconfirmed messages until station flushes to the service provider (station flush in DevTools)
-            // the block can then be mined with those messages included, thus changing messages to status confirmed.
-            const stationPayload = await syncRes.json()
-            await disasterStorage.importSyncPayloadAsync(stationPayload)
-
-            alert('Station sync completed.')
+            alert('Station sync completed')
             if (onRefresh) onRefresh()
         } 
         catch (error) {
@@ -466,7 +313,7 @@ export default function DevTools({ onRefresh }) {
 	const handleRelaySync = async () => {
 		setSyncingRelay(true)
 		try {
-			await syncWithHost(RELAY_URL, 'Relay')
+			await syncWithMeshHost(RELAY_URL, 'Relay')
 			alert('Relay sync completed.')
 			if (onRefresh) onRefresh()
 		} 
@@ -639,10 +486,10 @@ export default function DevTools({ onRefresh }) {
                 <button
                     className="dev-btn"
                     onClick={processQueue}
-                    disabled={queuedMessages === 0 || sending}
+                    disabled={queuedMessages === 0}
                     title="Send all queued messages (when back online)"
                 >
-                    {sending ? '⏳' : '📤'} Queue ({queuedMessages})
+                    Queue ({queuedMessages})
                 </button>
 
                 <button
