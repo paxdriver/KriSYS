@@ -39,6 +39,9 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 	const [pubKeyImportError, setPubKeyImportError] = useState('')
 	const [scannerOpen, setScannerOpen] = useState(false)
 
+    // Helper function to normalize recipients always to an array
+    const recipientsList = Array.isArray(selectedRecipients) ? selectedRecipients : []
+
 	useEffect(() => {
         // Triggers re-renders on storage state changes, nothing more
 		const onLocalDataChanged = () => setQueueVersion( v => v + 1)
@@ -171,8 +174,10 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 
 	const toggleRecipient = (address) => {
 		setSelectedRecipients((prev) => {
-            prev.includes(address) ? prev.filter((a) => a !== address) : [...prev, address]
-        })
+			const arr = Array.isArray(prev) ? prev : []
+			return arr.includes(address) ? 
+                arr.filter((a) => a !== address) : [...arr, address]
+		})
 	}
 
 	const handleAddManualRecipient = () => {
@@ -185,12 +190,14 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 
 	const selectedFamilyIds = useMemo(() => {
 		const set = new Set()
-		for (const addr of selectedRecipients) {
+
+		for (const addr of recipientsList) {
 			if (typeof addr !== 'string' || !addr.trim()) continue
 			set.add(getFamilyIdFromAddress(addr.trim()))
 		}
+
 		return Array.from(set)
-	}, [selectedRecipients])
+	}, [recipientsList])
 
 	const recipientKeyStatus = useMemo(() => {
 		const publicKeys = disasterStorage.getPublicKeys() || {}

@@ -78,6 +78,17 @@ CENTRAL_URL = os.environ.get("CENTRAL_API_URL", "http://backend:5000")
 DATA_DIR = os.environ.get("STATION_DATA_DIR", "/app/data")
 STATION_DB_PATH = os.path.join(DATA_DIR, "station.db")
 
+####### THESE VALUES ARE FOR DEVELOPMENT ONLY, WILL BE SET BY POLICY IN PROD
+# Storage pruning (DEV-TUNED DEFAULTS)
+QUEUED_TTL_MS = 7 * 24 * 60 * 60 * 1000
+QUEUED_HIGH_WATER = 100
+QUEUED_LOW_WATER = 50
+
+CONFIRMED_TTL_MS = 2 * 24 * 60 * 60 * 1000
+CONFIRMED_MAX_ROWS = 20
+####### THESE VALUES ARE FOR DEVELOPMENT ONLY, WILL BE SET BY POLICY IN PROD
+
+
 #               IMPORTANT                   #
 #############################################
 # Station API key is set up on-site by trusted delegate of the blockchain service provider via one-time password
@@ -225,6 +236,36 @@ def db_set_meta(key: str, value: str) -> None:
 		)
 		conn.commit()
 
+def _now_ms() -> int:
+	return int(time.time() * 1000)
+
+
+def _msg_priority_level(msg: dict) -> int:
+	try:
+		return int(msg.get("priority_level") or 999)
+	except Exception:
+		return 999
+
+
+def _msg_created_ms(msg: dict) -> int:
+	"""
+	We prefer timestamp_created (seconds) if present; otherwise fall back to queuedAt (ms).
+	"""
+	try:
+		ts_s = msg.get("timestamp_created")
+		if ts_s is not None:
+			return int(ts_s) * 1000
+	except Exception:
+		pass
+
+	try:
+		qa = msg.get("queuedAt")
+		if qa is not None:
+			return int(qa)
+	except Exception:
+		pass
+
+	return 0
 
 # ----------------------------
 # DB helpers (blocks)
@@ -326,6 +367,13 @@ def db_put_confirmed(relay_hash: str, info: dict) -> None:
 			),
 		)
 		conn.commit()
+
+	try:
+		res = db_prune_confirmed()
+		if res.get("deleted_ttl") or res.get("deleted_cap"):
+			logger.info(f"Station confirmed prune: {res}")
+	except Exception as e:
+		logger.warning(f"Station confirmed prune failed: {e}")
 		
 
 def db_is_checkin_queued(relay_hash: str) -> bool:
@@ -407,6 +455,8 @@ def db_put_queued(msg: dict) -> bool:
 	"""
 	Insert into queued if not already present.
 	Returns True if inserted, False if already existed.
+
+	After insert, run pruning to keep the station stable under load.
 	"""
 	relay_hash = msg.get("relay_hash")
 	if not isinstance(relay_hash, str) or not relay_hash:
@@ -433,7 +483,18 @@ def db_put_queued(msg: dict) -> bool:
 			),
 		)
 		conn.commit()
-		return cur.rowcount == 1
+
+	inserted = cur.rowcount == 1
+
+	# Prune regardless of whether we inserted; TTL cleanup is always safe.
+	try:
+		res = db_prune_queued()
+		if res.get("deleted_ttl") or res.get("deleted_evicted"):
+			logger.info(f"Station queued prune: {res}")
+	except Exception as e:
+		logger.warning(f"Station queued prune failed: {e}")
+
+	return inserted
 
 def db_update_queued_status(relay_hash: str, status: str) -> None:
 	with station_db() as conn:
@@ -504,6 +565,178 @@ def get_known_relay_hashes() -> set[str]:
 
 	return known
 
+
+def db_prune_queued() -> dict:
+	"""
+	Prune queued (unconfirmed) items:
+	1) TTL: delete anything older than QUEUED_TTL_MS based on queuedAt
+	2) High/low water: if still above QUEUED_HIGH_WATER, evict down to
+	   QUEUED_LOW_WATER using priority-aware eviction:
+		- priority_level DESC (5 worst)
+		- created time ASC (oldest first)
+	"""
+	now_ms = _now_ms()
+	cutoff = now_ms - int(QUEUED_TTL_MS)
+
+	deleted_ttl = 0
+	deleted_evicted = 0
+	remaining = 0
+
+	with station_db() as conn:
+		# 1) TTL prune by queuedAt
+		cur = conn.execute(
+			"DELETE FROM queued WHERE queuedAt IS NOT NULL AND queuedAt > 0 AND queuedAt < ?",
+			(int(cutoff),),
+		)
+		deleted_ttl = int(cur.rowcount or 0)
+
+		# Count remaining
+		row = conn.execute("SELECT COUNT(1) AS c FROM queued").fetchone()
+		remaining = int(row["c"]) if row else 0
+
+		if remaining <= int(QUEUED_HIGH_WATER):
+			conn.commit()
+			return {
+				"deleted_ttl": deleted_ttl,
+				"deleted_evicted": deleted_evicted,
+				"remaining": remaining,
+			}
+
+		# 2) High/low water eviction (priority-aware)
+		to_delete = remaining - int(QUEUED_LOW_WATER)
+		if to_delete <= 0:
+			conn.commit()
+			return {
+				"deleted_ttl": deleted_ttl,
+				"deleted_evicted": deleted_evicted,
+				"remaining": remaining,
+			}
+
+		rows = conn.execute(
+			"SELECT relay_hash, json FROM queued"
+		).fetchall()
+
+		candidates: list[tuple[tuple[int, int, str], str]] = []
+		for r in rows:
+			rh = r["relay_hash"]
+			try:
+				msg = json.loads(r["json"])
+			except Exception:
+				msg = {}
+
+			# Evict worst first:
+			# - higher priority number is worse -> sort DESC
+			# - older created time first
+			# We invert priority by sorting on (-priority) or just sort reverse later.
+			priority = _msg_priority_level(msg)
+			created_ms = _msg_created_ms(msg)
+			key = (-priority, created_ms, str(rh))
+			candidates.append((key, rh))
+
+		candidates.sort(key=lambda x: x[0])
+
+		evict_hashes = [rh for _key, rh in candidates[:to_delete]]
+		for rh in evict_hashes:
+			conn.execute("DELETE FROM queued WHERE relay_hash = ?", (rh,))
+
+		deleted_evicted = len(evict_hashes)
+
+		row2 = conn.execute("SELECT COUNT(1) AS c FROM queued").fetchone()
+		remaining = int(row2["c"]) if row2 else 0
+
+		conn.commit()
+
+	return {
+		"deleted_ttl": deleted_ttl,
+		"deleted_evicted": deleted_evicted,
+		"remaining": remaining,
+	}
+
+
+def db_prune_confirmed() -> dict:
+	"""
+	Prune confirmed relay map:
+	- TTL based on confirmedAt stored inside the JSON blob (ms)
+	- Cap total rows to CONFIRMED_MAX_ROWS by removing oldest confirmedAt first
+	"""
+	now_ms = _now_ms()
+	cutoff = now_ms - int(CONFIRMED_TTL_MS)
+
+	deleted_ttl = 0
+	deleted_cap = 0
+	remaining = 0
+
+	with station_db() as conn:
+		rows = conn.execute(
+			"SELECT relay_hash, json FROM confirmed"
+		).fetchall()
+
+		parsed: list[tuple[str, int]] = []
+		for r in rows:
+			rh = r["relay_hash"]
+			try:
+				info = json.loads(r["json"])
+			except Exception:
+				info = {}
+
+			try:
+				ca = int(info.get("confirmedAt") or 0)
+			except Exception:
+				ca = 0
+
+			parsed.append((rh, ca))
+
+		# TTL: delete entries with confirmedAt older than cutoff (if confirmedAt is present)
+		for rh, ca in parsed:
+			if ca > 0 and ca < cutoff:
+				conn.execute("DELETE FROM confirmed WHERE relay_hash = ?", (rh,))
+				deleted_ttl += 1
+
+		# Recount and cap
+		row = conn.execute("SELECT COUNT(1) AS c FROM confirmed").fetchone()
+		remaining = int(row["c"]) if row else 0
+
+		if remaining > int(CONFIRMED_MAX_ROWS):
+			to_delete = remaining - int(CONFIRMED_MAX_ROWS)
+
+			# Reload after TTL prune
+			rows2 = conn.execute(
+				"SELECT relay_hash, json FROM confirmed"
+			).fetchall()
+
+			candidates: list[tuple[int, str]] = []
+			for r in rows2:
+				rh = r["relay_hash"]
+				try:
+					info = json.loads(r["json"])
+				except Exception:
+					info = {}
+
+				try:
+					ca = int(info.get("confirmedAt") or 0)
+				except Exception:
+					ca = 0
+
+				# Oldest first; unknown timestamps treated as oldest (0)
+				candidates.append((ca, rh))
+
+			candidates.sort(key=lambda x: (x[0], x[1]))
+			evict = [rh for _ca, rh in candidates[:to_delete]]
+
+			for rh in evict:
+				conn.execute("DELETE FROM confirmed WHERE relay_hash = ?", (rh,))
+			deleted_cap = len(evict)
+
+			row2 = conn.execute("SELECT COUNT(1) AS c FROM confirmed").fetchone()
+			remaining = int(row2["c"]) if row2 else 0
+
+		conn.commit()
+
+	return {
+		"deleted_ttl": deleted_ttl,
+		"deleted_cap": deleted_cap,
+		"remaining": remaining,
+	}
 
 # ----------------------------
 # Bootstrap + crisis pinning
