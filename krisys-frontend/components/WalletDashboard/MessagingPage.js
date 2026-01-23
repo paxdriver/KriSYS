@@ -7,510 +7,542 @@ import { disasterStorage } from '@/services/localStorage'
 import ContactName from './ContactName'
 import { KeyManager } from '@/services/keyManager'
 import TransactionItem from './TransactionItem'
+import QRScanner from '../Scanner/QRScanner'
+import { parsePublicKeyShareCode } from '@/services/walletPublicKeyShare'
+
+async function sha256HexUtf8(text) {
+	const enc = new TextEncoder()
+	const bytes = enc.encode(text)
+	const subtle = globalThis.crypto?.subtle
+	if (!subtle) return null
+	const digest = await subtle.digest('SHA-256', bytes)
+	return Array.from(new Uint8Array(digest))
+		.map((b) => b.toString(16).padStart(2, '0'))
+		.join('')
+}
 
 export default function MessagingPage({ walletData, transactions, privateKey }) {
-    const [senderAddress, setSenderAddress] = useState('')
-    const [selectedRecipients, setSelectedRecipients] = useState([])
-    const [manualRecipientInput, setManualRecipientInput] = useState('')
-    const [messageText, setMessageText] = useState('')
-    const [sending, setSending] = useState(false)
-    const [error, setError] = useState('')
-    const searchParams = useSearchParams()
+	const [senderAddress, setSenderAddress] = useState('')
+	const [selectedRecipients, setSelectedRecipients] = useState([])
+	const [manualRecipientInput, setManualRecipientInput] = useState('')
+	const [messageText, setMessageText] = useState('')
+	const [sending, setSending] = useState(false)
+	const [error, setError] = useState('')
+	const searchParams = useSearchParams()
 
-    // DEV NOTE: Consider changing this to a custom hook to allow re-renders throughout the app on custom event emissions if needed in other parts of the app
-    // Set up state counter and event listener to trigger re-renders on localStorage updates
-    const [queueVersion, setQueueVersion] = useState(1)
-    useEffect(() => {
-        const onLocalDataChanged = () => {
-            setQueueVersion((v) => v + 1)
-        }
+	// Local state bumpers for re-rendering when storage changes
+	const [queueVersion, setQueueVersion] = useState(1)
+	const [keyCacheVersion, setKeyCacheVersion] = useState(0)
 
-        window.addEventListener('krisys:queue_updated', onLocalDataChanged)
-        window.addEventListener('krisys:confirmed_updated', onLocalDataChanged)
+	// Public key import UI state
+	const [pubKeyInput, setPubKeyInput] = useState('')
+	const [pubKeyImportError, setPubKeyImportError] = useState('')
+	const [scannerOpen, setScannerOpen] = useState(false)
 
-        return () => {
-            window.removeEventListener(
-                'krisys:queue_updated',
-                onLocalDataChanged
-            )
-            window.removeEventListener(
-                'krisys:confirmed_updated',
-                onLocalDataChanged
-            )
-        }
-    }, [])
+	useEffect(() => {
+        // Triggers re-renders on storage state changes, nothing more
+		const onLocalDataChanged = () => setQueueVersion( v => v + 1)
 
-    const myAddresses = useMemo(
-        () => walletData?.members?.map((m) => m.address) || [],
-        [walletData?.members]
-    )
+		window.addEventListener('krisys:queue_updated', onLocalDataChanged)
+		window.addEventListener('krisys:confirmed_updated', onLocalDataChanged)
 
-    // Initialise senderAddress to first member when wallet data is available
-    useEffect(() => {
-        if (!senderAddress && myAddresses.length > 0) {
-            setSenderAddress(myAddresses[0])
-        }
-    }, [myAddresses, senderAddress])
+		return () => {
+			window.removeEventListener('krisys:queue_updated', onLocalDataChanged)
+			window.removeEventListener('krisys:confirmed_updated', onLocalDataChanged)
+		}
+	}, [])
 
-    const walletId = walletData?.family_id || null  // aka familyId
-    // Canonical, on-chain messages involving this wallet (sent or received)
-    const myMessages = useMemo(() => {
-        if (!transactions || !transactions.length) return []
+	const myAddresses = useMemo(
+		() => walletData?.members?.map((m) => m.address) || [],
+		[walletData?.members]
+	)
 
-        return transactions.filter((tx) => {
-            if (tx.type_field !== 'message') return false
+	useEffect(() => {
+		if (!senderAddress && myAddresses.length > 0) {
+			setSenderAddress(myAddresses[0])
+		}
+	}, [myAddresses, senderAddress])
 
-            // To see sent messages from me to others
-            const fromMe = tx.station_address && myAddresses.includes(tx.station_address) 
-            // Individual member of the wallet
-            const toMember = Array.isArray(tx.related_addresses) && tx.related_addresses.some( addr => myAddresses.includes(addr) )
-            // All members of the family get the message
-            const toFamily = walletId && Array.isArray(tx.related_addresses) && tx.related_addresses.includes(walletId)
+	// Utility: derive familyId from an address
+	const getFamilyIdFromAddress = (address) => {
+		return address.includes('-')
+			? address.split('-').slice(0, -1).join('-')
+			: address
+	}
 
-            return fromMe || toMember || toFamily
-        })
-    }, [transactions, myAddresses, walletId])
+	const walletId = walletData?.family_id || null
 
-    // Locally queued (unconfirmed) messages that involve this wallet
-    const queuedMyMessages = useMemo(() => {
-        const queue = disasterStorage.getMessageQueue()
-        if (!queue || queue.length === 0) return []
+	// Canonical, on-chain messages involving this wallet (sent or received)
+	const myMessages = useMemo(() => {
+		if (!transactions || !transactions.length) return []
 
-        return queue.filter((msg) => {
-            if (msg.type_field !== 'message') return false
+		return transactions.filter((tx) => {
+			if (tx.type_field !== 'message') return false
 
-            // Only show still-pending items
-            const _status = msg.status || 'pending'     // robustness check, not strictly necessary
-            if (_status !== 'pending' && _status !== 'sent') return false
+			const fromMe = tx.station_address && myAddresses.includes(tx.station_address)
+			const toMember =
+				Array.isArray(tx.related_addresses) &&
+				tx.related_addresses.some((addr) => myAddresses.includes(addr))
+			const toFamily =
+				walletId &&
+				Array.isArray(tx.related_addresses) &&
+				tx.related_addresses.includes(walletId)
 
-            // Skip anything already known as confirmed
-            if (disasterStorage.isMessageConfirmed(msg.relay_hash)) {
-                return false
-            }
+			return fromMe || toMember || toFamily
+		})
+	}, [transactions, myAddresses, walletId])
 
-            // So user can see their own sent messages
-            const fromMe = msg.station_address && myAddresses.includes(msg.station_address)
-            // Individually addressed messages to a member of a group/family wallet
-            const toMe = Array.isArray(msg.related_addresses) && msg.related_addresses.some( addr => myAddresses.includes(addr))
-            // Messages to the group/family get included to message queue
-            const toFamily = walletId && Array.isArray(msg.related_addresses) && msg.related_addresses.includes(walletId)
+	// Locally queued (unconfirmed) messages that involve this wallet
+	const queuedMyMessages = useMemo(() => {
+		const queue = disasterStorage.getMessageQueue()
+		if (!queue || queue.length === 0) return []
 
-            return fromMe || toMe || toFamily
-        })
-    }, [myAddresses, queueVersion, walletId])
+		return queue.filter((msg) => {
+			if (msg.type_field !== 'message') return false
 
-    // Merge canonical and queued into a single list for display
-    const allMessages = useMemo(() => {
-        // Canonical on-chain messages
-        const canonical = (myMessages || []).map((tx) => ({
-            ...tx,
-            _isConfirmed: true,
-            _sortTimestamp: tx.timestamp_posted || tx.timestamp_created,
-        }))
+			const _status = msg.status || 'pending'
+			if (_status !== 'pending' && _status !== 'sent') return false
 
-        // Relay hashes that already have canonical confirmations
-        const confirmedRelayHashes = new Set(
-            canonical
-                .map((tx) => tx.relay_hash)
-                .filter((rh) => typeof rh === 'string' && rh.length > 0)
-        )
+			if (disasterStorage.isMessageConfirmed(msg.relay_hash)) {
+				return false
+			}
 
-        // Locally queued messages (unconfirmed)
-        const queued = queuedMyMessages
-            .filter( (msg) => !msg.relay_hash || !confirmedRelayHashes.has(msg.relay_hash) )
-            .map((msg) => {
-                const sortTsSeconds = typeof msg.timestamp_posted === 'number' ? 
-                    msg.timestamp_posted : typeof msg.queuedAt === 'number' ?
-                    Math.floor(msg.queuedAt / 1000) : msg.timestamp_created
+			const fromMe = msg.station_address && myAddresses.includes(msg.station_address)
+			const toMe =
+				Array.isArray(msg.related_addresses) &&
+				msg.related_addresses.some((addr) => myAddresses.includes(addr))
+			const toFamily =
+				walletId &&
+				Array.isArray(msg.related_addresses) &&
+				msg.related_addresses.includes(walletId)
 
-                return {
-                    transaction_id: msg.transaction_id || msg.relay_hash || `queued-${sortTsSeconds}`,
-                    timestamp_created: msg.timestamp_created,
-                    timestamp_posted: sortTsSeconds,
-                    station_address: msg.station_address,
-                    message_data: msg.message_data,
-                    related_addresses: msg.related_addresses,
-                    type_field: msg.type_field,
-                    priority_level: msg.priority_level,
-                    relay_hash: msg.relay_hash,
-                    _isConfirmed: false,
-                    _isQueuedLocal: true,
-                    _sortTimestamp: sortTsSeconds,
-                }
+			return fromMe || toMe || toFamily
+		})
+	}, [myAddresses, queueVersion, walletId])
+
+	// Merge canonical and queued into a single list for display
+	const allMessages = useMemo(() => {
+		const canonical = (myMessages || []).map((tx) => ({
+			...tx,
+			_isConfirmed: true,
+			_sortTimestamp: tx.timestamp_posted || tx.timestamp_created,
+		}))
+
+		const confirmedRelayHashes = new Set(
+			canonical
+				.map((tx) => tx.relay_hash)
+				.filter((rh) => typeof rh === 'string' && rh.length > 0)
+		)
+
+		const queued = queuedMyMessages
+			.filter((msg) => !msg.relay_hash || !confirmedRelayHashes.has(msg.relay_hash))
+			.map((msg) => {
+				const sortTsSeconds =
+					typeof msg.timestamp_posted === 'number'
+						? msg.timestamp_posted
+						: typeof msg.queuedAt === 'number'
+							? Math.floor(msg.queuedAt / 1000)
+							: msg.timestamp_created
+
+				return {
+					transaction_id:
+						msg.transaction_id || msg.relay_hash || `queued-${sortTsSeconds}`,
+					timestamp_created: msg.timestamp_created,
+					timestamp_posted: sortTsSeconds,
+					station_address: msg.station_address,
+					message_data: msg.message_data,
+					related_addresses: msg.related_addresses,
+					type_field: msg.type_field,
+					priority_level: msg.priority_level,
+					relay_hash: msg.relay_hash,
+					_isConfirmed: false,
+					_isQueuedLocal: true,
+					_sortTimestamp: sortTsSeconds,
+				}
+			})
+
+		return [...canonical, ...queued].sort((a, b) => b._sortTimestamp - a._sortTimestamp)
+	}, [myMessages, queuedMyMessages])
+
+	useEffect(() => {
+		const urlRecipient = searchParams.get('recipient')
+		if (urlRecipient) {
+			setSelectedRecipients((prev) => {
+				prev.includes(urlRecipient) ? prev : [...prev, urlRecipient]
             })
+		}
+	}, [searchParams])
 
-        return [...canonical, ...queued].sort(
-            (a, b) => b._sortTimestamp - a._sortTimestamp
-        )
-    }, [myMessages, queuedMyMessages])
+	const toggleRecipient = (address) => {
+		setSelectedRecipients((prev) => {
+            prev.includes(address) ? prev.filter((a) => a !== address) : [...prev, address]
+        })
+	}
 
-    // Pre-select recipient from URL (e.g. from Contacts page)
-    useEffect(() => {
-        const urlRecipient = searchParams.get('recipient')
-        if (urlRecipient) {
-            setSelectedRecipients((prev) =>
-                prev.includes(urlRecipient)
-                    ? prev
-                    : [...prev, urlRecipient]
-            )
-        }
-    }, [searchParams])
+	const handleAddManualRecipient = () => {
+		const value = manualRecipientInput.trim()
+		if (!value) return
 
-    // Toggle a member as recipient
-    const toggleRecipient = (address) => {
-        setSelectedRecipients((prev) =>
-            prev.includes(address)
-                ? prev.filter((a) => a !== address)
-                : [...prev, address]
-        )
-    }
+		setSelectedRecipients((prev) => (prev.includes(value) ? prev : [...prev, value]))
+		setManualRecipientInput('')
+	}
 
-    // Add manual recipient from input
-    const handleAddManualRecipient = () => {
-        const value = manualRecipientInput.trim()
-        if (!value) return
+	const selectedFamilyIds = useMemo(() => {
+		const set = new Set()
+		for (const addr of selectedRecipients) {
+			if (typeof addr !== 'string' || !addr.trim()) continue
+			set.add(getFamilyIdFromAddress(addr.trim()))
+		}
+		return Array.from(set)
+	}, [selectedRecipients])
 
-        setSelectedRecipients((prev) =>
-            prev.includes(value) ? prev : [...prev, value]
-        )
-        setManualRecipientInput('')
-    }
+	const recipientKeyStatus = useMemo(() => {
+		const publicKeys = disasterStorage.getPublicKeys() || {}
+		return selectedFamilyIds.map((fid) => {
+			const k = publicKeys[fid]?.publicKey
+			return {
+				familyId: fid,
+				hasKey: typeof k === 'string' && k.length > 0,
+			}
+		})
+		// keyCacheVersion forces refresh after import
+	}, [selectedFamilyIds, keyCacheVersion])
 
-    // Utility: derive familyId from an address
-    const getFamilyIdFromAddress = (address) => {
-        return address.includes('-')
-            ? address.split('-').slice(0, -1).join('-')
-            : address
-    }
+	const handleImportPublicKey = async () => {
+		setPubKeyImportError('')
 
-    const sendMessage = async (e) => {
-        e.preventDefault()
-        if (selectedRecipients.length === 0 || !messageText.trim()) return
+		try {
+			const parsed = parsePublicKeyShareCode(pubKeyInput)
 
-        setSending(true)
-        setError('')
+			const existing = disasterStorage.getPublicKeys()?.[parsed.familyId]?.publicKey
+			if (existing && existing !== parsed.publicKeyArmored) {
+				const oldFp = await sha256HexUtf8(existing)
+				const newFp = await sha256HexUtf8(parsed.publicKeyArmored)
 
-        try {
-            // Determine which address we're sending from
-            const fromAddress =
-                senderAddress || (myAddresses.length > 0
-                    ? myAddresses[0]
-                    : null)
+				const ok = confirm(
+					`A public key for ${parsed.familyId} already exists on this device.\n\n` +
+						`Old: ${oldFp || 'unknown'}\n` +
+						`New: ${newFp || 'unknown'}\n\n` +
+						`Overwrite it?`
+				)
+				if (!ok) return
+			}
 
-            if (!fromAddress) {
-                setError('No sender address available in this wallet')
-                setSending(false)
-                return
-            }
+			disasterStorage.savePublicKey(parsed.familyId, parsed.publicKeyArmored)
+			setKeyCacheVersion((v) => v + 1)
 
-            // Group recipients by familyId so each family gets one tx
-            const groups = {}
-            for (const addr of selectedRecipients) {
-                const fid = getFamilyIdFromAddress(addr)
-                if (!groups[fid]) groups[fid] = []
-                groups[fid].push(addr)
-            }
+			alert(`Saved public key for family: ${parsed.familyId}`)
+		} 
+        catch (e) {
+			setPubKeyImportError(e?.message || String(e))
+		}
+	}
 
-            let totalGroups = 0
-            let queuedCount = 0
+	const handleScanPublicKey = () => {
+		setPubKeyImportError('')
+		setScannerOpen(true)
+	}
 
-            for (const [familyId, addrs] of Object.entries(groups)) {
-                totalGroups++
+	const handleScanned = (text) => {
+		setScannerOpen(false)
+		setPubKeyInput(text)
+		alert('Scanned public key code. Click "Import Public Key" to save it.')
+	}
 
-                try {
-                    // Encrypt once per recipient family
-                    const encryptedMessage =
-                        await KeyManager.encryptMessage(
-                            messageText,
-                            familyId,               // recipient's family
-                            walletData.family_id, // sender's family, so sent messages can be read too
-                        )
+	const sendMessage = async (e) => {
+		e.preventDefault()
+		if (selectedRecipients.length === 0 || !messageText.trim()) return
 
-                    // Stable per-message ID for offline relay
-                    const relayHash =
-                        (typeof window !== 'undefined' &&
-                            window.crypto &&
-                            window.crypto.randomUUID &&
-                            window.crypto.randomUUID()) ||
-                        `${Date.now()}_${Math.random()
-                            .toString(36)
-                            .slice(2)}`
+		setSending(true)
+		setError('')
 
-                    const transaction = {
-                        timestamp_created: Math.floor(Date.now() / 1000),
-                        station_address: fromAddress,
-                        message_data: encryptedMessage,
-                        related_addresses: addrs, // all recipients in this family
-                        type_field: 'message',
-                        priority_level: 5,
-                        relay_hash: relayHash,
-                        origin_device: disasterStorage.getDeviceId(),
-                    }
+		try {
+			const fromAddress = senderAddress || (myAddresses.length > 0 ? myAddresses[0] : null)
 
-                    try {
-                        await api.addTransaction(transaction)
-                        console.log(
-                            '📡 Message sent online for family group',
-                            familyId
-                        )
-                    } catch (error) {
-                        if (error.isNetworkError) {
-                            console.log(
-                                '📱 No connection - queueing message for family group',
-                                familyId
-                            )
-                            disasterStorage.queueMessage(transaction)
-                            queuedCount++
-                        } else {
-                            console.error(
-                                'Application error while sending to family group',
-                                familyId,
-                                error
-                            )
-                            setError(
-                                error.message ||
-                                    'Failed to send message to one or more recipients'
-                            )
-                        }
-                    }
-                } catch (err) {
-                    console.error(
-                        'Encryption or send failed for family group',
-                        familyId,
-                        err
-                    )
-                    setError(
-                        err.message ||
-                            'Encryption failed for one or more recipient groups'
-                    )
-                }
-            }
+			if (!fromAddress) {
+				setError('No sender address available in this wallet')
+				setSending(false)
+				return
+			}
 
-            if (queuedCount > 0) {
-                alert(
-                    `Messages queued for ${queuedCount} recipient group(s); they will be sent when online.`
-                )
-            } else {
-                alert(
-                    `Message sent to ${totalGroups} recipient group(s).`
-                )
-            }
+			// Group recipients by familyId so each family gets one tx
+			const groups = {}
+			for (const addr of selectedRecipients) {
+				const fid = getFamilyIdFromAddress(addr)
+				if (!groups[fid]) groups[fid] = []
+				groups[fid].push(addr)
+			}
 
-            setMessageText('')
-            setSelectedRecipients([])
-            setManualRecipientInput('')
-        } catch (err) {
-            setError(err.message || 'Failed to send message')
-        } finally {
-            setSending(false)
-        }
-    }
+			let totalGroups = 0
+			let queuedCount = 0
 
-    const hasRecipients = selectedRecipients.length > 0
+			for (const [familyId, addrs] of Object.entries(groups)) {
+				totalGroups++
 
-    return (
-        <div id="messaging-page" className="page">
-            <div className="page-header">
-                <h1 className="page-title">Direct Messages</h1>
-            </div>
+				try {
+					const encryptedMessage = await KeyManager.encryptMessage(messageText, familyId, walletData.family_id)
 
-            {/* Send Message Form */}
-            <div className="card">
-                <div className="card-header">
-                    <h3 className="card-title">Send Message</h3>
-                </div>
-                <div className="card-body">
-                    <form onSubmit={sendMessage}>
-                        {/* Sender selection */}
-                        <div className="form-group">
-                            <label>Send as:</label>
-                            <div className="member-buttons">
-                                {walletData?.members?.map((member) => (
-                                    <button
-                                        key={member.address}
-                                        type="button"
-                                        className={`member-btn ${
-                                            senderAddress ===
-                                            member.address
-                                                ? 'selected'
-                                                : ''
-                                        }`}
-                                        onClick={() =>
-                                            setSenderAddress(
-                                                member.address
-                                            )
-                                        }
-                                        disabled={sending}
-                                    >
-                                        <ContactName
-                                            address={member.address}
-                                            isUnlocked={!!privateKey}
-                                        />
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
+					const relayHash =
+						(typeof window !== 'undefined' &&
+							window.crypto &&
+							window.crypto.randomUUID &&
+							window.crypto.randomUUID()) ||
+						`${Date.now()}_${Math.random().toString(36).slice(2)}`
 
-                        <div className="form-group">
-                            <label>Send to:</label>
+					const transaction = {
+						timestamp_created: Math.floor(Date.now() / 1000),
+						station_address: fromAddress,
+						message_data: encryptedMessage,
+						related_addresses: addrs,
+						type_field: 'message',
+						priority_level: 5,
+						relay_hash: relayHash,
+						origin_device: disasterStorage.getDeviceId(),
+					}
 
-                            {/* Manual Address Input */}
-                            <div className="manual-address-input">
-                                <input
-                                    type="text"
-                                    value={manualRecipientInput}
-                                    onChange={(e) =>
-                                        setManualRecipientInput(
-                                            e.target.value
-                                        )
-                                    }
-                                    className="form-input"
-                                    placeholder="Paste wallet address (e.g. familyId-memberId)"
-                                    disabled={sending}
-                                />
-                                <button
-                                    type="button"
-                                    className="btn"
-                                    onClick={handleAddManualRecipient}
-                                    disabled={
-                                        sending ||
-                                        !manualRecipientInput.trim()
-                                    }
-                                >
-                                    Add recipient
-                                </button>
-                                <p className="input-hint">
-                                    💡 Enter any wallet address manually, or
-                                    select from your family members below.
-                                </p>
-                            </div>
+					try {
+						await api.addTransaction(transaction)
+					} 
+                    catch (error) {
+						if (error.isNetworkError) {
+							disasterStorage.queueMessage(transaction)
+							queuedCount++
+						} 
+                        else setError(error.message || 'Failed to send message to one or more recipients')
+					}
+				}
+                catch (err) {
+					// Most common offline failure here is: no public key cached for recipient.
+					setError((err?.message || 'Encryption failed') + 
+                    '\n\nIf you are offline, you may need to import the recipient public key.')
+				}
+			}
 
-                            {/* Family Members Quick Select */}
-                            <div className="family-members-picker">
-                                <label className="sub-label">
-                                    Or select from your family:
-                                </label>
-                                <div className="member-buttons">
-                                    {walletData?.members?.map((member) => (
-                                        <button
-                                            key={member.address}
-                                            type="button"
-                                            className={`member-btn ${
-                                                selectedRecipients.includes(
-                                                    member.address
-                                                )
-                                                    ? 'selected'
-                                                    : ''
-                                            }`}
-                                            onClick={() =>
-                                                toggleRecipient(
-                                                    member.address
-                                                )
-                                            }
-                                            disabled={sending}
-                                        >
-                                            <ContactName
-                                                address={member.address}
-                                                isUnlocked={!!privateKey}
-                                            />
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
+            // DEV
+			if (queuedCount > 0) alert(`Messages queued for ${queuedCount} recipient group(s); they will be sent when online.`)
+            else alert(`Message sent to ${totalGroups} recipient group(s).`)
 
-                            {/* Selected Contacts Display */}
-                            {hasRecipients && (
-                                <div className="selected-contact-display">
-                                    <span className="selected-label">
-                                        Sending to:{' '}
-                                    </span>
-                                    <span className="selected-list">
-                                        {selectedRecipients.map(
-                                            (addr) => (
-                                                <span
-                                                    key={addr}
-                                                    className="selected-chip"
-                                                >
-                                                    <ContactName
-                                                        address={addr}
-                                                        isUnlocked={
-                                                            !!privateKey
-                                                        }
-                                                    />
-                                                    <button
-                                                        type="button"
-                                                        className="clear-recipient"
-                                                        onClick={() =>
-                                                            toggleRecipient(
-                                                                addr
-                                                            )
-                                                        }
-                                                        title="Remove recipient"
-                                                    >
-                                                        ✕
-                                                    </button>
-                                                </span>
-                                            )
-                                        )}
-                                    </span>
-                                </div>
-                            )}
-                        </div>
+			setMessageText('')
+			setSelectedRecipients([])
+			setManualRecipientInput('')
+		} 
+        catch (err) {
+			setError(err.message || 'Failed to send message')
+		} 
+        finally {
+			setSending(false)
+		}
+	}
 
-                        <div className="form-group">
-                            <label>Message:</label>
-                            <textarea
-                                value={messageText}
-                                onChange={(e) =>
-                                    setMessageText(e.target.value)
-                                }
-                                className="form-input"
-                                rows="4"
-                                placeholder="Type your message..."
-                                disabled={sending}
-                            />
-                        </div>
+	const hasRecipients = selectedRecipients.length > 0
 
-                        <button
-                            type="submit"
-                            className="btn"
-                            disabled={
-                                sending ||
-                                !hasRecipients ||
-                                !messageText.trim()
-                            }
-                        >
-                            {sending ? 'Sending...' : 'Send Message'}
-                        </button>
+	return (
+		<div id="messaging-page" className="page">
+			<div className="page-header">
+				<h1 className="page-title">Direct Messages</h1>
+			</div>
 
-                        {error && <p className="error">{error}</p>}
-                    </form>
-                </div>
-            </div>
+			{scannerOpen && (
+				<QRScanner
+					title="Scan Public Key Code"
+					onScan={handleScanned}
+					onClose={() => setScannerOpen(false)}
+				/>
+			)}
 
-            {/* Messages List */}
-            <div className="card">
-                <div className="card-header">
-                    <h3 className="card-title">
-                        My Messages ({allMessages.length})
-                    </h3>
-                </div>
-                <div className="card-body">
-                    {allMessages.length === 0 ? (
-                        <p>No messages yet</p>
-                    ) : (
-                        allMessages.map((tx) => (
-                            <TransactionItem
-                                key={tx.transaction_id}
-                                transaction={tx}
-                                privateKey={privateKey}
-                                familyId={walletData.family_id}
-                                isConfirmed={tx._isConfirmed}
-                            />
-                        ))
-                    )}
-                </div>
-            </div>
-        </div>
-    )
+			{/* Send Message Form */}
+			<div className="card">
+				<div className="card-header">
+					<h3 className="card-title">Send Message</h3>
+				</div>
+				<div className="card-body">
+					<form onSubmit={sendMessage}>
+						<div className="form-group">
+							<label>Send as:</label>
+							<div className="member-buttons">
+								{walletData?.members?.map((member) => (
+									<button
+										key={member.address}
+										type="button"
+										className={`member-btn ${
+											senderAddress === member.address ? 'selected' : ''
+										}`}
+										onClick={() => setSenderAddress(member.address)}
+										disabled={sending}
+									>
+										<ContactName
+											address={member.address}
+											isUnlocked={!!privateKey}
+										/>
+									</button>
+								))}
+							</div>
+						</div>
+
+						<div className="form-group">
+							<label>Send to:</label>
+
+							<div className="manual-address-input">
+								<input
+									type="text"
+									value={manualRecipientInput}
+									onChange={(e) => setManualRecipientInput(e.target.value)}
+									className="form-input"
+									placeholder="Paste wallet address (e.g. familyId-memberId)"
+									disabled={sending}
+								/>
+								<button
+									type="button"
+									className="btn"
+									onClick={handleAddManualRecipient}
+									disabled={sending || !manualRecipientInput.trim()}
+								>
+									Add recipient
+								</button>
+							</div>
+
+							<div className="family-members-picker">
+								<label className="sub-label">Or select from your family:</label>
+								<div className="member-buttons">
+									{walletData?.members?.map((member) => (
+										<button
+											key={member.address}
+											type="button"
+											className={`member-btn ${
+												selectedRecipients.includes(member.address)
+													? 'selected'
+													: ''
+											}`}
+											onClick={() => toggleRecipient(member.address)}
+											disabled={sending}
+										>
+											<ContactName
+												address={member.address}
+												isUnlocked={!!privateKey}
+											/>
+										</button>
+									))}
+								</div>
+							</div>
+
+							{hasRecipients && (
+								<div className="selected-contact-display">
+									<span className="selected-label">Sending to:</span>
+									<span className="selected-list">
+										{selectedRecipients.map((addr) => (
+											<span key={addr} className="selected-chip">
+												<ContactName address={addr} isUnlocked={!!privateKey} />
+												<button
+													type="button"
+													className="clear-recipient"
+													onClick={() => toggleRecipient(addr)}
+													title="Remove recipient"
+												>
+													✕
+												</button>
+											</span>
+										))}
+									</span>
+								</div>
+							)}
+						</div>
+
+						{/* Offline public key import */}
+						<div className="form-group">
+							<label>Recipient public key (offline import)</label>
+
+							<div className="privacy-notice" style={{ marginBottom: '8px' }}>
+								If you are offline and encryption fails, import the recipient’s
+								public key share code here (paste or scan).
+							</div>
+
+							{recipientKeyStatus.length > 0 && (
+								<div className="privacy-notice" style={{ marginBottom: '8px' }}>
+									Recipient key status:{' '}
+									{recipientKeyStatus
+										.map((s) => `${s.familyId}: ${s.hasKey ? 'yes' : 'no'}`)
+										.join(' | ')}
+								</div>
+							)}
+
+							<textarea
+								value={pubKeyInput}
+								onChange={(e) => setPubKeyInput(e.target.value)}
+								className="form-input"
+								rows="4"
+								placeholder="Paste krisys:key:v1... (or scan)"
+								disabled={sending}
+							/>
+
+							<div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+								<button
+									type="button"
+									className="btn"
+									onClick={handleImportPublicKey}
+									disabled={sending || !pubKeyInput.trim()}
+								>
+									Import Public Key
+								</button>
+
+								<button
+									type="button"
+									className="btn"
+									onClick={handleScanPublicKey}
+									disabled={sending}
+								>
+									Scan Public Key
+								</button>
+							</div>
+
+							{pubKeyImportError && <p className="error">{pubKeyImportError}</p>}
+						</div>
+
+						<div className="form-group">
+							<label>Message:</label>
+							<textarea
+								value={messageText}
+								onChange={(e) => setMessageText(e.target.value)}
+								className="form-input"
+								rows="4"
+								placeholder="Type your message..."
+								disabled={sending}
+							/>
+						</div>
+
+						<button
+							type="submit"
+							className="btn"
+							disabled={sending || !hasRecipients || !messageText.trim()}
+						>
+							{sending ? 'Sending...' : 'Send Message'}
+						</button>
+
+						{error && <p className="error">{error}</p>}
+					</form>
+				</div>
+			</div>
+
+			{/* Messages List */}
+			<div className="card">
+				<div className="card-header">
+					<h3 className="card-title">My Messages ({allMessages.length})</h3>
+				</div>
+				<div className="card-body">
+					{allMessages.length === 0 ? (
+						<p>No messages yet</p>
+					) : (
+						allMessages.map((tx) => (
+							<TransactionItem
+								key={tx.transaction_id}
+								transaction={tx}
+								privateKey={privateKey}
+								familyId={walletData.family_id}
+								isConfirmed={tx._isConfirmed}
+							/>
+						))
+					)}
+				</div>
+			</div>
+		</div>
+	)
 }

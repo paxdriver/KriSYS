@@ -37,7 +37,7 @@ export class KeyManager {
                 if (!privateKeyObj.isDecrypted()) {
                     privateKeyObj = await openpgp.decryptKey({
                         privateKey: privateKeyObj,
-                        passphrase: '' // Empty for development
+                        passphrase: '' // DEV NOTE: Only allow empty passphrase during development
                     })
                 }
             } 
