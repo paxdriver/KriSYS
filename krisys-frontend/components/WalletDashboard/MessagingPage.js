@@ -65,9 +65,8 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 
 	// Utility: derive familyId from an address
 	const getFamilyIdFromAddress = (address) => {
-		return address.includes('-')
-			? address.split('-').slice(0, -1).join('-')
-			: address
+		return address.includes('-') ? 
+            address.split('-').slice(0, -1).join('-') : address
 	}
 
 	const walletId = walletData?.family_id || null
@@ -80,12 +79,9 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 			if (tx.type_field !== 'message') return false
 
 			const fromMe = tx.station_address && myAddresses.includes(tx.station_address)
-			const toMember =
-				Array.isArray(tx.related_addresses) &&
-				tx.related_addresses.some((addr) => myAddresses.includes(addr))
-			const toFamily =
-				walletId &&
-				Array.isArray(tx.related_addresses) &&
+			const toMember = Array.isArray(tx.related_addresses) &&
+				tx.related_addresses.some( (addr) => myAddresses.includes(addr))
+			const toFamily = walletId && Array.isArray(tx.related_addresses) &&
 				tx.related_addresses.includes(walletId)
 
 			return fromMe || toMember || toFamily

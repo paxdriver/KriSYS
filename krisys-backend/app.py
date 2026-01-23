@@ -513,18 +513,23 @@ def create_wallet():
 def admin_alert():
 	data = request.json
 	try: 
+		# Alerts are provider-only emergency interrupts.
+		# Priority is always 1 by definition.
 		tx = Transaction(
 			timestamp_created=int(time.time()),
 			station_address="ADMIN_ALERT",
 			message_data=data['message'],
 			related_addresses=[],
 			type_field="alert",
-			priority_level=int(data['priority'])
+			priority_level=1,
 		)
-		blockchain.add_transaction(tx)
+		# Provider alerts should not be rate-limited like stations/users.
+		blockchain.add_transaction(tx, rate_limit_override = True)
 		return jsonify({"status": "success", "transaction_id": tx.transaction_id}), 201
+	
 	except KeyError as e:
 		return jsonify({"error": f"Missing field: {str(e)}"}), 400
+	
 	except Exception as e:
 		logger.error(f"Admin alert error: {str(e)}")
 		return jsonify({"error": "Internal server error"}), 500
@@ -654,7 +659,7 @@ def check_in():
 			message_data = "Check-in",
 			related_addresses = [address],
 			type_field = "check_in",
-			priority_level = 1,  # TODO: prioritize check-ins and alerts when mining blocks
+			priority_level = 2,		# default operational priority level and check-ins
 			relay_hash = relay_hash
 		)
 

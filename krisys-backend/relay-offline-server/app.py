@@ -150,6 +150,25 @@ def init_relay_db():
 
 
 # ----------------------------
+# DEV NOTE: Sorting messages, consider refactor later to share this with station-offline-server
+def _sort_queued_for_export(queued: list[dict]) -> list[dict]:
+	"""
+	Sort queued (unconfirmed) transactions for export:
+	- priority_level ASC (1 highest)
+	- timestamp_created ASC (older first)
+	- relay_hash ASC (tie-breaker)
+	"""
+	def key_fn(msg: dict):
+		return (
+			int(msg.get("priority_level") or 999),
+			int(msg.get("timestamp_created") or 0),
+			str(msg.get("relay_hash") or ""),
+		)
+
+	return sorted(queued, key=key_fn)
+# ----------------------------
+
+# ----------------------------
 # DB helpers (meta)
 # ----------------------------
 
@@ -755,6 +774,7 @@ def sanitize_sync_payload_server(payload: dict) -> list[dict]:
 	return sanitized_queued
 
 
+# DEV TODO: Block‑vs‑queue bandwidth negotiation
 def export_relay_payload() -> dict:
 	"""
 	Build a sync payload from the relay's persisted state.
@@ -773,6 +793,9 @@ def export_relay_payload() -> dict:
 			"previous_hash": last_block.get("previous_hash"),
 		}
 
+	raw_queued = db_list_queued(limit=MAX_QUEUED_PER_PAYLOAD)
+	sorted_queued = _sort_queued_for_export(raw_queued)
+
 	return {
 		"version": 1,
 		"deviceId": "relay_local",
@@ -780,7 +803,7 @@ def export_relay_payload() -> dict:
 		"generatedAt": now_ms,
 		"chain_tip": chain_tip,
 		"blocks": blocks,
-		"queued": db_list_queued(limit=MAX_QUEUED_PER_PAYLOAD),
+		"queued": sorted_queued,
 		# Confirmations are returned via inventory (filtered by relay_hashes).
 		"confirmed": {},
 	}
