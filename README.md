@@ -254,6 +254,32 @@ UI rule:
 
 ---
 
+## Transaction Priority System Semantics
+(this is set in the service provider's blockchain policy definition when it is initialized)
+
+### Priority 1 = Emergency interrupt
+- Alerts only
+- Provider‑issued only
+- Mine immediately
+
+### Priority 2 = Operational
+- Check‑ins by default
+- Can be used by provider for other urgent-but-not-interrupt messages
+
+### Priority 3 & 4 = Reserved / configurable
+- Weather, logistics, responder channels, etc.
+- Not used by default
+
+### Priority 5 = Best effort
+- Person‑to‑person messages
+
+---
+TODO: Offline Gossip eviction rules, pruning algorithm
+TODO: Set eviction rules and priority system rules to policy
+TODO: client-side prune and eviction rules, set by user settings, not policy
+
+---
+
 ## Pooled Rendezvous Relay Modes (Phase 3.8 direction)
 
 KriSYS uses pooled rendezvous syncing rather than requiring pairwise peer gossip.
