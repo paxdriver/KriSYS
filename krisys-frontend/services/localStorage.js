@@ -568,34 +568,7 @@ class DisasterStorage {
         }
     }
 
-    /*  Build a payload to sync with another device.
-
-        SCHEMA (version 1):
-        {
-            version: 1,
-            deviceId: string,
-            crisisId: string | null,      // TODO: populate from crisis metadata later
-            generatedAt: number,          // ms since epoch
-            chain_tip: {
-                block_index: number,
-                hash: string,
-                previous_hash: string
-            } | null,
-            blocks: [],                   // reserved for future block-level sync
-            queued: MessageTx[],
-            confirmed: {
-                [relayHash: string]: {
-                    confirmedAt?: number,
-                    txId?: string,
-                    timestampPosted?: number,
-                    // ... extra metadata
-                }
-            }
-        }
-
-        For now (Step 3), we only actively use:
-            - queued   : pending messages to relay
-            - confirmed: map of relay_hash -> confirmation info
+    /*  Build a payload to sync with another device (in DEV use 2 different browsers so they don't share localStorage)
 
         The chain_tip + blocks fields are placeholders that we will start
         filling and merging in a later step when we implement full
@@ -612,24 +585,32 @@ class DisasterStorage {
             const confirmed = this.getConfirmedRelays()
 
             // Only pending messages that are not already confirmed
-            const queuedForSync = queue.filter(
-                (msg) =>
-                    msg.status === 'pending' &&
-                    !this.isMessageConfirmed(msg.relay_hash)
-            )
+            let queuedForSync = queue.filter((msg) => msg.status === 'pending' &&
+                !this.isMessageConfirmed(msg.relay_hash))
 
-            // Crisis metadata (if we have it) for sanity-checking that peers are
-            // syncing the same crisis / blockchain.
+            // Bound queued payload size (prevents huge P2P messages)
+		    queuedForSync = queuedForSync.slice(0, this.MAX_QUEUED_PER_PAYLOAD)
+            // Bound confirmed map size deterministically (sorted keys)
+            const confirmedKeys = Object.keys(confirmed || {}).sort()
+            const limitedConfirmed = {}
+            for (let i = 0; i < confirmedKeys.length; i++) {
+                if (i >= this.MAX_CONFIRMED_PER_PAYLOAD) break
+                const k = confirmedKeys[i]
+                limitedConfirmed[k] = confirmed[k]
+            }
+            // DEV NOTE: WebRTC messages can be large, but you don’t want to depend on that. This bounds risk up-front
+
+
+            // Crisis metadata (if we have it) for sanity-checking that peers are syncing the same crisis / blockchain.
             const crisisMeta = this.getCrisisMetadata()
 
-            // Look at our locally cached blockchain to expose a simple "tip"
-            // pointer and a small suffix of canonical blocks.
+            // Look at our locally cached blockchain to expose a simple "tip" pointer and a small suffix of canonical blocks.
             const blocks = this.getBlockchain() || []
             const lastBlock = Array.isArray(blocks) && blocks.length > 0 ? 
                 blocks[blocks.length - 1] : null
 
-            // Share only the last N canonical blocks to limit payload size.
-            // Later, we can make this configurable (battery / storage policy).
+            // Share only the last N canonical blocks to limit payload size. 
+            // later we can make this configurable (battery / storage policy).
             const MAX_BLOCKS_SHARE = 10
             const blocksToShare =
                 Array.isArray(blocks) && blocks.length > 0 ? 
@@ -647,22 +628,16 @@ class DisasterStorage {
                         previous_hash: lastBlock.previous_hash
                     }
                     : null,
-                // NOTE: receiver currently ignores this.blocks; in the next step
-                // we will implement block-level merge logic in importSyncPayload,
-                // using the crisis block_public_key to verify signatures.
                 blocks: blocksToShare,
                 queued: queuedForSync,
-                confirmed
+                confirmed: limitedConfirmed,
             }
         }
 
-    /*
-        Merge another device's sync payload into local storage.
+    /*  Merge another device's sync payload into local storage.
             - Incorporates their confirmed relays
             - Adds any new, unconfirmed queued messages we don't already have
             - Then prunes any messages that are now confirmed
-        
-        TODO - via a simple JSON payload we're only defining the data model and merge logic here; actually transmitting it (QR / file / WebRTC / etc.) comes later.
     */
 
     // replaces "importSyncPayload" for verifying signed blocks, merging them when imported from offline, etc.
