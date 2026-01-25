@@ -7,6 +7,7 @@ import { createJoinCode, parseJoinCode } from '@/services/poolJoinCode'
 import { createPublicKeyShareCode, parsePublicKeyShareCode } from '@/services/walletPublicKeyShare'
 import { showTextQr } from '@/utils/qr'
 import QRScanner from '../Scanner/QRScanner'
+import P2PRoom from './P2PRoom'
 
 const DEFAULT_STATION_URL =	process.env.NEXT_PUBLIC_STATION_URL || 'http://localhost:6001'
 const DEFAULT_RELAY_URL = process.env.NEXT_PUBLIC_RELAY_URL || 'http://localhost:6002'
@@ -286,6 +287,12 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 				<button className="btn" onClick={runSync} disabled={syncing}>
 					{syncing ? 'Syncing...' : 'Sync Now'}
 				</button>
+
+			</div>
+
+			{/* P2P Rooms */}
+			<div className='p2proom-wrapper'>
+				<P2PRoom />
 			</div>
 
 			{scannerOpen && (
