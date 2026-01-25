@@ -483,58 +483,6 @@ def add_transaction():
 	except Exception as e:
 		logger.error(f"Transaction error: {str(e)}")
 		return jsonify({"error": "Internal server error"}), 500
-
-# OLD - without deduping logic
-# @app.route('/transaction', methods=['POST'])
-# def add_transaction():
-# 	data = request.json or {}
-	
-# 	# Check for dev rate limit override
-# 	rate_limit_override = request.headers.get('X-Dev-Rate-Override') == 'true'
-	
-# 	if data:
-# 		if data['type_field'] == 'message':
-			
-# 			# Handle message encryption using wallet_keys table
-# 			message_data = data['message_data']
-# 			if data['type_field'] == 'message' and 'recipient_id' in data:
-# 				# Get recipient's public key from wallet_keys table
-# 				public_key_str = blockchain.wallets.get_wallet_public_key(data['recipient_id'])
-# 				if public_key_str:
-# 					# Encrypt message with recipient's public key
-# 					pub_key = pgpy.PGPKey()
-# 					pub_key.parse(public_key_str)
-# 					encrypted_msg = pub_key.encrypt(pgpy.PGPMessage.new(message_data))
-# 					message_data = str(encrypted_msg)
-					
-# 			try:
-# 				tx = Transaction(
-# 					timestamp_created = int(data['timestamp_created']),
-# 					station_address = data['station_address'],
-# 					message_data = message_data,
-# 					related_addresses = data['related_addresses'],
-# 					type_field = data['type_field'],
-# 					priority_level = int(data['priority_level']),
-# 					relay_hash = data.get('relay_hash', ''),
-# 					posted_id = data.get('posted_id', '')
-# 				)
-# 				# Add transaction with optional rate limit override
-# 				blockchain.add_transaction(tx, rate_limit_override=rate_limit_override)
-# 				return jsonify({"status": "success", "transaction_id": tx.transaction_id}), 201
-			
-# 			except ValueError as e:
-# 				return jsonify({"error": str(e)}), 400
-
-# 			except KeyError as e:
-# 				return jsonify({"error": f"Missing field: {str(e)}"}), 400
-		
-# 			except Exception as e:
-# 				logger.error(f"Transaction error: {str(e)}")
-# 				return jsonify({"error": "Internal server error"}), 500
-# 		else:
-# 			return jsonify({"error": "THIS TYPE OF TRANSACTION IS NOT YET DEFINED"}), 500
-# 	else:
-# 		return jsonify({"error": "No data provided"}), 400
 	
 @app.route('/blockchain', methods=['GET'])
 def get_chain():
@@ -967,8 +915,6 @@ def get_wallet_public_key(family_id):
 	except Exception as e:
 		logger.error(f"Error getting public key: {str(e)}")
 		return jsonify({"error": "Internal server error"}), 500
-
-
 
 
 if __name__ == '__main__':

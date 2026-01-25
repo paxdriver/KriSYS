@@ -44,7 +44,7 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 
 	useEffect(() => {
         // Triggers re-renders on storage state changes, nothing more
-		const onLocalDataChanged = () => setQueueVersion( v => v + 1)
+		const onLocalDataChanged = () => setQueueVersion(v => v + 1)
 
 		window.addEventListener('krisys:queue_updated', onLocalDataChanged)
 		window.addEventListener('krisys:confirmed_updated', onLocalDataChanged)

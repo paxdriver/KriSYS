@@ -1,3 +1,4 @@
+// krisys-frontend/components/WalletDashboard/P2PRoom.js
 'use client'
 import { useMemo, useRef, useState, useEffect } from 'react'
 import QRScanner from '../Scanner/QRScanner'
@@ -46,8 +47,8 @@ export default function P2PRoom() {
 	const senderRef = useRef(null)
 	const receiverRef = useRef(null)
 
-	const [status, setStatus] = useState('disconnected') // disconnected | connecting | connected | closed
-	const [role, setRole] = useState('idle') // idle | host | join
+	const [status, setStatus] = useState('disconnected')
+	const [role, setRole] = useState('idle')
 	const [error, setError] = useState(null)
 
 	const [offerCode, setOfferCode] = useState('')
@@ -56,14 +57,23 @@ export default function P2PRoom() {
 	const [remoteAnswerInput, setRemoteAnswerInput] = useState('')
 
 	const [scannerOpen, setScannerOpen] = useState(false)
-	const [scanTarget, setScanTarget] = useState(null) // 'offer' | 'answer' | null
+	const [scanTarget, setScanTarget] = useState(null)
 
 	const [logLines, setLogLines] = useState([])
+
+	// Lightweight counters for UI + DevTools indicators
+	const [metrics, setMetrics] = useState(null)
+
+	// Push-only mode when joining a room auto-disconnects, otherwise exchange everything missing
+	const [pushOnlyOnJoin, setPushOnlyOnJoin] = useState(false)
 
 	const pendingSyncIdsRef = useRef(new Set())
 
 	const canWebRTC = useMemo(() => {
-		return typeof window !== 'undefined' && typeof RTCPeerConnection !== 'undefined'
+		return (
+			typeof window !== 'undefined' &&
+			typeof RTCPeerConnection !== 'undefined'
+		)
 	}, [])
 
 	const log = (line) => {
@@ -78,7 +88,9 @@ export default function P2PRoom() {
 		try {
 			if (typeof window === 'undefined') return
 			window.KRISYS_P2P_STATUS = next
-			window.dispatchEvent(new CustomEvent('krisys:p2p_status', { detail: next }))
+			window.dispatchEvent(
+				new CustomEvent('krisys:p2p_status', { detail: next })
+			)
 		} catch {
 			// ignore
 		}
@@ -89,12 +101,22 @@ export default function P2PRoom() {
 			active: status === 'connecting' || status === 'connected',
 			status,
 			role,
+			metrics: metrics || null,
 		})
-	}, [status, role])
+	}, [status, role, metrics])
 
 	useEffect(() => {
 		return () => {
-			// On unmount, close connections and update status
+			try {
+				if (senderRef.current?.destroy) senderRef.current.destroy()
+			} catch {
+				// ignore
+			}
+			try {
+				if (receiverRef.current?.destroy) receiverRef.current.destroy()
+			} catch {
+				// ignore
+			}
 			try {
 				if (dcRef.current) dcRef.current.close()
 			} catch {
@@ -120,7 +142,19 @@ export default function P2PRoom() {
 		setScannerOpen(false)
 		setScanTarget(null)
 		setLogLines([])
+		setMetrics(null)
 		pendingSyncIdsRef.current = new Set()
+
+		try {
+			if (senderRef.current?.destroy) senderRef.current.destroy()
+		} catch {
+			// ignore
+		}
+		try {
+			if (receiverRef.current?.destroy) receiverRef.current.destroy()
+		} catch {
+			// ignore
+		}
 
 		senderRef.current = null
 		receiverRef.current = null
@@ -173,6 +207,7 @@ export default function P2PRoom() {
 
 		if (obj.t === 'krisys_mesh_sync_req_v1') {
 			const id = obj.id
+			const mode = obj.mode === true	// true = push-only, false = full sync, defaults to full sync
 			log(`recv sync req id=${id}`)
 
 			const payload = obj.payload
@@ -189,6 +224,13 @@ export default function P2PRoom() {
 				return
 			}
 
+			// PUSH-ONLY: do NOT respond
+			if (mode) { 
+				log(`push-only mode: not sending sync response`)
+				return
+			}
+
+			// FULL-SYNC
 			try {
 				const myPayload = disasterStorage.exportSyncPayload()
 				sendJson({
@@ -245,9 +287,27 @@ export default function P2PRoom() {
 	}
 
 	const attachDataChannelHandlers = (dc) => {
-		// wire chunk sender/receiver
-		senderRef.current = createChunkSender({ dc, log })
-		receiverRef.current = createChunkReceiver({ onJson: handleIncomingJson, log })
+		senderRef.current = createChunkSender({
+			dc,
+			log,
+			onStats: (s) => {
+				setMetrics((prev) => ({
+					...(prev || {}),
+					send: s,
+				}))
+			},
+		})
+
+		receiverRef.current = createChunkReceiver({
+			onJson: handleIncomingJson,
+			log,
+			onStats: (s) => {
+				setMetrics((prev) => ({
+					...(prev || {}),
+					recv: s,
+				}))
+			},
+		})
 
 		dc.onopen = () => {
 			log('dc.open')
@@ -327,6 +387,13 @@ export default function P2PRoom() {
 			setError('Paste or scan an offer code first.')
 			return
 		}
+
+		const mode = window.confirm( 'Join room in push-only mode?\n\n' +
+			`OK = Push messages but don't download blocks/messages (saves battery and storage)\n` +
+			'Cancel = Full sync (push + pull)'
+		) ? true : false
+
+		setPushOnlyOnJoin(mode)
 
 		reset()
 		setRole('join')
@@ -448,15 +515,35 @@ export default function P2PRoom() {
 			sendJson({
 				t: 'krisys_mesh_sync_req_v1',
 				id,
+				mode: pushOnlyOnJoin,	// do not download from the pool, only push unconfirmed messages and blocks if the pool doesn't already have them
 				sentAt: Date.now(),
 				payload,
 			})
+
+			if(pushOnlyOnJoin) {
+				log('push-only mode: disconnecting after send.')
+				// Give sender a moment to flush queued frames
+				setTimeout(() => {
+					try {
+						if (dcRef.current) dcRef.current.close()
+						if (pcRef.current) pcRef.current.close()
+						setPushOnlyOnJoin(false)
+					} catch {
+						// ignore
+					}
+				}, 500)
+			}
 
 			log(`sent sync req id=${id}`)
 		} catch (e) {
 			setError(e?.message || String(e))
 		}
 	}
+
+	const sendBytes = metrics?.send?.bytesSent ?? 0
+	const recvBytes = metrics?.recv?.bytesReceived ?? 0
+	const sendQueueDepth = metrics?.send?.queueDepth ?? 0
+	const inflight = metrics?.recv?.inflight ?? 0
 
 	return (
 		<div className="card">
@@ -467,6 +554,13 @@ export default function P2PRoom() {
 			<div className="card-body">
 				<div className="privacy-notice" style={{ marginBottom: '8px' }}>
 					Status: {status} | role: {role} | crisisId: {crisisId || 'unknown'}
+					{metrics ? (
+						<>
+							<br />
+							Sent bytes: {sendBytes} | Recv bytes: {recvBytes} | Send queue:{' '}
+							{sendQueueDepth} | Inflight: {inflight}
+						</>
+					) : null}
 				</div>
 
 				{error && <div className="error">{error}</div>}
@@ -648,8 +742,8 @@ export default function P2PRoom() {
 					</div>
 
 					<div className="privacy-notice">
-						Console logs show message metadata (type/id/chunks/bytes), not full
-						payload contents.
+						Logs show message metadata (type/id/chunks/bytes), not full payload
+						contents.
 					</div>
 				</div>
 			</div>

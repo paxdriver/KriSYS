@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { api } from '@/services/api'
 import { syncWithMeshHost } from '@/services/meshSync'
 import { disasterStorage } from '@/services/localStorage'
+import { KeyManager } from '@/services/keyManager'
 import './devtools.css'
 
 // Station URL for mesh sync and flush (local station backend)
@@ -149,6 +150,80 @@ export default function DevTools({ onRefresh }) {
 
 		alert(`Queued ${created} test messages (priority ${priority})`)
 	}
+    const generateEncryptedTestMessages = async ({
+        count = 50,
+        priority = 5,
+        prefix = 'ENCRYPTED_TEST',
+    }) => {
+        const deviceId = disasterStorage.getDeviceId()
+
+        // ✅ Identify active wallet via cached private key
+        const privateKeyEntry = localStorage.getItem('krisys_private_key')
+        if (!privateKeyEntry) {
+            alert('No unlocked wallet found')
+            return
+        }
+
+        let familyId
+        try {
+            familyId = JSON.parse(privateKeyEntry).familyId
+        } catch {
+            alert('Invalid cached private key data')
+            return
+        }
+
+        let publicKey
+        try {
+            // Must already be cached; offline-safe
+            publicKey = await KeyManager.getPublicKey(familyId)
+        } catch {
+            alert(
+                'Public key not cached.\n\n' +
+                'Unlock the wallet once while online first.'
+            )
+            return
+        }
+
+        let created = 0
+
+        for (let i = 0; i < count; i++) {
+            const relayHash =
+                globalThis.crypto?.randomUUID?.() ??
+                `${Date.now()}_${Math.random().toString(36).slice(2)}`
+
+            const plaintext = `${prefix} message ${i + 1}/${count}`
+
+            let encrypted
+            try {
+                // ✅ Encrypt only to self
+                encrypted = await KeyManager.encryptMessage(
+                    plaintext,
+                    familyId,
+                    familyId
+                )
+            } catch (e) {
+                alert(`Encryption failed: ${e?.message || String(e)}`)
+                return
+            }
+
+            disasterStorage.queueMessage({
+                timestamp_created: Math.floor(Date.now() / 1000),
+                station_address: `${familyId}-dev`,
+                message_data: encrypted,
+                related_addresses: [familyId],
+                type_field: 'message',
+                priority_level: priority,
+                relay_hash: relayHash,
+                origin_device: deviceId,
+                status: 'pending',
+                queuedAt: Date.now(),
+            })
+
+            created++
+        }
+
+        alert(`Queued ${created} encrypted messages (priority ${priority})`)
+    }
 
     const mineBlock = async () => {
         setMining(true)
@@ -553,10 +628,10 @@ export default function DevTools({ onRefresh }) {
 
                 <button
                     className="dev-btn"
-                    onClick={() => generateTestMessages({ count: 50, priority: 2, prefix: 'CHECKIN' })}
-                    title="Generate 50 priority-2 test messages"
+                    onClick={() => generateEncryptedTestMessages({ count: 50 })}
+                    title="Generate 50 encrypted priority-5 messages (realistic payload size)"
                 >
-                    +50 Msgs(p2)
+                    +50 Msgs (p5, encrypted)
                 </button>
 
                 <button
@@ -667,13 +742,30 @@ export default function DevTools({ onRefresh }) {
                             {meshInfo.hasPrivateKey ? 'yes' : 'no'}
                         </span>
 
-                        {/* webRTC connection status indicator */}
+                        {/* webRTC connection status & stats */}
                         {p2pStatus && (
                             <div className="mesh-status">
                                 <div>
                                     P2P: {p2pStatus.active ? 'active' : 'inactive'} (
                                     {p2pStatus.status}, {p2pStatus.role})
                                 </div>
+
+                                {p2pStatus.metrics && (
+                                    <div style={{ fontSize: '0.85em', opacity: 0.85 }}>
+                                        <div>
+                                            Sent: {p2pStatus.metrics.send?.bytesSent ?? 0} bytes
+                                        </div>
+                                        <div>
+                                            Recv: {p2pStatus.metrics.recv?.bytesReceived ?? 0} bytes
+                                        </div>
+                                        <div>
+                                            Send queue: {p2pStatus.metrics.send?.queueDepth ?? 0}
+                                        </div>
+                                        <div>
+                                            Inflight assemblies: {p2pStatus.metrics.recv?.inflight ?? 0}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>
