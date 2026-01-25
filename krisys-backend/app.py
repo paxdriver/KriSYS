@@ -398,54 +398,143 @@ def get_wallet_transactions(family_id):
 # Message submission with encryption
 @app.route('/transaction', methods=['POST'])
 def add_transaction():
-	data = request.json
-	
-	# Check for dev rate limit override
-	rate_limit_override = request.headers.get('X-Dev-Rate-Override') == 'true'
-	
-	if data:
-		if data['type_field'] == 'message':
-			
-			# Handle message encryption using wallet_keys table
-			message_data = data['message_data']
-			if data['type_field'] == 'message' and 'recipient_id' in data:
-				# Get recipient's public key from wallet_keys table
-				public_key_str = blockchain.wallets.get_wallet_public_key(data['recipient_id'])
-				if public_key_str:
-					# Encrypt message with recipient's public key
-					pub_key = pgpy.PGPKey()
-					pub_key.parse(public_key_str)
-					encrypted_msg = pub_key.encrypt(pgpy.PGPMessage.new(message_data))
-					message_data = str(encrypted_msg)
-					
-			try:
-				tx = Transaction(
-					timestamp_created = int(data['timestamp_created']),
-					station_address = data['station_address'],
-					message_data = message_data,
-					related_addresses = data['related_addresses'],
-					type_field = data['type_field'],
-					priority_level = int(data['priority_level']),
-					relay_hash = data.get('relay_hash', ''),
-					posted_id = data.get('posted_id', '')
-				)
-				# Add transaction with optional rate limit override
-				blockchain.add_transaction(tx, rate_limit_override=rate_limit_override)
-				return jsonify({"status": "success", "transaction_id": tx.transaction_id}), 201
-			
-			except ValueError as e:
-				return jsonify({"error": str(e)}), 400
+	data = request.json or {}
 
-			except KeyError as e:
-				return jsonify({"error": f"Missing field: {str(e)}"}), 400
-		
-			except Exception as e:
-				logger.error(f"Transaction error: {str(e)}")
-				return jsonify({"error": "Internal server error"}), 500
-		else:
-			return jsonify({"error": "THIS TYPE OF TRANSACTION IS NOT YET DEFINED"}), 500
-	else:
+	# Dev rate limit override
+	rate_limit_override = request.headers.get('X-Dev-Rate-Override') == 'true'
+
+	if not data:
 		return jsonify({"error": "No data provided"}), 400
+
+	if data.get('type_field') != 'message':
+		return jsonify({"error": "THIS TYPE OF TRANSACTION IS NOT YET DEFINED"}), 500
+
+	relay_hash = data.get('relay_hash', '')
+	if relay_hash is None:
+		relay_hash = ''
+
+	if not isinstance(relay_hash, str) or not relay_hash.strip():
+		return jsonify({"error": "relay_hash is required for offline-safe messaging"}), 400
+
+	if len(relay_hash) > 128:
+		return jsonify({"error": "relay_hash too long"}), 400
+
+	relay_hash = relay_hash.strip()
+
+	# 1) If already mined (exists in DB), treat as success (idempotent)
+	with db_connection() as conn:
+		row = conn.execute(
+			"SELECT transaction_id FROM transactions WHERE relay_hash = ? LIMIT 1",
+			(relay_hash,),
+		).fetchone()
+
+	if row:
+		return jsonify(
+			{
+				"status": "deduped",
+				"transaction_id": row["transaction_id"],
+				"relay_hash": relay_hash,
+			}
+		), 200
+
+	# 2) If already pending in memory, treat as success (idempotent)
+	for tx in blockchain.pending_transactions:
+		if (tx.relay_hash or "") == relay_hash:
+			return jsonify(
+				{
+					"status": "deduped_pending",
+					"transaction_id": tx.transaction_id,
+					"relay_hash": relay_hash,
+				}
+			), 200
+
+	# 3) Normal create path (encrypt if recipient_id provided)
+	message_data = data.get('message_data', '')
+	if not isinstance(message_data, str):
+		return jsonify({"error": "message_data must be a string"}), 400
+
+	if 'recipient_id' in data:
+		public_key_str = blockchain.wallets.get_wallet_public_key(data['recipient_id'])
+		if public_key_str:
+			pub_key = pgpy.PGPKey()
+			pub_key.parse(public_key_str)
+			encrypted_msg = pub_key.encrypt(pgpy.PGPMessage.new(message_data))
+			message_data = str(encrypted_msg)
+
+	try:
+		tx = Transaction(
+			timestamp_created=int(data['timestamp_created']),
+			station_address=data['station_address'],
+			message_data=message_data,
+			related_addresses=data['related_addresses'],
+			type_field=data['type_field'],
+			priority_level=int(data['priority_level']),
+			relay_hash=relay_hash,
+			posted_id=data.get('posted_id', ''),
+		)
+
+		blockchain.add_transaction(tx, rate_limit_override=rate_limit_override)
+		return jsonify({"status": "success", "transaction_id": tx.transaction_id}), 201
+
+	except ValueError as e:
+		return jsonify({"error": str(e)}), 400
+	except KeyError as e:
+		return jsonify({"error": f"Missing field: {str(e)}"}), 400
+	except Exception as e:
+		logger.error(f"Transaction error: {str(e)}")
+		return jsonify({"error": "Internal server error"}), 500
+
+# OLD - without deduping logic
+# @app.route('/transaction', methods=['POST'])
+# def add_transaction():
+# 	data = request.json or {}
+	
+# 	# Check for dev rate limit override
+# 	rate_limit_override = request.headers.get('X-Dev-Rate-Override') == 'true'
+	
+# 	if data:
+# 		if data['type_field'] == 'message':
+			
+# 			# Handle message encryption using wallet_keys table
+# 			message_data = data['message_data']
+# 			if data['type_field'] == 'message' and 'recipient_id' in data:
+# 				# Get recipient's public key from wallet_keys table
+# 				public_key_str = blockchain.wallets.get_wallet_public_key(data['recipient_id'])
+# 				if public_key_str:
+# 					# Encrypt message with recipient's public key
+# 					pub_key = pgpy.PGPKey()
+# 					pub_key.parse(public_key_str)
+# 					encrypted_msg = pub_key.encrypt(pgpy.PGPMessage.new(message_data))
+# 					message_data = str(encrypted_msg)
+					
+# 			try:
+# 				tx = Transaction(
+# 					timestamp_created = int(data['timestamp_created']),
+# 					station_address = data['station_address'],
+# 					message_data = message_data,
+# 					related_addresses = data['related_addresses'],
+# 					type_field = data['type_field'],
+# 					priority_level = int(data['priority_level']),
+# 					relay_hash = data.get('relay_hash', ''),
+# 					posted_id = data.get('posted_id', '')
+# 				)
+# 				# Add transaction with optional rate limit override
+# 				blockchain.add_transaction(tx, rate_limit_override=rate_limit_override)
+# 				return jsonify({"status": "success", "transaction_id": tx.transaction_id}), 201
+			
+# 			except ValueError as e:
+# 				return jsonify({"error": str(e)}), 400
+
+# 			except KeyError as e:
+# 				return jsonify({"error": f"Missing field: {str(e)}"}), 400
+		
+# 			except Exception as e:
+# 				logger.error(f"Transaction error: {str(e)}")
+# 				return jsonify({"error": "Internal server error"}), 500
+# 		else:
+# 			return jsonify({"error": "THIS TYPE OF TRANSACTION IS NOT YET DEFINED"}), 500
+# 	else:
+# 		return jsonify({"error": "No data provided"}), 400
 	
 @app.route('/blockchain', methods=['GET'])
 def get_chain():

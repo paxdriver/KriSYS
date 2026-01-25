@@ -24,6 +24,25 @@ export default function DevTools({ onRefresh }) {
 
     const [syncingRelay, setSyncingRelay] = useState(false)
 
+    const [p2pStatus, setP2pStatus] = useState(null)    // p2p connection visual indicator
+    useEffect(() => {
+		const onP2P = (evt) => {
+			setP2pStatus(evt?.detail || null)
+		}
+
+		window.addEventListener('krisys:p2p_status', onP2P)
+
+		// Initialize from global if present
+		if (window.KRISYS_P2P_STATUS) {
+			setP2pStatus(window.KRISYS_P2P_STATUS)
+		}
+
+		return () => {
+			window.removeEventListener('krisys:p2p_status', onP2P)
+		}
+	}, [])
+
+
     // Update queued message count periodically
     useEffect(() => {
         const updateQueueCount = () => {
@@ -94,6 +113,42 @@ export default function DevTools({ onRefresh }) {
             throw new Error(`Admin request failed: ${error.message}`)
         }
     }
+
+    // For testing loads of transactions without having to manually generate them all... use this function
+    const generateTestMessages = ({
+		count = 100,
+		priority = 5,
+		prefix = 'TEST',
+	}) => {
+		const deviceId = disasterStorage.getDeviceId()
+		const familyId = disasterStorage.getCrisisMetadata()?.id || 'unknown'
+
+		let created = 0
+
+		for (let i = 0; i < count; i++) {
+			const relayHash =
+				(globalThis.crypto?.randomUUID?.() ??
+					`${Date.now()}_${Math.random().toString(36).slice(2)}`)
+
+			const msg = {
+				timestamp_created: Math.floor(Date.now() / 1000),
+				station_address: `${familyId}-dev`,
+				message_data: `${prefix} message ${i + 1}/${count}`,
+				related_addresses: [],
+				type_field: 'message',
+				priority_level: priority,
+				relay_hash: relayHash,
+				origin_device: deviceId,
+				status: 'pending',
+				queuedAt: Date.now(),
+			}
+
+			disasterStorage.queueMessage(msg)
+			created++
+		}
+
+		alert(`Queued ${created} test messages (priority ${priority})`)
+	}
 
     const mineBlock = async () => {
         setMining(true)
@@ -490,6 +545,22 @@ export default function DevTools({ onRefresh }) {
 
                 <button
                     className="dev-btn"
+                    onClick={() => generateTestMessages({ count: 50, priority: 5 })}
+                    title="Generate 50 low-priority test messages"
+                >
+                    +50 Msgs (p5)
+                </button>
+
+                <button
+                    className="dev-btn"
+                    onClick={() => generateTestMessages({ count: 50, priority: 2, prefix: 'CHECKIN' })}
+                    title="Generate 50 priority-2 test messages"
+                >
+                    +50 Msgs(p2)
+                </button>
+
+                <button
+                    className="dev-btn"
                     onClick={processQueue}
                     disabled={queuedMessages === 0}
                     title="Send all queued messages (when back online)"
@@ -595,6 +666,16 @@ export default function DevTools({ onRefresh }) {
                             Cached private key:{' '}
                             {meshInfo.hasPrivateKey ? 'yes' : 'no'}
                         </span>
+
+                        {/* webRTC connection status indicator */}
+                        {p2pStatus && (
+                            <div className="mesh-status">
+                                <div>
+                                    P2P: {p2pStatus.active ? 'active' : 'inactive'} (
+                                    {p2pStatus.status}, {p2pStatus.role})
+                                </div>
+                            </div>
+                        )}
                     </div>
                 )}
             </div>

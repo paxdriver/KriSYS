@@ -582,46 +582,46 @@ class Blockchain:
 	
 	def add_transaction(self, transaction: Transaction, rate_limit_override: bool = False):
 		"""Add transaction with policy enforcement"""
-		
-		# Get current policy settings
-		policy_config = self.policy_system.get_policy()['policy']
-		############# DEVELOPMENT ONLY ################
-		if policy_config: 
-			for item in policy_config:
-				logger.info(f'{item}: {policy_config[item]}')
-				logger.info('-'*20)
-		############################################
-		
-		# 1. Validate transaction against policy
-		self.policy_system.validate_transaction(transaction)
-		
-		# 2. Size check
-		tx_size = len(json.dumps(transaction.to_dict()))
-		if tx_size > self.max_tx_size:
-			raise ValueError(f"Transaction exceeds size limit ({tx_size}/{self.max_tx_size} bytes)")
-		
-		# 3. Deduplication
-		if any(tx.transaction_id == transaction.transaction_id 
-			   for tx in self.pending_transactions):
-			raise ValueError("Duplicate transaction ID")
-		
-		# 4. Rate limiting
-		if not rate_limit_override:
-			recent_txs = [
-				tx for tx in self.pending_transactions 
-				if tx.station_address == transaction.station_address
-				and (int(time.time()) - tx.timestamp_created) < policy_config['rate_limit']
-			]
-			if recent_txs:
-				raise ValueError(f"Only one transaction per station every {policy_config['rate_limit']} seconds")
-		
-		self.pending_transactions.append(transaction)
-		logger.info(f"Added transaction: {transaction.transaction_id} to blockchain.pending_transactions")
+		with self._lock:
+			# Get current policy settings
+			policy_config = self.policy_system.get_policy()['policy']
+			
+			# 1. Validate transaction against policy
+			self.policy_system.validate_transaction(transaction)
+			
+			# 2. Size check
+			tx_size = len(json.dumps(transaction.to_dict()))
+			if tx_size > self.max_tx_size:
+				raise ValueError(f"Transaction exceeds size limit ({tx_size}/{self.max_tx_size} bytes)")
+			
+			# 3. Deduplication
+			if any(tx.transaction_id == transaction.transaction_id 
+				for tx in self.pending_transactions):
+				raise ValueError("Duplicate transaction ID")
+			
+			# 4. Deduplication: relay_hash within pending pool (idempotency key)
+			rh = transaction.relay_hash or ""
+			if isinstance(rh, str) and rh:
+				if any((tx.relay_hash or "") == rh for tx in self.pending_transactions):
+					raise ValueError("Duplicate relay_hash (already pending)")
 
-		# Provider emergency interrupt: mine immediately.
-		# This is safe because PolicySystem blocks priority=1 for non-alerts.
-		if int(transaction.priority_level) == 1 and transaction.type_field == "alert":
-			self.mine_and_save()
+			# 5. Rate limiting
+			if not rate_limit_override:
+				recent_txs = [
+					tx for tx in self.pending_transactions 
+					if tx.station_address == transaction.station_address
+					and (int(time.time()) - tx.timestamp_created) < policy_config['rate_limit']
+				]
+				if recent_txs:
+					raise ValueError(f"Only one transaction per station every {policy_config['rate_limit']} seconds")
+			
+			self.pending_transactions.append(transaction)
+			logger.info(f"Added transaction: {transaction.transaction_id} to blockchain.pending_transactions")
+
+			# Provider emergency interrupt: mine immediately.
+			# This is safe because PolicySystem blocks priority=1 for non-alerts.
+			if int(transaction.priority_level) == 1 and transaction.type_field == "alert":
+				self.mine_and_save()
 		
 	
 	def load_chain(self) -> bool:

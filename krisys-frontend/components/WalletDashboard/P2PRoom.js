@@ -1,12 +1,10 @@
 'use client'
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState, useEffect } from 'react'
 import QRScanner from '../Scanner/QRScanner'
 import { showTextQr } from '@/utils/qr'
-import {
-	createWebRTCRoomCode,
-	parseWebRTCRoomCode,
-} from '@/services/webrtcRoomCode'
+import { createWebRTCRoomCode, parseWebRTCRoomCode } from '@/services/webrtcRoomCode'
 import { disasterStorage } from '@/services/localStorage'
+import { createChunkReceiver, createChunkSender, makeId } from '@/services/webrtcChunking'
 
 function waitForIceGatheringComplete(pc, timeoutMs = 12000) {
 	return new Promise((resolve, reject) => {
@@ -39,23 +37,17 @@ function waitForIceGatheringComplete(pc, timeoutMs = 12000) {
 	})
 }
 
-function makeId() {
-	try {
-		if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
-	} catch {
-		// ignore
-	}
-	return `${Date.now()}_${Math.random().toString(36).slice(2)}`
-}
-
 export default function P2PRoom() {
 	const crisisId = disasterStorage.getCrisisMetadata()?.id || null
 
 	const pcRef = useRef(null)
 	const dcRef = useRef(null)
 
-	const [role, setRole] = useState('idle') // idle | host | join
+	const senderRef = useRef(null)
+	const receiverRef = useRef(null)
+
 	const [status, setStatus] = useState('disconnected') // disconnected | connecting | connected | closed
+	const [role, setRole] = useState('idle') // idle | host | join
 	const [error, setError] = useState(null)
 
 	const [offerCode, setOfferCode] = useState('')
@@ -68,7 +60,6 @@ export default function P2PRoom() {
 
 	const [logLines, setLogLines] = useState([])
 
-	// Track outstanding sync requests so we can match responses
 	const pendingSyncIdsRef = useRef(new Set())
 
 	const canWebRTC = useMemo(() => {
@@ -83,6 +74,41 @@ export default function P2PRoom() {
 		})
 	}
 
+	const emitP2PStatus = (next) => {
+		try {
+			if (typeof window === 'undefined') return
+			window.KRISYS_P2P_STATUS = next
+			window.dispatchEvent(new CustomEvent('krisys:p2p_status', { detail: next }))
+		} catch {
+			// ignore
+		}
+	}
+
+	useEffect(() => {
+		emitP2PStatus({
+			active: status === 'connecting' || status === 'connected',
+			status,
+			role,
+		})
+	}, [status, role])
+
+	useEffect(() => {
+		return () => {
+			// On unmount, close connections and update status
+			try {
+				if (dcRef.current) dcRef.current.close()
+			} catch {
+				// ignore
+			}
+			try {
+				if (pcRef.current) pcRef.current.close()
+			} catch {
+				// ignore
+			}
+			emitP2PStatus({ active: false, status: 'closed', role: 'idle' })
+		}
+	}, [])
+
 	const reset = () => {
 		setError(null)
 		setStatus('closed')
@@ -95,6 +121,9 @@ export default function P2PRoom() {
 		setScanTarget(null)
 		setLogLines([])
 		pendingSyncIdsRef.current = new Set()
+
+		senderRef.current = null
+		receiverRef.current = null
 
 		if (dcRef.current) {
 			try {
@@ -134,17 +163,14 @@ export default function P2PRoom() {
 	}
 
 	const sendJson = (obj) => {
-		const dc = dcRef.current
-		if (!dc || dc.readyState !== 'open') {
-			throw new Error('Data channel is not open')
-		}
-		dc.send(JSON.stringify(obj))
+		const sender = senderRef.current
+		if (!sender) throw new Error('Sender not ready')
+		sender.sendJson(obj)
 	}
 
 	const handleIncomingJson = async (obj) => {
 		if (!obj || typeof obj !== 'object') return
 
-		// Step: mesh sync request/response
 		if (obj.t === 'krisys_mesh_sync_req_v1') {
 			const id = obj.id
 			log(`recv sync req id=${id}`)
@@ -155,7 +181,6 @@ export default function P2PRoom() {
 				return
 			}
 
-			// Import what they sent (safe: your importer sanitizes and verifies blocks)
 			try {
 				await disasterStorage.importSyncPayloadAsync(payload)
 				log(`imported peer payload (req id=${id})`)
@@ -164,7 +189,6 @@ export default function P2PRoom() {
 				return
 			}
 
-			// Respond with our current bounded payload
 			try {
 				const myPayload = disasterStorage.exportSyncPayload()
 				sendJson({
@@ -204,7 +228,6 @@ export default function P2PRoom() {
 			return
 		}
 
-		// Optional debugging messages
 		if (obj.t === 'krisys_p2p_ping') {
 			log('recv ping')
 			try {
@@ -222,6 +245,10 @@ export default function P2PRoom() {
 	}
 
 	const attachDataChannelHandlers = (dc) => {
+		// wire chunk sender/receiver
+		senderRef.current = createChunkSender({ dc, log })
+		receiverRef.current = createChunkReceiver({ onJson: handleIncomingJson, log })
+
 		dc.onopen = () => {
 			log('dc.open')
 			setStatus('connected')
@@ -242,10 +269,11 @@ export default function P2PRoom() {
 					log('dc.message: [non-string or empty]')
 					return
 				}
-				const obj = JSON.parse(text)
-				await handleIncomingJson(obj)
+				const receiver = receiverRef.current
+				if (!receiver) return
+				await receiver.handleText(text)
 			} catch (e) {
-				log(`dc.message parse/error: ${e?.message || String(e)}`)
+				log(`dc.message error: ${e?.message || String(e)}`)
 			}
 		}
 	}
@@ -263,7 +291,6 @@ export default function P2PRoom() {
 		setStatus('connecting')
 		log('Creating host offer...')
 
-		// No STUN/TURN by default: best for same-LAN/offline tests.
 		const pc = new RTCPeerConnection({ iceServers: [] })
 		pcRef.current = pc
 		attachCommonHandlers(pc)
@@ -439,7 +466,7 @@ export default function P2PRoom() {
 
 			<div className="card-body">
 				<div className="privacy-notice" style={{ marginBottom: '8px' }}>
-					Status: {status} | crisisId: {crisisId || 'unknown'}
+					Status: {status} | role: {role} | crisisId: {crisisId || 'unknown'}
 				</div>
 
 				{error && <div className="error">{error}</div>}
@@ -621,8 +648,8 @@ export default function P2PRoom() {
 					</div>
 
 					<div className="privacy-notice">
-						This step uses the exact same KriSYS mesh payloads you already
-						send over HTTP, but now over WebRTC.
+						Console logs show message metadata (type/id/chunks/bytes), not full
+						payload contents.
 					</div>
 				</div>
 			</div>
