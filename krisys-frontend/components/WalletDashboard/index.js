@@ -8,6 +8,7 @@ import MembersPage from './MembersPage'
 import ContactsPage from './ContactPage'
 import MessagingPage from './MessagingPage'
 import ConnectionsPage from './ConnectionsPage'
+import UserSettings from './UserSettings'
 import UnlockForm from './UnlockForm'
 import '../../styles/wallet_dashboard.css'
 import DevTools from '../DevTools'  // DEV NOTE: DEVELOPMENT ONLY
@@ -96,6 +97,8 @@ export default function WalletDashboard({ walletData, transactions, familyId, on
                         {currentPage === 'connections' && (
                             <ConnectionsPage onRefresh={onRefresh} walletData={walletData} />
                         )}
+
+                        {currentPage === 'settings' && <UserSettings />}
                     
                     </>)
                 }
