@@ -404,7 +404,7 @@ Station server:
 ├── blockchain
 │   ├── master_private_key.asc
 │   ├── master_private_key.asc
-│   └── dev_policy_id.txt
+│   └── dev_policy_id.txt	(delete this in dev to kill master keys, db's, and start fresh automatically)
 ├── device-offline-server (simulating an offline registered station, relaying unconfirmed messages and maintaining latest blocks from anyone who visits and has a newer block that the station can verify and propagate throughout the rest of the network while offline)
 │   ├── station-data  (simulating offline station persistent storage for blockchain and message queues when gathering offline unconfirmed transactions)
 │   │   └── station.db
@@ -415,6 +415,11 @@ Station server:
 ├── blockchain.py
 ├── database.py
 ├── Dockerfile
+├── relay-offline-server 
+│   ├── relay-data  (simulating offline dumb relay with persistent storage to help propagate offline messages)
+│   │   └── relay.db
+│   ├── app.py
+│   └── Dockerfile
 ├── requirements.txt
 ├── templates
 │   ├── admin.html
@@ -424,6 +429,8 @@ Station server:
 │   └── wallet_dashboard.html
 ./krisys-frontend
 ├── app
+│   ├── explorer
+│   │	└── page.js
 │   ├── globals.css
 │   ├── layout.js
 │   ├── page.js
@@ -444,6 +451,7 @@ Station server:
 │   ├── Scanner
 │   │   └── QRScanner.js
 │   └── WalletDashboard
+│       ├── ConnectionsPage.js
 │       ├── ContactName.js
 │       ├── ContactPage.js
 │       ├── index.js
@@ -452,10 +460,15 @@ Station server:
 │       ├── MessageDisplay.js
 │       ├── MessagingPage.js
 │       ├── Overview.js
+│       ├── P2PRoom.js
 │       ├── RecentActivity.js
 │       ├── Sidebar.js
+│       ├── StorageMeter.js
 │       ├── TransactionItem.js
+│       ├── UserSettings.js
 │       └── UnlockForm.js
+├── contexts
+│   └── P2PContext.js
 ├── Dockerfile
 ├── package.json
 ├── package-lock.json
@@ -469,7 +482,13 @@ Station server:
 │   ├── blockVerifier.js
 │   ├── contactStorage.js
 │   ├── keyManager.js
-│   └── localStorage.js
+│   ├── localStorage.js
+│   ├── meshSync.js
+│   ├── poolJoinCode.js
+│   ├── storageMeter.js
+│   ├── walletPublicKeyShare.js
+│   ├── webrtcChunking.js
+│   └── webrtcRoomCode.js
 ├── styles
 │   ├── components
 │   │   ├── scanner.css
@@ -546,32 +565,286 @@ identifying credentials.
 
 ---
 
-## Roadmap (Updated)
+## Roadmap (*ROADMAP*)
+### Phase 1 — Core chain and persistence (Completed)
+Core ledger + canonical chain rules:
+- Single canonical chain (no forks; conflicts ignored)
+- Central backend is the only miner (authoritative chain)
+- Blocks include:
+	- `block_index`, `timestamp` (seconds), `transactions`, `previous_hash`, `nonce`, `hash`, `signature`
+- Deterministic block hashing (non-negotiable):
+	- SHA-256 over UTF-8 bytes of canonical JSON body:
+		- `{ block_index, timestamp, transactions, previous_hash, nonce }`
+	- Canonical JSON rules (must match Python + JS):
+		- sorted keys
+		- separators `(",", ":")`
+		- `ensure_ascii=False`
+		- UTF-8 encoding
+- Block signing (non-negotiable):
+	- Detached PGP signature over canonical JSON header:
+		- `{ block_index, previous_hash, hash }`
+- Genesis metadata:
+	- Genesis block contains `crisis_metadata` payload with:
+		- `crisis_id`
+		- `block_public_key` (trust anchor)
+		- crisis details (name/org/contact/description/created_at)
+- Persistence:
+	- SQLite storage on central:
+		- `blocks`, `transactions`, `wallets`, `wallet_keys`, `stations`
+	- Transaction load ordering from SQLite:
+		- `transactions ORDER BY id ASC`
+	- Deterministic tx ordering inside mined blocks:
+		- `priority_level ASC`
+		- `timestamp_created ASC`
+		- `transaction_id ASC`
+- Idempotency (server acceptance):
+	- `relay_hash` uniqueness enforced for non-empty values (SQLite partial unique index)
+	- `/transaction` idempotent by `relay_hash` (dedupe success responses)
 
-### Phase 1: Core chain and persistence
-- blocks/transactions
-- SQLite persistence
-- deterministic hashing
-- mining
+Key endpoints (central):
+- `GET /health`
+- `GET /crisis` (returns pinned `block_public_key`)
+- `GET /blockchain`
+- `POST /transaction` (relay_hash required; offline-safe)
+- `POST /checkin` (station-authenticated)
+- `POST /admin/mine` (dev mining)
+- `POST /admin/alert` (provider-only alerts; priority 1)
 
-### Phase 2: Wallets and messaging
-- family wallets
-- PGP key management
-- client-side encryption/decryption
-- local contact names
+---
 
-### Phase 3.0–3.7: Offline pooling via authorized stations (complete)
-- relay_hash queue + confirmation pruning
-- station pooled relay (inventory/sync)
-- station flush to central
-- offline check-ins queued and flushed
-- family-scoped addressing in UI
+### Phase 2 — PGP messaging & wallets (Completed)
+Wallet identity + encryption plumbing (no currency):
+- Wallet model:
+	- `family_id` wallet
+	- multiple `members[]` with `address` identifiers
+- PGP keys per wallet:
+	- public key is shareable for offline encryption
+	- private key is delivered to client only after unlock (client-side decrypt)
+- Message encryption:
+	- outgoing messages encrypted to recipient wallet public key (and optionally sender key for sent-message readability)
+	- stored on-chain as encrypted armored PGP message text
+- Wallet unlock flow:
+	- `POST /auth/unlock` returns wallet private key (client validates/caches)
+	- client stores validated private key locally for offline decryption access
+- Client-side decryption:
+	- decrypts PGP messages locally using cached private key
+	- UI marks messages as confirmed vs unconfirmed based on block verification
+- Public key exchange (offline-friendly):
+	- QR + always-show-text for:
+		- addresses
+		- join codes
+		- public key share codes
+	- Public key share code format `krisys:key:v1` includes:
+		- `family_id`
+		- optional `crisis_id`
+		- armored public key block
 
-### Phase 3.8: Pooled rendezvous without authorized stations (next)
-- untrusted pool host mode (user-hosted or dumb relay boxes as no-trust stations)
-- scheduled sync window UX, push notification reminders of manual opt-in sync sessions
-- transport experimentation (likely WebRTC data channels, but protocol stays the same)
-- prioritizing transactions and synced data (blocks, alerts, station check-ins, then people)
+Key endpoints (central):
+- `POST /wallet` (creates wallet + keys)
+- `GET /wallet/<family_id>` (metadata only; no keys)
+- `GET /wallet/<family_id>/public-key` (for encryption)
+- `GET /wallet/<family_id>/qr/<address>` (QR image)
+
+Data handling constraints:
+- No per-transaction signatures; only blocks are signed
+- Confirmations are true only when proven by verified blocks
+
+---
+
+### Phase 3 — Offline propagation (Completed)
+Mesh sync between devices and offline nodes:
+- Stable offline transaction identity:
+	- `relay_hash` is the offline idempotency key (dedupe + pruning)
+	- `transaction_id` is server-generated on acceptance (not used for mesh dedupe)
+- Timestamp conventions:
+	- blockchain timestamps are integer seconds:
+		- `Transaction.timestamp_created`, `Transaction.timestamp_posted`, `Block.timestamp`
+	- local bookkeeping times are milliseconds:
+		- `queuedAt`, `generatedAt`, `confirmedAt`
+- Priority semantics:
+	- lower number = higher priority
+	- priority 1 reserved for provider-issued alerts (mines immediately)
+	- stations do not choose priorities; provider policy defines defaults
+- Mesh sync payload v1 (shared over HTTP + WebRTC):
+	- `{ version, deviceId, crisisId, generatedAt, chain_tip, blocks, queued, confirmed }`
+	- bounded lists (anti-abuse):
+		- queued bounded per payload
+		- confirmed bounded per payload
+		- blocks suffix bounded
+- Offline Station server (trusted operationally, untrusted cryptographically):
+	- Has station API key (for central checkin flushing)
+	- Endpoints:
+		- `POST /mesh/inventory`
+		- `POST /mesh/sync`
+		- `POST /station/checkin` (offline intake)
+		- `POST /station/flush` (push queued to central when online; pull blocks)
+	- Stores:
+		- queued, confirmed, blocks, checkins_queued (SQLite)
+	- Behavior:
+		- verifies received blocks (hash + signature) using pinned `block_public_key`
+		- derives confirmations only from verified blocks
+		- prunes queued/confirmed using TTL + high/low-water bounds
+- Offline Relay server (untrusted rendezvous box):
+	- No credentials
+	- Endpoints:
+		- `POST /mesh/inventory`
+		- `POST /mesh/sync`
+	- First-contact pinning:
+		- pins `crisisId + block_public_key` on first valid request
+	- Behavior:
+		- stores queued messages (smell-tested)
+		- stores verified blocks only
+		- derives confirmations only from verified blocks
+		- bounded storage + TTL pruning
+- Client offline caches:
+	- `crisis metadata` (includes pinned `block_public_key`)
+	- `canonical blocks` (verified + linked)
+	- `queued messages` (unconfirmed relay pool)
+	- `confirmed relay map` (prunes queue when on-chain)
+
+Core security boundaries:
+- Mesh endpoints are open to untrusted clients
+- Relays cannot create provider alerts or check-ins
+- Confirmations never trusted from peer “confirmed maps”; only from verified blocks
+
+Dev reset behavior (dev-only):
+- Deleting `blockchain/dev_policy_id.txt` resets:
+	- central DB
+	- master keys
+	- station DB + station identity files
+	- relay DB
+- Everything regenerates together
+
+---
+
+### Phase 4 — Operational hardening (In progress)
+Goal: align dev prototype with real-world operation before multi-device field tests.
+
+Phase 4a — Client hardening (In progress)
+- LocalStorage namespacing:
+	- prevent cross-wallet and cross-crisis cache bleed
+	- namespace at least by `crisisId` and `family_id`
+- Offline reload readiness:
+	- PWA app-shell caching (service worker) so the UI can open/reload offline
+- Real network status:
+	- replace simulated offline fetch/axios interception with real connectivity indicators
+- Storage observability:
+	- storage meter (used vs configured limit; category breakdown) to support offline storage decisions
+- P2P lifecycle scope:
+	- P2P connection context scoped to `app/wallet/[familyId]/layout.js`
+	- connection survives internal navigation; tears down on wallet exit
+
+Phase 4b — Station/relay hardening (In progress)
+- Station identity handling:
+	- load station identity (station_id/api_key/central_url/policy) from local file/volume
+	- explicit boot behavior when identity missing (dev: fail or show provisioning stub)
+- Station lifecycle:
+	- operate offline immediately
+	- retry central connectivity in background
+	- flush queued on reconnect
+- Relay lifecycle:
+	- strict pinning to single crisis trust anchor
+	- verified-block-only storage
+	- bounded queue/blocks storage
+- Environment separation:
+	- central ≠ station ≠ relay deployment configs (no monolithic compose assumption)
+- Dev-only endpoints gated:
+	- ensure dev-only identity fetch endpoints remain dev-only
+
+---
+
+### Phase 5 — System Validation & Field Testing (Planned)
+Goal: prove the system survives realistic conditions across devices and networks.
+
+Core validation scenarios:
+- Remote central (Linode) + local clients (laptop/desktop)
+- Station device:
+	- offline check-in intake
+	- delayed flush to central
+	- block pull + confirmation propagation
+- Relay device:
+	- offline queue aggregation
+	- verified block propagation
+	- confirmation derivation from canonical chain
+- Mixed connectivity:
+	- one device online, others offline
+	- intermittent uplinks
+	- delayed confirmations
+- WebRTC P2P:
+	- multi-browser sync
+	- chunking + backpressure
+	- push-only mode validation (push queued without pulling blocks/queued)
+- Performance baselines:
+	- latency sensitivity
+	- payload size behavior
+	- pruning behavior under load
+
+Field-test artifacts:
+- repeatable test scripts/runbooks (manual steps)
+- expected results for each scenario (pass/fail criteria)
+- logs/metrics snapshots (sizes, counts, timings)
+
+---
+
+### Phase 6 — UX cleanup & optimization (Planned)
+Goal: improve usability without changing the trust model or protocol.
+
+Targets:
+- Clearer status surfaces:
+	- central connectivity vs mesh-only
+	- station/relay reachable indicators
+	- P2P connected/active status
+- Better error messaging:
+	- offline/online transitions
+	- missing keys / missing crisis metadata
+	- invalid blocks / signature failures
+- Storage/bandwidth optimizations:
+	- pruning strategy UX
+	- user-visible limits and defaults
+	- block/queue bandwidth negotiation (optional)
+- UI declutter:
+	- move dev-only tools behind explicit dev gates
+	- unify “Connections” UX for station/relay/P2P
+- Accessibility and mobile-friendly layout improvements
+
+---
+
+### Phase 7 — React Native migration (Planned)
+Goal: mobile-first deployment with device radios and cameras.
+
+Targets:
+- Native camera scanning (QR) for:
+	- addresses
+	- room codes
+	- key share codes
+- Better local networking primitives:
+	- Wi-Fi AP / hotspot support (platform-dependent)
+	- Bluetooth/Wi-Fi Direct exploration (optional)
+- Storage evolution:
+	- move large offline data from localStorage to IndexedDB/native storage
+- Background behavior policy:
+	- explicit user-controlled “mesh active” state
+	- no silent background syncing by default
+
+---
+
+### Phase 8 — Wizards, tutorials, documentation, demos (Planned)
+Goal: make the system adoptable by providers and understandable by users.
+
+Deliverables:
+- Crisis/policy creation wizard (provider)
+- Station provisioning flow (provider + field operator)
+- User onboarding:
+	- join code usage
+	- offline key exchange
+	- safe usage reminders (manual sync cadence)
+- Operational documentation:
+	- deployment guides (central/station/relay)
+	- security boundaries and threat model
+	- troubleshooting playbooks
+- Presentations/slides/demo scripts for stakeholders
+
+---
 
 ---
 
@@ -647,30 +920,5 @@ flowchart LR
 
 	P1 <--> P2
 	P2 <--> P3
-
----
-##### ^^^^^^ [end of diagrams] ^^^^^^
----
-
-### Phase 4: Enhancements
-- UX polish (threads, notifications, user preferences including offline connectivity mode selection)
-- pruning strategies for local block storage
-- station registration wizard (one-time codes for api keys)
-- revocation workflows and operational tooling (esp. RE: stations)
-- decommission wallets in case compromised or joining another active wallet (helps data analysts)
-- automating relay nodes
-- automating station 
-
-### Phase 5: Testing
-- UI flows to and fro features of the app
-- handling of corrupted blocks
-- handling of hash_relay conflicts
-- local storage management, pruning, manual purging
-- rate limiting under load and abuse (automating address bans?)
-- station relays
-- user relays
-- local database permissions
-- sandboxing
-- DoS, command injections, XSS, and malicious attacks
 
 ---
