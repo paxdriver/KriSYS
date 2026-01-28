@@ -4,7 +4,7 @@ import * as openpgp from 'openpgp'
 
 export class KeyManager {
     // Validate private key against the wallet's public key (ONLINE ONLY)
-    static async validatePrivateKey(familyId, privateKey) {
+    static async validatePrivateKey({ crisisId, familyId, privateKey}) {
         try {
             console.log('🔍 Validating private key for wallet...')
 
@@ -14,7 +14,13 @@ export class KeyManager {
             
             const { public_key } = await response.json()
             if (!public_key) throw new Error('No public key found for wallet')
-            disasterStorage.savePublicKey(familyId, public_key) // cache own private key if not already saved to localStorage
+            
+            // cache own private key if not already saved to localStorage
+       		disasterStorage.savePublicKey({
+                crisisId,
+                targetFamilyId: familyId,
+                publicKey: public_key,
+            })
 
             // Test message
             const testMessage = 'krisys_key_validation_test'
@@ -65,11 +71,11 @@ export class KeyManager {
         }
     }
 
-    static async getPrivateKey(familyId, passphrase) {
+    static async getPrivateKey({ crisisId, familyId, passphrase }) {
         console.log('Getting private key for message decryption...')
 
         // 1) Check localStorage first (offline-friendly)
-        const cachedKey = disasterStorage.getPrivateKey(familyId)
+        const cachedKey = disasterStorage.getPrivateKey({crisisId, familyId})
         if (cachedKey) {
             console.log('Found cached private key in local storage; using without re-validation.')
             return cachedKey
@@ -114,16 +120,17 @@ export class KeyManager {
             }
 
             // 4) Validate (online) and cache wallet public key during validation
-            const isValid = await KeyManager.validatePrivateKey(
+            const isValid = await KeyManager.validatePrivateKey({
+                crisisId,
                 familyId,
-                actualPrivateKey
-            )
+                privateKey: actualPrivateKey,
+            })
             if (!isValid) {
                 throw new Error('Retrieved private key does not match wallet')
             }
 
             // 5) Cache validated private key locally
-            disasterStorage.savePrivateKey(familyId, actualPrivateKey)
+            disasterStorage.savePrivateKey({ crisisId, familyId, privateKey: actualPrivateKey })
 
             // 6) Ensure wallet public key is cached (needed for offline send)
             // validatePrivateKey() already fetches/caches it, but we do this as a
@@ -192,16 +199,13 @@ export class KeyManager {
     }
 
     // Encrypt message for sending
-    static async encryptMessage(plaintext, recipientFamilyId, senderFamilyId) {
+    static async encryptMessage({ crisisId, plaintext, recipientFamilyId, senderFamilyId }) {
         try {
             console.log('🔐 KeyManager encrypting message...')
 
             // Get recipient's public key (from cache or server)
-            const publicKeyString = await KeyManager.getPublicKey(recipientFamilyId)
-
-            if (!publicKeyString) {
-                throw new Error('No public key found for recipient')
-            }
+            const publicKeyString = await KeyManager.getPublicKey({ crisisId, familyId: recipientFamilyId})
+            if (!publicKeyString) { throw new Error('No public key found for recipient') }
 
             // Encrypt
             const recipientKey = await openpgp.readKey({armoredKey: publicKeyString})
@@ -209,7 +213,7 @@ export class KeyManager {
             // Encrypy for both recipient AND for sender, so sender can read sent messages in their own dashboards
             const encryptionKeys = [recipientKey]
             if (senderFamilyId && senderFamilyId !== recipientFamilyId) {    // de-depulication if message is family-to-family member
-                const senderArmored = await KeyManager.getPublicKey(senderFamilyId)
+                const senderArmored = await KeyManager.getPublicKey({ crisisId, familyId: senderFamilyId})
                 const senderKey = await openpgp.readKey({ armoredKey: senderArmored })
                 encryptionKeys.push(senderKey)
             }
@@ -233,10 +237,10 @@ export class KeyManager {
     }
 
     // Get public key (from cache or server)
-    static async getPublicKey(familyId) {
+    static async getPublicKey({ crisisId, targetFamilyId}) {
         // Check cache first
-        const publicKeys = disasterStorage.getPublicKeys()
-        const publicKeyString = publicKeys[familyId]?.publicKey
+        const publicKeys = disasterStorage.getPublicKeys({crisisId}) // Get all locally cached public keys stored on this device
+        const publicKeyString = publicKeys[targetFamilyId]?.publicKey
 
         if (publicKeyString) {
             console.log('📋 Using cached public key for family:', familyId)
@@ -252,14 +256,17 @@ export class KeyManager {
         }
 
         const { public_key } = await response.json()
-
         if (public_key) {
-            disasterStorage.savePublicKey(familyId, public_key)
+            disasterStorage.savePublicKey({
+                crisisId,
+                targetFamilyId: familyId,
+                publicKey: public_key,
+            })
             console.log('💾 Cached public key for future use')
             
             return public_key
         }
 
-        throw new Error('No public key found for recipient family')
+        else { throw new Error('No public key found for recipient family') }    // 'else' is only for legibility
     }
 }

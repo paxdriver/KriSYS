@@ -47,7 +47,9 @@ export default function DevTools({ onRefresh }) {
     // Update queued message count periodically
     useEffect(() => {
         const updateQueueCount = () => {
-            const queue = disasterStorage.getMessageQueue()
+            const { crisisId, familyId } = getCtx()
+            if (!crisisId || !familyId) return setQueuedMessages(0)
+    		const queue = disasterStorage.getMessageQueue({ crisisId, familyId })
             setQueuedMessages(queue.filter((msg) => msg.status === 'pending').length)
         }
 
@@ -114,6 +116,22 @@ export default function DevTools({ onRefresh }) {
             throw new Error(`Admin request failed: ${error.message}`)
         }
     }
+    // Helper function for translating localStorage data share in a domain (scoped) crisis to match production data shape
+    const getCtx = () => {
+        const crisisId = disasterStorage.getCrisisMetadata()?.id || null
+        if (!crisisId) return { crisisId: null, familyId: null }
+
+        // DevTools runs in landing + wallet pages; get familyId from cached key if needed
+        const pk = localStorage.getItem('krisys_private_key')
+        let familyId = null
+        try {
+            familyId = pk ? JSON.parse(pk).familyId : null
+        } catch {
+            familyId = null
+        }
+
+        return { crisisId, familyId }
+    }
 
     // For testing loads of transactions without having to manually generate them all... use this function
     const generateTestMessages = ({
@@ -123,8 +141,10 @@ export default function DevTools({ onRefresh }) {
 	}) => {
 		const deviceId = disasterStorage.getDeviceId()
 		const familyId = disasterStorage.getCrisisMetadata()?.id || 'unknown'
+        const {crisisId, familyId} = getCtx()
 
 		let created = 0
+
 
 		for (let i = 0; i < count; i++) {
 			const relayHash =
@@ -144,7 +164,7 @@ export default function DevTools({ onRefresh }) {
 				queuedAt: Date.now(),
 			}
 
-			disasterStorage.queueMessage(msg)
+			disasterStorage.queueMessage( {crisisId, familyId, message: msg} )
 			created++
 		}
 
@@ -157,18 +177,10 @@ export default function DevTools({ onRefresh }) {
     }) => {
         const deviceId = disasterStorage.getDeviceId()
 
-        // ✅ Identify active wallet via cached private key
+        // Identify active wallet via cached private key
         const privateKeyEntry = localStorage.getItem('krisys_private_key')
         if (!privateKeyEntry) {
             alert('No unlocked wallet found')
-            return
-        }
-
-        let familyId
-        try {
-            familyId = JSON.parse(privateKeyEntry).familyId
-        } catch {
-            alert('Invalid cached private key data')
             return
         }
 
@@ -176,19 +188,17 @@ export default function DevTools({ onRefresh }) {
         try {
             // Must already be cached; offline-safe
             publicKey = await KeyManager.getPublicKey(familyId)
-        } catch {
-            alert(
-                'Public key not cached.\n\n' +
-                'Unlock the wallet once while online first.'
-            )
+        } 
+        catch {
+            alert( 'Public key not cached.\n\n' +
+                'Unlock the wallet once while online first.')
             return
         }
 
         let created = 0
 
         for (let i = 0; i < count; i++) {
-            const relayHash =
-                globalThis.crypto?.randomUUID?.() ??
+            const relayHash = globalThis.crypto?.randomUUID?.() ??
                 `${Date.now()}_${Math.random().toString(36).slice(2)}`
 
             const plaintext = `${prefix} message ${i + 1}/${count}`
@@ -201,12 +211,13 @@ export default function DevTools({ onRefresh }) {
                     familyId,
                     familyId
                 )
-            } catch (e) {
+            } 
+            catch (e) {
                 alert(`Encryption failed: ${e?.message || String(e)}`)
                 return
             }
-
-            disasterStorage.queueMessage({
+            const {crisisId, familyId} = getCtx()
+            const msg = {
                 timestamp_created: Math.floor(Date.now() / 1000),
                 station_address: `${familyId}-dev`,
                 message_data: encrypted,
@@ -217,8 +228,8 @@ export default function DevTools({ onRefresh }) {
                 origin_device: deviceId,
                 status: 'pending',
                 queuedAt: Date.now(),
-            })
-
+            }
+            disasterStorage.queueMessage({ crisisId, familyId, message: msg})
             created++
         }
 
@@ -341,7 +352,8 @@ export default function DevTools({ onRefresh }) {
             }
             delete window.KRISYS_OFFLINE_MODE
             alert('Network RESTORED - API calls will work normally')
-        } else {
+        }
+        else {
             // Going offline - intercept fetch calls (only override if not already overridden)
             if (!window.originalFetch) window.originalFetch = window.fetch
             window.KRISYS_OFFLINE_MODE = true

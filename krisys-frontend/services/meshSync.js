@@ -5,6 +5,7 @@ function normalizeBaseUrl(baseUrl) {
 	if (typeof baseUrl !== 'string') return null
 	const trimmed = baseUrl.trim()
 	if (!trimmed) return null
+	
 	return trimmed.endsWith('/') ? trimmed.slice(0, -1) : trimmed
 }
 
@@ -34,6 +35,7 @@ export async function syncWithMeshHost({
 	baseUrl,
 	label = 'MeshHost',
 	maxQueuedToConsider = 500,
+	familyId = null,
 }) {
     console.log(`baseUrl value in meshsync.js: ${baseUrl}`)
 	
@@ -43,6 +45,7 @@ export async function syncWithMeshHost({
 
 	if (!base) throw new Error(`${label}: invalid baseUrl`)
 
+	const walletFamilyId = typeof familyId === 'string' && familyId.trim() ? familyId.trim() : null
 	const crisis = disasterStorage.getCrisisMetadata()
 	const crisisId = crisis?.id
 	const blockPublicKey = crisis?.block_public_key
@@ -54,12 +57,13 @@ export async function syncWithMeshHost({
 		throw new Error( `${label}: missing block_public_key (fetch /crisis once online)`)
 	}
 
-	const queue = disasterStorage.getMessageQueue() || []
+	// If no wallet is unlocked, there is no queue to send.
+	const queue = walletFamilyId ? disasterStorage.getMessageQueue({ crisisId, familyId: walletFamilyId }) : []
 	const pending = queue
 		.filter((m) => (m?.status || 'pending') === 'pending' &&
 				typeof m?.relay_hash === 'string' &&
 				m.relay_hash.length > 0 &&
-				!disasterStorage.isMessageConfirmed(m.relay_hash)
+				!disasterStorage.isMessageConfirmed({ crisisId, relayHash: m.relay_hash })
             )
         .slice(0, maxQueuedToConsider)
 
@@ -73,16 +77,38 @@ export async function syncWithMeshHost({
 	})
 
 	if (inv?.confirmed && typeof inv.confirmed === 'object') {
-		disasterStorage.importSyncPayload({
-			queued: [],
-			confirmed: inv.confirmed,
-		})
+		if (walletFamilyId) {
+			disasterStorage.importSyncPayload({
+				crisisId,
+				familyId: walletFamilyId,
+				payload: { queued: [], confirmed: inv.confirmed },
+			})
+		} else {
+			// relay-only: update confirmed relays directly
+			for (const [relayHash, info] of Object.entries(inv.confirmed)) {
+				disasterStorage.markMessageConfirmed({
+					crisisId,
+					relayHash,
+					info,
+				})
+			}
+		}
 	}
 
 	const missingSet = new Set(Array.isArray(inv?.missing_relay_hashes) ? inv.missing_relay_hashes : [])
 
 	// 2) Sync (send only missing queued bodies)
-	const fullPayload = disasterStorage.exportSyncPayload()
+	const fullPayload = walletFamilyId ? disasterStorage.exportSyncPayload({crisisId, familyId: walletFamilyId}) : 
+		{
+			version: 1,
+			deviceId: disasterStorage.getDeviceId(),
+			crisisId,
+			generatedAt: Date.now(),
+			chain_tip: null,
+			blocks: disasterStorage.getBlockchain({crisisId}).slice(-10),	// DEV NOTE: number of blocks to tip should be set by the user
+			queued: [],
+			confirmed: {},
+		}
 	const reducedPayload = {
 		...fullPayload,
 		crisisId,
@@ -94,17 +120,15 @@ export async function syncWithMeshHost({
 	}
 
 	const hostPayload = await postJson(`${base}/mesh/sync`, reducedPayload)
-	await disasterStorage.importSyncPayloadAsync(hostPayload)
+	if (walletFamilyId){	// relays can sync and propagate messages without logging in, that's the reason for the check
+		await disasterStorage.importSyncPayloadAsync({ crisisId, familyId: walletFamilyId, payload: hostPayload})
+	}
 
 	return {
 		crisisId,
 		sentQueuedCount: reducedPayload.queued.length,
-		hostBlocksCount: Array.isArray(hostPayload?.blocks)
-			? hostPayload.blocks.length
-			: 0,
-		hostQueuedCount: Array.isArray(hostPayload?.queued)
-			? hostPayload.queued.length
-			: 0,
+		hostBlocksCount: Array.isArray(hostPayload?.blocks) ? hostPayload.blocks.length : 0,
+		hostQueuedCount: Array.isArray(hostPayload?.queued) ? hostPayload.queued.length : 0,
 		hostTip: hostPayload?.chain_tip || null,
 	}
 }

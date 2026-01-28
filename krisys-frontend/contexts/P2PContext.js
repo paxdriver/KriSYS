@@ -79,6 +79,14 @@ export function P2PProvider({ children }) {
 			return null
 		}
 	}, [])
+	const familyId = useMemo(() => {
+		try {
+			const pk = localStorage.getItem('krisys_private_key')
+			return pk ? JSON.parse(pk).familyId : null
+		} catch {
+			return null
+		}
+	}, [])
 
 	const canWebRTC = useMemo(() => {
 		return (
@@ -222,7 +230,7 @@ export function P2PProvider({ children }) {
 				}
 
 				try {
-					await disasterStorage.importSyncPayloadAsync(payload)
+					await disasterStorage.importSyncPayloadAsync({ crisisId, familyId, payload})
 					log(`imported peer payload (req id=${id})`)
 				} catch (e) {
 					log(`import failed (req id=${id}): ${e?.message || String(e)}`)
@@ -235,7 +243,7 @@ export function P2PProvider({ children }) {
 				}
 
 				try {
-					const myPayload = disasterStorage.exportSyncPayload()
+					const myPayload = disasterStorage.exportSyncPayload({crisisId, familyId})
 					sendJson({
 						t: 'krisys_mesh_sync_res_v1',
 						id,
@@ -265,8 +273,8 @@ export function P2PProvider({ children }) {
 				}
 
 				try {
-					await disasterStorage.importSyncPayloadAsync(payload)
-					log(`imported peer payload (res id=${id})`)
+					await disasterStorage.importSyncPayloadAsync({crisisId, familyId, payload})
+					log(`imported peer payload (res id=${id})`) 
 				} catch (e) {
 					log(`import failed (res id=${id}): ${e?.message || String(e)}`)
 				}
@@ -539,7 +547,7 @@ export function P2PProvider({ children }) {
 			const id = makeId()
 			pendingSyncIdsRef.current.add(id)
 
-			const payload = disasterStorage.exportSyncPayload()
+			const payload = disasterStorage.exportSyncPayload({crisisId, familyId})
 			sendJson({
 				t: 'krisys_mesh_sync_req_v1',
 				id,

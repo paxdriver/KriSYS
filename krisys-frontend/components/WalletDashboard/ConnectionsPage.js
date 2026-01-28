@@ -11,21 +11,28 @@ import P2PRoom from './P2PRoom'
 
 const DEFAULT_STATION_URL =	process.env.NEXT_PUBLIC_STATION_URL || 'http://localhost:6001'
 const DEFAULT_RELAY_URL = process.env.NEXT_PUBLIC_RELAY_URL || 'http://localhost:6002'
-
 const STORAGE_LAST_HOST_URL = 'krisys_mesh_last_host_url'
 const STORAGE_LAST_HOST_LABEL = 'krisys_mesh_last_host_label'
 
-function getLocalCounts() {
-	const blocks = disasterStorage.getBlockchain() || []
-	const queue = disasterStorage.getMessageQueue() || []
-	const confirmed = disasterStorage.getConfirmedRelays() || {}
+function getLocalCounts({ crisisId, familyId }) {
+	if (!crisisId) {
+		return {
+			blockCount: 0,
+			queuedPendingCount: 0,
+			confirmedCount: 0,
+		}
+	}
+
+	const blocks = disasterStorage.getBlockchain({ crisisId }) || []
+	const queue = crisisId && familyId ? disasterStorage.getMessageQueue({ crisisId, familyId }) : []
+	const confirmed = disasterStorage.getConfirmedRelays({ crisisId }) || {}
 
 	return {
 		blockCount: Array.isArray(blocks) ? blocks.length : 0,
-		queuedPendingCount: Array.isArray(queue) ?
-            queue.filter((m) => (m?.status || 'pending') === 'pending').length : 0,
-		confirmedCount: confirmed && typeof confirmed === 'object' ?
-            Object.keys(confirmed).length : 0,
+		queuedPendingCount: Array.isArray(queue) ? 
+			queue.filter((m) => (m?.status || 'pending') === 'pending').length : 0,
+		confirmedCount: confirmed && typeof confirmed === 'object' ? 
+			Object.keys(confirmed).length : 0,
 	}
 }
 
@@ -57,7 +64,10 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 	const [error, setError] = useState(null)
 
 	const crisis = useMemo(() => disasterStorage.getCrisisMetadata(), [])
-	const localCounts = useMemo(() => getLocalCounts(), [lastResult])
+	const crisisId = crisis?.id || null
+	const familyId = walletData?.family_id || null
+
+	const localCounts = useMemo(() => getLocalCounts({crisisId, familyId}), [lastResult, crisisId, familyId])
 
 	const setPreset = (url, label) => {
 		const nextUrl = typeof url === 'string' ? url.trim() : ''
@@ -106,7 +116,7 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 
             console.warn(`trimmedUrl in connectionspage: ${trimmedUrl}`)
 
-			const result = await syncWithMeshHost({ baseUrl: trimmedUrl, label, })
+			const result = await syncWithMeshHost({ baseUrl: trimmedUrl, label, familyId })
 
 			setLastResult({
 				...result,
@@ -201,7 +211,7 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 			const familyId = walletData?.family_id
 			if (!familyId) throw new Error('Missing wallet family_id')
 
-			const publicKeys = disasterStorage.getPublicKeys() || {}
+			const publicKeys = disasterStorage.getPublicKeys({ crisisId }) || {} // public keys are domain shared scope, not wallet scoped
 			const myKey = publicKeys[familyId]?.publicKey
 
 			if (!myKey) {
@@ -245,7 +255,7 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 			const parsed = parsePublicKeyShareCode(keyCodeInput)
 
 			// Store in cache so KeyManager.getPublicKey() works offline.
-			disasterStorage.savePublicKey(parsed.familyId, parsed.publicKeyArmored)
+			disasterStorage.savePublicKey({crisisId, targetFamilyId: parsed.familyId, publicKey: parsed.publicKeyArmored})
 
 			alert(`Saved public key for family: ${parsed.familyId}`)
 		} 

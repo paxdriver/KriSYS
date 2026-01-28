@@ -44,6 +44,49 @@ class DisasterStorage {
 
     }
 
+    // global pointer so we can find the active crisis offline
+    ACTIVE_CRISIS_ID_KEY = 'krisys:activeCrisisId'
+
+    // Namespacing crises on device cache -----------
+	_requireCrisisId(crisisId) {
+		if (typeof crisisId !== 'string' || !crisisId.trim()) {
+			throw new Error('disasterStorage: crisisId is required')
+		}
+		return crisisId.trim()
+	}
+	_requireFamilyId(familyId) {
+		if (typeof familyId !== 'string' || !familyId.trim()) {
+			throw new Error('disasterStorage: familyId is required')
+		}
+		return familyId.trim()
+	}
+    _sharedKey({ crisisId, bucket }) {
+        return this._buildKey({ crisisId, domainType: 'shared', bucket })
+    }
+	_getJson(key, fallback) {
+		const raw = localStorage.getItem(key)
+		if (!raw) return fallback
+		try {
+			return JSON.parse(raw)
+		} catch {
+			return fallback
+		}
+	}
+	_setJson(key, value) {
+		localStorage.setItem(key, JSON.stringify(value))
+	}
+    // -----------------------------
+
+	setActiveCrisisId(crisisId) {
+		const cid = this._requireCrisisId(crisisId)
+		localStorage.setItem(this.ACTIVE_CRISIS_ID_KEY, cid)
+	}
+
+	getActiveCrisisId() {
+		const cid = localStorage.getItem(this.ACTIVE_CRISIS_ID_KEY)
+		return typeof cid === 'string' && cid.trim() ? cid.trim() : null
+	}
+
     // DEV NOTE: Consider changing this to a custom hook to allow re-renders throughout the app on custom event emissions if needed in other parts of the app
     _emit(eventName, detail = undefined) {
         try {
@@ -78,11 +121,25 @@ class DisasterStorage {
         }
     }
 
+	// krisys:<crisisId>:domain:<domainType>:<bucket>
+	_buildKey({ crisisId, domainType, bucket }) {
+		const cid = this._requireCrisisId(crisisId)
+		if (typeof domainType !== 'string' || !domainType.trim()) {
+			throw new Error('disasterStorage: domainType is required')
+		}
+		if (typeof bucket !== 'string' || !bucket.trim()) {
+			throw new Error('disasterStorage: bucket is required')
+		}
+		return `krisys:${cid}:domain:${domainType}:${bucket.trim()}`
+	}
+
+
     // Sanitize and bound an incoming sync payload (queued + confirmed)
-    sanitizeSyncPayload(payload) {
-        if (!payload || typeof payload !== 'object') {
-            return { queued: [], confirmed: {} }
-        }
+    sanitizeSyncPayload({ crisisId, familyId, payload }) {
+        // require explicit context
+		if (!payload || typeof payload !== 'object') {
+			return { queued: [], confirmed: {} }
+		}
 
         const rawQueued = Array.isArray(payload.queued)
             ? payload.queued
@@ -99,12 +156,12 @@ class DisasterStorage {
         const perOriginCount = {}
 
         // Build a quick lookup set of existing relay_hash values in our queue
-        const localQueue = this.getMessageQueue()
-        const localRelayHashes = new Set(
-            localQueue
-                .map((m) => m && m.relay_hash)
-                .filter((rh) => typeof rh === 'string' && rh.length > 0)
-        )
+		const localQueue = this.getMessageQueue({ crisisId, familyId })
+        // use namespaced queue + confirmed
+		const localRelayHashes = new Set(
+			localQueue.map((m) => m && m.relay_hash)
+				.filter((rh) => typeof rh === 'string' && rh.length > 0)
+		    )
 
         // Helper to check string length
         const isString = (v) => typeof v === 'string'
@@ -113,12 +170,10 @@ class DisasterStorage {
 
         // Sanitize queued messages
         for (const msg of rawQueued) {
-            if (!msg ||
-                typeof msg !== 'object' ||
-                sanitizedQueued.length >= this.MAX_QUEUED_PER_PAYLOAD
-            ) {
-                break
-            }
+            if (!msg || typeof msg !== 'object' || 
+                sanitizedQueued.length >= this.MAX_QUEUED_PER_PAYLOAD) {
+                    break
+                }
 
             const relayHash = msg.relay_hash
             if (!isString(relayHash) || !relayHash.trim()) {
@@ -126,9 +181,7 @@ class DisasterStorage {
             }
 
             // Skip if already confirmed locally
-            if (this.isMessageConfirmed(relayHash)) {
-                continue
-            }
+			if (this.isMessageConfirmed({ crisisId, relayHash })) continue
 
             // Skip if we already have this relay in our queue
             if (localRelayHashes.has(relayHash)) {
@@ -136,13 +189,10 @@ class DisasterStorage {
             }
 
             // Per-origin device quota
-            const origin = isString(msg.origin_device)
-                ? msg.origin_device
-                : 'unknown'
+            const origin = isString(msg.origin_device) ? 
+                msg.origin_device : 'unknown'
             perOriginCount[origin] = (perOriginCount[origin] || 0) + 1
-            if (perOriginCount[origin] > this.MAX_PER_ORIGIN) {
-                continue
-            }
+            if (perOriginCount[origin] > this.MAX_PER_ORIGIN) continue
 
             // Basic type/shape checks
             const ts = Number(msg.timestamp_created)
@@ -167,16 +217,13 @@ class DisasterStorage {
 
             // Ensure related_addresses is an array, filter out invalid entries,
             // limit to MAX_ADDRESSES_PER_TX, and truncate each address to MAX_ADDRESS_LENGTH
-            let related = Array.isArray(msg.related_addresses)
-                ? msg.related_addresses
-                : []
-            related = related
-                .filter((a) => isString(a) && a.length > 0)
+            let related = Array.isArray(msg.related_addresses) ? 
+                msg.related_addresses : []
+            related = related.filter((a) => isString(a) && a.length > 0)
                 .slice(0, this.MAX_ADDRESSES_PER_TX)
                 .map((a) =>
-                    a.length > this.MAX_ADDRESS_LENGTH
-                        ? a.slice(0, this.MAX_ADDRESS_LENGTH)
-                        : a
+                    a.length > this.MAX_ADDRESS_LENGTH ? 
+                        a.slice(0, this.MAX_ADDRESS_LENGTH) : a
                     )
 
             const normalized = {
@@ -239,74 +286,73 @@ class DisasterStorage {
     }
 
     // DEV NOTE: NOT yet used
-    deletePrivateKey(familyId) {
+    deletePrivateKey({crisisId, familyId}) {
         // DEV NOTE: familyId might be needed if one device shared by a few families,
         // but NOT at public device stations where users log in to public devices.
-        console.log('Deleting invalid private key from localStorage')
-        localStorage.removeItem(this.STORAGE_KEYS.PRIVATE_KEY)
+        const key = this._walletKey({
+			crisisId,
+			familyId,
+			bucket: 'private_key',
+		})
+        console.log('Deleting invalid private key from localStorage', key)
+		localStorage.removeItem(key)
     }
 
     // PRIVATE KEY MANAGEMENT - Store locally for offline access
-    savePrivateKey(familyId, privateKey) {
-        console.log('Storing private key locally for offline access')
-        const keyData = {
-            familyId: familyId,
-            privateKey: privateKey,
-            storedAt: Date.now(),
-            // Add device identifier for multi-device sync later
-            deviceId: this.getDeviceId(),
-        }
+	savePrivateKey({ crisisId, familyId, targetFamilyId, privateKey }) {
+		const key = this._walletKey({
+			crisisId,
+			familyId,
+			bucket: 'private_key',
+		})
 
-        localStorage.setItem(
-            this.STORAGE_KEYS.PRIVATE_KEY,
-            JSON.stringify(keyData)
-        )
-        console.log('Private key stored locally - user can read messages offline!')
-    }
+		this._setJson(key, {
+			familyId,
+			privateKey,
+			storedAt: Date.now(),
+			deviceId: this.getDeviceId(),
+		})
+	}
 
-    getPrivateKey(familyId) {
-        const stored = localStorage.getItem(this.STORAGE_KEYS.PRIVATE_KEY)
-        if (!stored) {
-            console.log('No private key found in local storage')
-            return null
-        }
-
-        const keyData = JSON.parse(stored)
-        if (keyData.familyId !== familyId) {
-            console.log('Stored key is for different family')
-            return null
-        }
-
-        console.log('Retrieved private key from local storage')
-        return keyData.privateKey
-    }
+	getPrivateKey({ crisisId, familyId }) {
+		const key = this._walletKey({
+			crisisId,
+			familyId,
+			bucket: 'private_key',
+		})
+		const obj = this._getJson(key, null)
+		if (!obj || typeof obj.privateKey !== 'string') return null
+		
+        return obj.privateKey
+	}
 
     // WALLET DATA STORAGE - per-family cached wallet metadata for offline use
     saveWalletData(familyId, walletData) {
         console.log('Storing wallet metadata locally for offline access')
-        const stored = localStorage.getItem(this.STORAGE_KEYS.WALLET_DATA)
-        const map = stored ? JSON.parse(stored) : {}
+		const key = this._walletKey({
+			crisisId,
+			familyId,
+			bucket: 'wallet_data',
+		})
 
-        map[familyId] = {
-            data: walletData,
-            storedAt: Date.now(),
-        }
-
-        localStorage.setItem(
-            this.STORAGE_KEYS.WALLET_DATA,
-            JSON.stringify(map)
-        )
+		this._setJson(key, {
+			data: walletData,
+			storedAt: Date.now(),
+		})
     }
 
     getWalletData(familyId) {
-        const stored = localStorage.getItem(this.STORAGE_KEYS.WALLET_DATA)
-        if (!stored) return null
-
         try {
-            const map = JSON.parse(stored)
-            const entry = map[familyId]
-            return entry ? entry.data : null
-        } catch (e) {
+            const key = this._walletKey({
+                crisisId,
+                familyId,
+                bucket: 'wallet_data',
+            })
+
+            const obj = this._getJson(key, null)
+            return obj?.data || null
+        } 
+        catch (e) {
             console.error('Failed to parse cached wallet data:', e)
             return null
         }
@@ -318,53 +364,45 @@ class DisasterStorage {
             // Get the old crisis metadata before we write the new one
             const prev = this.getCrisisMetadata()
 
-            const next = {
-                id: meta.id || meta.crisis_id || null,
-                name: meta.name || null,
-                organization: meta.organization || null,
-                contact: meta.contact || null,
-                description: meta.description || null,
-                created_at: meta.created_at || null,
-                // Backend may expose this as block_public_key or public_key; normalize here
+			const next = {
+				id: meta.id || meta.crisis_id || null,
+				name: meta.name || null,
+				organization: meta.organization || null,
+				contact: meta.contact || null,
+				description: meta.description || null,
+				created_at: meta.created_at || null,
+				// Backend may expose this as block_public_key or public_key; normalize here
                 block_public_key: meta.block_public_key || meta.public_key || null,
-                storedAt: Date.now(),
-            }
+				storedAt: Date.now(),
+			}
             
-            // DEV NOTE: IN PROD WE'LL WANT TO ALLOW SUBSCRIBING TO MULTIPLE CRISES,
-            //          THIS WILL NEED TO BE NAMESPACED TO ALLOW FOR THAT
-            // If crisis changes, wipe all crisis-scoped caches (queue/blocks/keys/etc.)
-            // so we never mix data across different trust anchors.
-            if (prev?.id && next.id && prev.id !== next.id) {
-                console.warn(
-                    `Crisis changed ${prev.id} -> ${next.id}. ` +
-                        "Clearing local crisis-scoped caches."
-                )
-                this._clearCrisisScopedData()
-            }
+			if (!next.id) throw new Error('saveCrisisMetadata: missing crisis id')
 
-            localStorage.setItem(
-                this.STORAGE_KEYS.CRISIS_METADATA,
-                JSON.stringify(next)
-            )
-        } 
+			// set global active pointer for offline bootstrapping
+			this.setActiveCrisisId(next.id)
+
+			// store crisis metadata in shared domain under this crisisId
+			const key = this._sharedKey({
+				crisisId: next.id,
+				bucket: 'crisis_metadata',
+			})
+			this._setJson(key, next)
+        }
         catch (e) {
             console.error('Failed to save crisis metadata:', e)
         }
     }
-    getCrisisMetadata() {
-        const stored = localStorage.getItem(
-            this.STORAGE_KEYS.CRISIS_METADATA
-        )
-        if (!stored) return null
-        
-        try {
-            return JSON.parse(stored)
-        } 
-        catch (e) {
-            console.error('Failed to parse crisis metadata:', e)
-            return null
-        }
-    }
+	getCrisisMetadata({ crisisId } = {}) {
+		// allow explicit crisisId, else fall back to active pointer
+		const cid =
+			typeof crisisId === 'string' && crisisId.trim() ? 
+                crisisId.trim() : this.getActiveCrisisId()
+
+		if (!cid) return null
+
+		const key = this._sharedKey({ crisisId: cid, bucket: 'crisis_metadata' })
+		return this._getJson(key, null)
+	}
 
     // BLOCKCHAIN STORAGE - Store entire blockchain locally
     // DEV / TODO: battery-saving + pruning strategy
@@ -375,38 +413,37 @@ class DisasterStorage {
           for new sync payloads and blocks. That scanning logic will live
           in higher-level hooks/services, but it will use this storage
           (BLOCKCHAIN + WALLET_DATA + MESSAGE_QUEUE) as its backing store.
+        
         - Add pruning rules so we do NOT keep the full chain forever on
           each device. Examples:
             * Only keep the last N blocks or last M days.
             * Apply a size budget per device (e.g. max X MB for chain data).
             * Prefer keeping blocks that contain this wallet’s own
               transactions over totally unrelated history.
-        Right now we:
+        
+              Right now we:
             - dump the full canonical chain into localStorage,
             - never prune it,
-            - and do not differentiate per-crisis or per-wallet.
-        This is acceptable for small dev chains, but MUST be revisited
-        before production / large deployments.
+        
+            This is acceptable for small dev chains, but MUST be revisited before production / large deployments.
     */
-    saveBlockchain(blockchain) {
-        console.log('Storing blockchain locally for offline access')
-        localStorage.setItem(
-            this.STORAGE_KEYS.BLOCKCHAIN,
-            JSON.stringify({
-                blocks: blockchain,
-                lastUpdated: Date.now(),
-            })
-        )
-    }
 
-    getBlockchain() {
-        const stored = localStorage.getItem(this.STORAGE_KEYS.BLOCKCHAIN)
-        if (!stored) return []
+    // require crisisId explicitly
+	saveBlockchain({ crisisId, blocks }) {
+		const key = this._sharedKey({ crisisId, bucket: 'blocks' })
 
+		this._setJson(key, {
+			blocks,
+			lastUpdated: Date.now(),
+		})
+	}
+
+    getBlockchain({ crisisId }) {
         try {
-            const parsed = JSON.parse(stored)
-            return parsed.blocks || []
-        } 
+            const key = this._sharedKey({ crisisId, bucket: 'blocks' })
+            const parsed = this._getJson(key, null)
+            return parsed?.blocks || []
+        }
         catch (e) {
             console.error('Failed to parse cached blockchain:', e)
             return []
@@ -414,45 +451,67 @@ class DisasterStorage {
     }
 
     // MESSAGE QUEUE - Store messages to send when connectivity returns
-    queueMessage(message) {
-        console.log('Queueing message for transmission when online')
-        const queue = this.getMessageQueue()
-        queue.push({
-            ...message,
-            queuedAt: Date.now(),
-            attempts: 0,
-            status: 'pending',
-        })
-        localStorage.setItem(
-            this.STORAGE_KEYS.MESSAGE_QUEUE,
-            JSON.stringify(queue)
-        )
-        // Fire an event to re-render / memoized function update
-        this._emit(this.EVENTS.QUEUE_UPDATED, { source: 'queueMessage' })
-    }
+	queueMessage({ crisisId, familyId, message }) {
+		const key = this._walletKey({
+			crisisId,
+			familyId,
+			bucket: 'queue',
+		})
 
-    getMessageQueue() {
-        const stored = localStorage.getItem(this.STORAGE_KEYS.MESSAGE_QUEUE)
-        return stored ? JSON.parse(stored) : []
-    }
+		const queue = this._getJson(key, [])
+
+		queue.push({
+			...message,
+			queuedAt: Date.now(),
+			attempts: 0,
+			status: 'pending',
+		})
+
+		this._setJson(key, queue)
+        // Fire an event to trigger re-render of memoized values
+		this._emit(this.EVENTS.QUEUE_UPDATED, { source: 'queueMessage' }) 
+	}
+
+	getMessageQueue({ crisisId, familyId }) {
+		const key = this._walletKey({
+			crisisId,
+			familyId,
+			bucket: 'queue',
+		})
+		return this._getJson(key, [])
+	}
+
+	// add a setter so call sites (like processQueue) never write raw keys
+	setMessageQueue({ crisisId, familyId, queue }) {
+		const key = this._walletKey({
+			crisisId,
+			familyId,
+			bucket: 'queue',
+		})
+		this._setJson(key, Array.isArray(queue) ? queue : [])
+		this._emit(this.EVENTS.QUEUE_UPDATED, { source: 'setMessageQueue' })
+	}
 
     // PUBLIC KEYS - Store other wallets' keys for offline encryption
-    savePublicKey(familyId, publicKey) {
-        console.log('🔐 Storing public key for offline encryption')
-        const keys = this.getPublicKeys()
-        keys[familyId] = {
-            publicKey: publicKey,
+    savePublicKey({ crisisId, targetFamilyId, publicKey }) {
+        const key = this._sharedKey({
+            crisisId,
+            bucket: 'public_keys',
+        })
+
+        const keys = this._getJson(key, {})
+        keys[targetFamilyId] = {
+            publicKey,
             storedAt: Date.now(),
         }
-        localStorage.setItem(
-            this.STORAGE_KEYS.PUBLIC_KEYS,
-            JSON.stringify(keys)
-        )
+        this._setJson(key, keys)
     }
-
-    getPublicKeys() {
-        const stored = localStorage.getItem(this.STORAGE_KEYS.PUBLIC_KEYS)
-        return stored ? JSON.parse(stored) : {}
+    getPublicKeys({ crisisId }) {
+        const key = this._sharedKey({
+            crisisId,
+            bucket: 'public_keys',
+        })
+        return this._getJson(key, {})
     }
 
     // DEVICE MANAGEMENT
@@ -467,40 +526,43 @@ class DisasterStorage {
     }
 
     // CONFIRMED MESSAGES (by relay_hash) -----------------------------
-    getConfirmedRelays() {
-        const stored = localStorage.getItem(this.STORAGE_KEYS.CONFIRMED_RELAYS)
-        return stored ? JSON.parse(stored) : {}
-    }
+	getConfirmedRelays({ crisisId }) {
+		const key = this._sharedKey({ crisisId, bucket: 'confirmed_relays' })
+		return this._getJson(key, {})
+	}
 
-    isMessageConfirmed(relayHash) {
-        if (!relayHash) return false
-        const confirmed = this.getConfirmedRelays()
-        return !!confirmed[relayHash]
-    }
+	isMessageConfirmed({ crisisId, relayHash }) {
+		if (!relayHash) return false
+		const confirmed = this.getConfirmedRelays({ crisisId })
+		return !!confirmed[relayHash]
+	}
 
-    markMessageConfirmed(relayHash, info = {}) {
-        if (!relayHash) return
-        const confirmed = this.getConfirmedRelays()
-        confirmed[relayHash] = {
-            // confirmedAt: info.timestampPosted * 1000,
-            confirmedAt: typeof info.timestampPosted === 'number' ? 
-                info.timestampPosted * 1000 : Date.now(),
-            ...info,
-        }
-        localStorage.setItem(
-            this.STORAGE_KEYS.CONFIRMED_RELAYS,
-            JSON.stringify(confirmed)
-        )
+	markMessageConfirmed({ crisisId, relayHash, info = {} }) {
+		if (!relayHash) return
+
+		const key = this._sharedKey({ crisisId, bucket: 'confirmed_relays' })
+		const confirmed = this._getJson(key, {})
+
+		confirmed[relayHash] = {
+			confirmedAt:
+				typeof info.timestampPosted === 'number'
+					? info.timestampPosted * 1000
+					: Date.now(),
+			...info,
+		}
+
+		this._setJson(key, confirmed)
         // Fire an event to trigger re-render of memoized values
-        this._emit(this.EVENTS.CONFIRMED_UPDATED, { source: 'markMessageConfirmed'})
-
-        console.log(`Marked relay as confirmed: ${relayHash}`)
-    }
+		this._emit(this.EVENTS.CONFIRMED_UPDATED, {
+			source: 'markMessageConfirmed',
+		})
+	}
 
     // Remove from the local queue any messages whose relay_hash has been marked as confirmed. Returns the new queue array.
-    pruneConfirmedFromQueue() {
-        const queue = this.getMessageQueue()
-        const confirmed = this.getConfirmedRelays()
+    // fully namespaced, wallet-domain queue + shared confirmed relays
+    pruneConfirmedFromQueue({crisisId, familyId}) {
+        const queue = this.getMessageQueue({ crisisId, familyId})
+        const confirmed = this.getConfirmedRelays( {crisisId} )
 
         if (!queue.length || !Object.keys(confirmed).length) {
             return queue
@@ -509,19 +571,18 @@ class DisasterStorage {
         const filtered = queue.filter((msg) => {
             const rh = msg.relay_hash
 
-            // Legacy/sent entries without relay_hash can be safely dropped
-            if (!rh && msg.status === 'sent') return false
-
-            // Normal path: to drop queued messages if this messaged was successfully relayed to blockchain
+            // drop queued messages if this messaged was successfully relayed to blockchain
             if (!rh) return true // keep items without relay_hash
 
+            // drop messages if they're confirmed on the blockchain
             return !confirmed[rh]
         })
 
-        localStorage.setItem(
-            this.STORAGE_KEYS.MESSAGE_QUEUE,
-            JSON.stringify(filtered)
-        )
+        this.setMessageQueue({
+            crisisId,
+            familyId,
+            queue: filtered,
+        })
 
         // Fire event to trigger re-render
         this._emit(this.EVENTS.QUEUE_UPDATED, { source: 'pruneConfirmedFromQueue' })
@@ -533,12 +594,13 @@ class DisasterStorage {
     }
 
     // Syncing messages between blockchain diffs, used with pruneConfirmedFromQueue
-    syncConfirmedFromTransactions(transactions) {
+    // fully namespaced, shared confirmed relays + wallet-domain queue
+    syncConfirmedFromTransactions( {crisisId, familyId, transactions} ) {
         if (!Array.isArray(transactions) || transactions.length === 0) {
             return
         }
 
-        const confirmed = this.getConfirmedRelays()
+        const confirmed = this.getConfirmedRelays({crisisId})
         let updated = false
 
         for (const tx of transactions) {
@@ -556,15 +618,13 @@ class DisasterStorage {
         }
 
         if (updated) {
-            localStorage.setItem(
-                this.STORAGE_KEYS.CONFIRMED_RELAYS,
-                JSON.stringify(confirmed)
-            )
-            
+            // write back to shared-domain confirmed relays
+            const key = this._sharedKey({ crisisId, bucket: 'confirmed_relays' })
+		this._setJson(key, confirmed)            
             // Fire event to trigger re-render
             this._emit(this.EVENTS.CONFIRMED_UPDATED, {source: 'syncConfirmedFromTransactions',})
 
-            this.pruneConfirmedFromQueue()
+            this.pruneConfirmedFromQueue({crisisId, familyId})
         }
     }
 
@@ -580,59 +640,60 @@ class DisasterStorage {
             - we can extend it as we add features (battery-saving modes,
               pruning policies, partial chain segments, etc.).
     */
-    exportSyncPayload() {
-            const queue = this.getMessageQueue()
-            const confirmed = this.getConfirmedRelays()
+    exportSyncPayload( { crisisId, familyId }) {
+		const queue = this.getMessageQueue({ crisisId, familyId })
+		const confirmed = this.getConfirmedRelays({ crisisId })
 
-            // Only pending messages that are not already confirmed
-            let queuedForSync = queue.filter((msg) => msg.status === 'pending' &&
-                !this.isMessageConfirmed(msg.relay_hash))
+        // Only pending messages that are not already confirmed
+        let queuedForSync = queue.filter((msg) => msg.status === 'pending' &&
+                !this.isMessageConfirmed({ crisisId, relayHash: msg.relay_hash })
+            )
 
-            // Bound queued payload size (prevents huge P2P messages)
-		    queuedForSync = queuedForSync.slice(0, this.MAX_QUEUED_PER_PAYLOAD)
-            // Bound confirmed map size deterministically (sorted keys)
-            const confirmedKeys = Object.keys(confirmed || {}).sort()
-            const limitedConfirmed = {}
-            for (let i = 0; i < confirmedKeys.length; i++) {
-                if (i >= this.MAX_CONFIRMED_PER_PAYLOAD) break
-                const k = confirmedKeys[i]
-                limitedConfirmed[k] = confirmed[k]
-            }
-            // DEV NOTE: WebRTC messages can be large, but you don’t want to depend on that. This bounds risk up-front
-
-
-            // Crisis metadata (if we have it) for sanity-checking that peers are syncing the same crisis / blockchain.
-            const crisisMeta = this.getCrisisMetadata()
-
-            // Look at our locally cached blockchain to expose a simple "tip" pointer and a small suffix of canonical blocks.
-            const blocks = this.getBlockchain() || []
-            const lastBlock = Array.isArray(blocks) && blocks.length > 0 ? 
-                blocks[blocks.length - 1] : null
-
-            // Share only the last N canonical blocks to limit payload size. 
-            // later we can make this configurable (battery / storage policy).
-            const MAX_BLOCKS_SHARE = 10
-            const blocksToShare =
-                Array.isArray(blocks) && blocks.length > 0 ? 
-                    blocks.slice(-MAX_BLOCKS_SHARE) : []
-
-            return {
-                version: 1,
-                deviceId: this.getDeviceId(),
-                crisisId: crisisMeta ? crisisMeta.id : null,
-                generatedAt: Date.now(),
-                chain_tip: lastBlock
-                    ? {
-                        block_index: lastBlock.block_index,
-                        hash: lastBlock.hash,
-                        previous_hash: lastBlock.previous_hash
-                    }
-                    : null,
-                blocks: blocksToShare,
-                queued: queuedForSync,
-                confirmed: limitedConfirmed,
-            }
+        // Bound queued payload size (prevents huge P2P messages)
+        queuedForSync = queuedForSync.slice(0, this.MAX_QUEUED_PER_PAYLOAD)
+        // Bound confirmed map size deterministically (sorted keys)
+        const confirmedKeys = Object.keys(confirmed || {}).sort()
+        const limitedConfirmed = {}
+        for (let i = 0; i < confirmedKeys.length; i++) {
+            if (i >= this.MAX_CONFIRMED_PER_PAYLOAD) break
+            const k = confirmedKeys[i]
+            limitedConfirmed[k] = confirmed[k]
         }
+        // DEV NOTE: WebRTC messages can be large, but you don’t want to depend on that. This bounds risk up-front
+
+
+        // Crisis metadata (if we have it) for sanity-checking that peers are syncing the same crisis / blockchain.
+        const crisisMeta = this.getCrisisMetadata({ crisisId })
+
+        // Look at our locally cached blockchain to expose a simple "tip" pointer and a small suffix of canonical blocks.
+        const blocks = this.getBlockchain({ crisisId }) || []
+        const lastBlock = Array.isArray(blocks) && blocks.length > 0 ? 
+            blocks[blocks.length - 1] : null
+
+        // Share only the last N canonical blocks to limit payload size. 
+        // later we can make this configurable (battery / storage policy).
+        const MAX_BLOCKS_SHARE = 10
+        const blocksToShare =
+            Array.isArray(blocks) && blocks.length > 0 ? 
+                blocks.slice(-MAX_BLOCKS_SHARE) : []
+
+		return {
+			version: 1,
+			deviceId: this.getDeviceId(),
+			crisisId: crisisMeta ? crisisMeta.id : crisisId,
+			generatedAt: Date.now(),
+			chain_tip: lastBlock
+				? {
+						block_index: lastBlock.block_index,
+						hash: lastBlock.hash,
+						previous_hash: lastBlock.previous_hash,
+					}
+				: null,
+			blocks: blocksToShare,
+			queued: queuedForSync,
+			confirmed: limitedConfirmed,
+		}
+    }
 
     /*  Merge another device's sync payload into local storage.
             - Incorporates their confirmed relays
@@ -640,36 +701,10 @@ class DisasterStorage {
             - Then prunes any messages that are now confirmed
     */
 
-    // replaces "importSyncPayload" for verifying signed blocks, merging them when imported from offline, etc.
-    async importSyncPayloadAsync(payload) {
-
-        /* What this code is doing?:
-            - First it does exactly what the current import does: bring in new queued messages + confirmed relay hashes with dedupe and bounds.
-            - Then it attempts to import/append canonical blocks that came in via the payload.
-            - Those blocks are only accepted if their signature verifies using your locally cached crisis `block_public_key`.
-            - And (in your current `_mergeBlocksFromPayload`) only blocks that extend your current local tip are appended.
-            - Then it looks at transactions from the newest blocks and says:
-            - “If any of these on-chain transactions contain `relay_hash` values that match queued messages, those queued messages are now confirmed and can be pruned.”
-        */
-
-        // 1) Merge queued + confirmed using your existing safe logic
-        this.importSyncPayload(payload)
-
-        // 2) Merge blocks (signature-verified) into our cached blockchain
-        await this._mergeBlocksFromPayload(payload)
-
-        // 3) After merging blocks, treat any relay_hash found in those canonical
-        //    transactions as confirmed, and prune the local queue.
-        const blocks = this.getBlockchain() || []
-        const recentBlocks = blocks.slice(-25) // small window; adjust later
-        const recentTxs = recentBlocks.flatMap((b) => b.transactions || [])
-        this.syncConfirmedFromTransactions(recentTxs)
-    }   
     // DEV NOTE: importSyncPayload will be deprecated as offline transaction handling is fleshed out in importSyncPayloadAsync
-    importSyncPayload(payload) { 
+    importSyncPayload({ crisisId, familyId, payload}) { 
         // Sanitize and bound incoming payload first
-        const { queued: incomingQueued, confirmed: incomingConfirmed } =
-            this.sanitizeSyncPayload(payload)
+        const { queued: incomingQueued, confirmed: incomingConfirmed } = this.sanitizeSyncPayload({ crisisId, familyId, payload })
 
         if (!Array.isArray(incomingQueued) || typeof incomingConfirmed !== 'object') {
             return
@@ -684,7 +719,7 @@ class DisasterStorage {
                 required, but keeps deterministic-ish data).
             - Writes back the merged CONFIRMED_RELAYS if anything changed.
         */
-        const localConfirmed = this.getConfirmedRelays()
+        const localConfirmed = this.getConfirmedRelays({ crisisId })
         let confirmedChanged = false
 
         for (const [relayHash, info] of Object.entries(incomingConfirmed)) {
@@ -698,7 +733,7 @@ class DisasterStorage {
             } 
             else {
                 // If both have entries, keep the earlier confirmedAt if provided
-                const existingTime = existing.confirmedAt || Infinity
+                const existingTime = existing.confirmedAt || Infinity   // DEV NOTE: inspect this for logic before production. Not confident in this code but busy refactoring, don't wanna get sidetracked
                 const incomingTime = info.confirmedAt || existingTime
                 if (incomingTime < existingTime) {
                     localConfirmed[relayHash] = {
@@ -711,10 +746,8 @@ class DisasterStorage {
         }
 
         if (confirmedChanged) {
-            localStorage.setItem(
-                this.STORAGE_KEYS.CONFIRMED_RELAYS,
-                JSON.stringify(localConfirmed)
-            )
+            const key = this._sharedKey({ crisisId, bucket: 'confirmed_relays'})
+            this._setJson(key, localConfirmed)
             // Fire event to trigger re-render
             this._emit(this.EVENTS.CONFIRMED_UPDATED, { source: 'importSyncPayload' })
         }
@@ -727,7 +760,7 @@ class DisasterStorage {
                 - Otherwise, appends it to your queue.
             - Saves updated queue if anything changed.
         */
-        let queue = this.getMessageQueue()
+        let queue = this.getMessageQueue( {crisisId, familyId} )
         let queueChanged = false
 
         for (const msg of incomingQueued) {
@@ -735,17 +768,11 @@ class DisasterStorage {
             if (!relayHash) continue
 
             // Skip if already confirmed (locally or after merge above)
-            if (this.isMessageConfirmed(relayHash)) {
-                continue
-            }
+            if (this.isMessageConfirmed({ crisisId, relayHash })) continue
 
             // Skip if we already have this relay in our queue
-            const already = queue.find(
-                (existing) => existing.relay_hash === relayHash
-            )
-            if (already) {
-                continue
-            }
+            const already = queue.find( existing => existing.relay_hash === relayHash )
+            if (already) continue
 
             // msg is already normalized by sanitizeSyncPayload
             queue.push(msg)
@@ -753,17 +780,49 @@ class DisasterStorage {
         }
 
         if (queueChanged) {
-            localStorage.setItem(
-                this.STORAGE_KEYS.MESSAGE_QUEUE,
-                JSON.stringify(queue)
-            )
+            this.setMessageQueue({
+                crisisId,
+                familyId,
+                queue,
+            })
             // Fire event to trigger re-render
             this._emit(this.EVENTS.QUEUE_UPDATED, { source: 'importSyncPayload' })
         }
 
         // 3) Final cleanup: remove any now-confirmed items from queue
-        this.pruneConfirmedFromQueue()
+        this.pruneConfirmedFromQueue({crisisId, familyId})
     }
+
+    // replaces "importSyncPayload" for verifying signed blocks, merging them when imported from offline, etc.
+    async importSyncPayloadAsync({ crisisId, familyId, payload }) {
+
+        /* What this code is doing?:
+            - First it does exactly what the current import does: bring in new queued messages + confirmed relay hashes with dedupe and bounds.
+            - Then it attempts to import/append canonical blocks that came in via the payload.
+            - Those blocks are only accepted if their signature verifies using your locally cached crisis `block_public_key`.
+            - And (in your current `_mergeBlocksFromPayload`) only blocks that extend your current local tip are appended.
+            - Then it looks at transactions from the newest blocks and says:
+            - “If any of these on-chain transactions contain `relay_hash` values that match queued messages, those queued messages are now confirmed and can be pruned.”
+        */
+
+        // 1) Merge queued + confirmed using your existing safe logic
+        this.importSyncPayload({crisisId, familyId, payload})
+
+        // 2) Merge blocks (signature-verified) into our cached blockchain
+        await this._mergeBlocksFromPayload({crisisId, payload})
+
+        // 3) After merging blocks, treat any relay_hash found in those canonical
+        //    transactions as confirmed, and prune the local queue.
+        const blocks = this.getBlockchain({crisisId}) || []
+        const recentBlocks = blocks.slice(-25) // small window; adjust later
+        const recentTxs = recentBlocks.flatMap((b) => b.transactions || [])
+        this.syncConfirmedFromTransactions({
+            crisisId,
+            familyId,
+            transactions: recentTxs,
+        })
+    }   
+
 
     /*
         Merge canonical blocks from a peer's sync payload into the local
@@ -790,22 +849,18 @@ class DisasterStorage {
                     - Then append to local chain and move tip forward.
         - We do NOT yet attempt complex fork resolution or gap-filling.
     */
-    async _mergeBlocksFromPayload(payload) {
-        const incomingBlocks = Array.isArray(payload.blocks)
-            ? payload.blocks
-            : []
+    async _mergeBlocksFromPayload({ crisisId, payload }) {
+        const incomingBlocks = Array.isArray(payload.blocks) ? payload.blocks : []
         if (!incomingBlocks.length) return
 
-        const crisisMeta = this.getCrisisMetadata()
+        const crisisMeta = this.getCrisisMetadata({ crisisId })
         const blockPublicKey = crisisMeta?.block_public_key
         if (!blockPublicKey) {
-            console.warn(
-                'No crisis block_public_key available; skipping block merge from sync payload.'
-            )
+            console.warn('No crisis block_public_key available; skipping block merge from sync payload.')
             return
         }
 
-        let localBlocks = this.getBlockchain() || []
+        let localBlocks = this.getBlockchain({crisisId}) || []
         if (!Array.isArray(localBlocks)) {
             localBlocks = []
         }
@@ -838,10 +893,8 @@ class DisasterStorage {
             }
 
             if (accepted.length) {
-                this.saveBlockchain(accepted)
-                console.log(
-                    `Imported ${accepted.length} canonical block(s) from peer into empty local chain.`
-                )
+                this.saveBlockchain({ crisisId, blocks: accepted })
+                console.log(`Imported ${accepted.length} canonical block(s) from peer into empty local chain.`)
             }
             return
         }
@@ -858,9 +911,7 @@ class DisasterStorage {
             if (existingByIndex.has(idx)) {
                 const localBlock = existingByIndex.get(idx)
                 if (localBlock.hash !== block.hash) {
-                    console.warn(
-                        `Incoming block at index ${idx} conflicts with local block (different hash). Ignoring incoming block.`
-                    )
+                    console.warn(`Incoming block at index ${idx} conflicts with local block (different hash). Ignoring incoming block.`)
                 }
                 continue
             }
@@ -901,17 +952,35 @@ class DisasterStorage {
         }
 
         if (appended > 0) {
-            this.saveBlockchain(localBlocks)
-            console.log(
-                `Appended ${appended} block(s) from sync payload to local chain.`
-            )
+            this.saveBlockchain({ crisisId, blocks: localBlocks})
+            console.log(`Appended ${appended} block(s) from sync payload to local chain.`)
         }
     }
 
-    // UTILITY - Clear all data (for testing/reset)
+    // UTILITY - Clear all data (for testing/reset/decommissioning of wallet upon user request)
     clearAll() {
-        Object.values(this.STORAGE_KEYS).forEach( key => localStorage.removeItem(key) )
-        console.log('Cleared all local storage')
+        const keysToDelete = []
+
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i)
+            if (!key) continue
+
+            // Delete all namespaced KriSYS data
+            if (key.startsWith('krisys:')) {
+                keysToDelete.push(key)
+            }
+
+            // Also delete device identity (fresh node identity on reboot)
+            if (key === 'krisys_device_id') {
+                keysToDelete.push(key)
+            }
+        }
+
+        for (const key of keysToDelete) {
+            localStorage.removeItem(key)
+        }
+
+        console.log(`Cleared ${keysToDelete.length} KriSYS localStorage entries`)
     }
 }
 

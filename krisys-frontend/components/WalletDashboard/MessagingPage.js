@@ -39,6 +39,14 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 	const [pubKeyImportError, setPubKeyImportError] = useState('')
 	const [scannerOpen, setScannerOpen] = useState(false)
 
+	const crisisId = useMemo(() => {
+		try {
+			return disasterStorage.getCrisisMetadata()?.id || null
+		} catch {
+			return null
+		}
+	}, [])
+
     // Helper function to normalize recipients always to an array
     const recipientsList = Array.isArray(selectedRecipients) ? selectedRecipients : []
 
@@ -73,6 +81,7 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 	}
 
 	const walletId = walletData?.family_id || null
+	const familyId = walletId
 
 	// Canonical, on-chain messages involving this wallet (sent or received)
 	const myMessages = useMemo(() => {
@@ -80,8 +89,8 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 
 		return transactions.filter((tx) => {
 			if (tx.type_field !== 'message') return false
-
-			const fromMe = tx.station_address && myAddresses.includes(tx.station_address)
+			const senderAddress = tx.sender_address || tx.station_address	// legibility only: prior variable name "station_addres" was being overloaded
+			const fromMe = senderAddress && myAddresses.includes(senderAddress)
 			const toMember = Array.isArray(tx.related_addresses) &&
 				tx.related_addresses.some( (addr) => myAddresses.includes(addr))
 			const toFamily = walletId && Array.isArray(tx.related_addresses) &&
@@ -93,7 +102,7 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 
 	// Locally queued (unconfirmed) messages that involve this wallet
 	const queuedMyMessages = useMemo(() => {
-		const queue = disasterStorage.getMessageQueue()
+		const queue = (crisisId && familyId) ? disasterStorage.getMessageQueue({crisisId, familyId}) : []
 		if (!queue || queue.length === 0) return []
 
 		return queue.filter((msg) => {
@@ -102,17 +111,16 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 			const _status = msg.status || 'pending'
 			if (_status !== 'pending' && _status !== 'sent') return false
 
-			if (disasterStorage.isMessageConfirmed(msg.relay_hash)) {
+			if (disasterStorage.isMessageConfirmed({ crisisId, relayHash: msg.relay_hash })) {
 				return false
 			}
 
-			const fromMe = msg.station_address && myAddresses.includes(msg.station_address)
-			const toMe =
-				Array.isArray(msg.related_addresses) &&
+			const senderAddress = msg.sender_address || msg.station_address	// legibility only: prior variable name "station_addres" was being overloaded
+			const fromMe = senderAddress && myAddresses.includes(senderAddress)
+			
+			const toMe = Array.isArray(msg.related_addresses) &&
 				msg.related_addresses.some((addr) => myAddresses.includes(addr))
-			const toFamily =
-				walletId &&
-				Array.isArray(msg.related_addresses) &&
+			const toFamily = walletId && Array.isArray(msg.related_addresses) &&
 				msg.related_addresses.includes(walletId)
 
 			return fromMe || toMe || toFamily
@@ -136,16 +144,12 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 		const queued = queuedMyMessages
 			.filter((msg) => !msg.relay_hash || !confirmedRelayHashes.has(msg.relay_hash))
 			.map((msg) => {
-				const sortTsSeconds =
-					typeof msg.timestamp_posted === 'number'
-						? msg.timestamp_posted
-						: typeof msg.queuedAt === 'number'
-							? Math.floor(msg.queuedAt / 1000)
-							: msg.timestamp_created
+				const sortTsSeconds = typeof msg.timestamp_posted === 'number' ? 
+					msg.timestamp_posted : typeof msg.queuedAt === 'number' ? 
+						Math.floor(msg.queuedAt / 1000) : msg.timestamp_created
 
 				return {
-					transaction_id:
-						msg.transaction_id || msg.relay_hash || `queued-${sortTsSeconds}`,
+					transaction_id: msg.transaction_id || msg.relay_hash || `queued-${sortTsSeconds}`,
 					timestamp_created: msg.timestamp_created,
 					timestamp_posted: sortTsSeconds,
 					station_address: msg.station_address,
@@ -200,7 +204,7 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 	}, [recipientsList])
 
 	const recipientKeyStatus = useMemo(() => {
-		const publicKeys = disasterStorage.getPublicKeys() || {}
+		const publicKeys = crisisId ? disasterStorage.getPublicKeys({crisisId}) : {}
 		return selectedFamilyIds.map((fid) => {
 			const k = publicKeys[fid]?.publicKey
 			return {
@@ -209,37 +213,45 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 			}
 		})
 		// keyCacheVersion forces refresh after import
-	}, [selectedFamilyIds, keyCacheVersion])
+	}, [selectedFamilyIds, keyCacheVersion, crisisId])
 
-	const handleImportPublicKey = async () => {
-		setPubKeyImportError('')
+const handleImportPublicKey = async () => {
+	setPubKeyImportError('')
 
-		try {
-			const parsed = parsePublicKeyShareCode(pubKeyInput)
+	try {
+		const parsed = parsePublicKeyShareCode(pubKeyInput)	// parsed from qr code
+		const targetFamilyId = parsed.familyId
+		
+		// pulled from local cache all public keys on devices (shared across crisis namespace aka the domain)
+		const publicKeys = crisisId ? disasterStorage.getPublicKeys({ crisisId }) : {}	
+		const existing = publicKeys[parsed.familyId]?.publicKey
 
-			const existing = disasterStorage.getPublicKeys()?.[parsed.familyId]?.publicKey
-			if (existing && existing !== parsed.publicKeyArmored) {
-				const oldFp = await sha256HexUtf8(existing)
-				const newFp = await sha256HexUtf8(parsed.publicKeyArmored)
+		if (existing && existing !== parsed.publicKeyArmored) {
+			const oldFp = await sha256HexUtf8(existing)
+			const newFp = await sha256HexUtf8(parsed.publicKeyArmored)
 
-				const ok = confirm(
-					`A public key for ${parsed.familyId} already exists on this device.\n\n` +
-						`Old: ${oldFp || 'unknown'}\n` +
-						`New: ${newFp || 'unknown'}\n\n` +
-						`Overwrite it?`
-				)
-				if (!ok) return
-			}
-
-			disasterStorage.savePublicKey(parsed.familyId, parsed.publicKeyArmored)
-			setKeyCacheVersion((v) => v + 1)
-
-			alert(`Saved public key for family: ${parsed.familyId}`)
-		} 
-        catch (e) {
-			setPubKeyImportError(e?.message || String(e))
+			const ok = confirm(
+				`A public key for ${targetFamilyId} already exists on this device.\n\n` +
+					`Old: ${oldFp || 'unknown'}\n` +
+					`New: ${newFp || 'unknown'}\n\n` +
+					`Overwrite it?`
+			)
+			if (!ok) return
 		}
+
+		disasterStorage.savePublicKey({
+			crisisId,
+			targetFamilyId,
+			publicKey: parsed.publicKeyArmored,
+		})
+
+		setKeyCacheVersion((v) => v + 1)
+
+		alert(`Saved public key for family: ${targetFamilyId}`)
+	} catch (e) {
+		setPubKeyImportError(e?.message || String(e))
 	}
+}
 
 	const handleScanPublicKey = () => {
 		setPubKeyImportError('')
@@ -285,11 +297,8 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 				try {
 					const encryptedMessage = await KeyManager.encryptMessage(messageText, familyId, walletData.family_id)
 
-					const relayHash =
-						(typeof window !== 'undefined' &&
-							window.crypto &&
-							window.crypto.randomUUID &&
-							window.crypto.randomUUID()) ||
+					const relayHash = (typeof window !== 'undefined' &&
+						window.crypto && window.crypto.randomUUID && window.crypto.randomUUID()) ||
 						`${Date.now()}_${Math.random().toString(36).slice(2)}`
 
 					const transaction = {
@@ -308,7 +317,7 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 					} 
                     catch (error) {
 						if (error.isNetworkError) {
-							disasterStorage.queueMessage(transaction)
+							disasterStorage.queueMessage({ crisisId, familyId: familyId, message: transaction })
 							queuedCount++
 						} 
                         else setError(error.message || 'Failed to send message to one or more recipients')

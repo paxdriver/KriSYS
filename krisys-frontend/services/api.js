@@ -89,27 +89,40 @@ export const api = {
             : {}
         }
     ),
-    
-    // Admin endpoints (you can add headers for admin token later)
     adminMine: () => {
-        return fetch(`${API_BASE}/admin/mine`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-Admin-Token': ADMIN_TOKEN // THIS IS SUPPOSED TO INTERCEPTED BY APICLIENT, I THOUGHT?
-            }
-        }).then(res => res.json())
+        return apiClient.post('/admin/mine').then(res => res.data)
     },
-    
+
     adminAlert: (message, priority) => {
-        return fetch(`${API_BASE}/admin/alert`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-Admin-Token': ADMIN_TOKEN // You'll need to set this properly
-            },
-            body: JSON.stringify({ message, priority })
-        })
-    }
+        return apiClient.post('/admin/alert', { message, priority })
+    },
 
 }
+
+
+
+
+
+// OLD VERSIONS - these don't get intercepted by the simulated offline. done testing them so probably no longer needed
+
+// Admin endpoints (you can add headers for admin token later)
+// adminMine: () => {
+//     return fetch(`${API_BASE}/admin/mine`, {
+//         method: 'POST',
+//         headers: {
+//             'Content-Type': 'application/json',
+//             'X-Admin-Token': ADMIN_TOKEN // DEV NOTE: You'll need to set this properly
+//         }
+//     }).then(res => res.json())
+// },
+
+// adminAlert: (message, priority) => {
+//     return fetch(`${API_BASE}/admin/alert`, {
+//         method: 'POST',
+//         headers: {
+//             'Content-Type': 'application/json',
+//             'X-Admin-Token': ADMIN_TOKEN // DEV NOTE: You'll need to set this properly
+//         },
+//         body: JSON.stringify({ message, priority })
+//     })
+// }

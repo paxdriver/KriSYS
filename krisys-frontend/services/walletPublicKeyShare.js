@@ -1,51 +1,47 @@
-// /krisys-frontend/services/walletPublicKeyShare.js
-
 function normalizeLineEndings(s) {
 	return s.replaceAll('\r\n', '\n').replaceAll('\r', '\n')
 }
 
-/* 
+/*
+Public key share code v1 (plain text; QR-friendly):
 
-Public key share code v1 (plain text; QR-friendly): krisys:key:v1
-
-    family_id=<familyId>
-    crisis_id=<optional>
-    -----BEGIN PGP PUBLIC KEY BLOCK-----
-    ...
-    -----END PGP PUBLIC KEY BLOCK-----
-
-This is not a trust anchor; it’s a convenience for offline encryption of messages other people send. PGP encyrption is required for the transaction to ever get added to the blockchain and mined once the user comes back online.
-
+krisys:key:v1
+family_id=<familyId>
+crisis_id=<crisisId>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+...
+-----END PGP PUBLIC KEY BLOCK-----
 */
 
 export function createPublicKeyShareCode({
 	familyId,
 	publicKeyArmored,
-	crisisId = null,
+	crisisId,
 }) {
 	if (typeof familyId !== 'string' || !familyId.trim()) {
 		throw new Error('createPublicKeyShareCode: familyId is required')
+	}
+	if (typeof crisisId !== 'string' || !crisisId.trim()) {
+		throw new Error('createPublicKeyShareCode: crisisId is required')
 	}
 	if (typeof publicKeyArmored !== 'string' || !publicKeyArmored.trim()) {
 		throw new Error('createPublicKeyShareCode: publicKeyArmored is required')
 	}
 
 	const fid = familyId.trim()
+	const cid = crisisId.trim()
 	const key = normalizeLineEndings(publicKeyArmored.trim())
 
-	// Minimal required structure check (not cryptographic validation)
 	if (!key.includes('BEGIN PGP PUBLIC KEY BLOCK')) {
 		throw new Error('publicKeyArmored does not look like a PGP public key')
 	}
 
-	const lines = [
+	return [
 		'krisys:key:v1',
 		`family_id=${fid}`,
-		crisisId && typeof crisisId === 'string' ? `crisis_id=${crisisId}` : null,
+		`crisis_id=${cid}`,
 		key,
-	].filter(Boolean)
-
-	return lines.join('\n')
+	].join('\n')
 }
 
 export function parsePublicKeyShareCode(text) {
@@ -55,22 +51,14 @@ export function parsePublicKeyShareCode(text) {
 
 	const raw = normalizeLineEndings(text.trim())
 
-	// Allow pasting just a raw armored key (no wrapper)
-	// In that case, we cannot know family_id, so we reject.
-	if (raw.includes('BEGIN PGP PUBLIC KEY BLOCK') && !raw.startsWith('krisys:key:v1')) {
-		throw new Error('Missing krisys:key:v1 header. Cannot determine family_id.')
-	}
-
-	const header = 'krisys:key:v1'
-	if (!raw.startsWith(header)) {
+	if (!raw.startsWith('krisys:key:v1')) {
 		throw new Error('Invalid key share code prefix')
 	}
 
-	const lines = raw.split('\n')
 	let familyId = null
 	let crisisId = null
 
-	for (const line of lines) {
+	for (const line of raw.split('\n')) {
 		if (line.startsWith('family_id=')) {
 			familyId = line.slice('family_id='.length).trim()
 		}
@@ -81,6 +69,9 @@ export function parsePublicKeyShareCode(text) {
 
 	if (!familyId) {
 		throw new Error('Key share code missing family_id')
+	}
+	if (!crisisId) {
+		throw new Error('Key share code missing crisis_id')
 	}
 
 	const beginIdx = raw.indexOf('-----BEGIN PGP PUBLIC KEY BLOCK-----')
@@ -95,7 +86,7 @@ export function parsePublicKeyShareCode(text) {
 
 	return {
 		familyId,
-		crisisId: crisisId || null,
+		crisisId,
 		publicKeyArmored,
 	}
 }
