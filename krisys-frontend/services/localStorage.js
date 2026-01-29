@@ -63,6 +63,14 @@ class DisasterStorage {
     _sharedKey({ crisisId, bucket }) {
         return this._buildKey({ crisisId, domainType: 'shared', bucket })
     }
+    _walletKey({ crisisId, familyId, bucket }) {
+		const fid = this._requireFamilyId(familyId)
+		return this._buildKey({
+			crisisId,
+			domainType: `wallet:${fid}`,
+			bucket,
+		})
+	}
 	_getJson(key, fallback) {
         if (typeof window === 'undefined') return null
 		const raw = localStorage.getItem(key)

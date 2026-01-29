@@ -1,3 +1,5 @@
+// krisys-frontend/components/WalletDashboard/UnlockForm.js
+
 'use client'
 import { useState, useEffect } from 'react'
 import { KeyManager } from '../../services/keyManager'
@@ -9,6 +11,37 @@ export default function UnlockForm({ familyId, onUnlock }) {
 	const [loading, setLoading] = useState(false)
 	const [validating, setValidating] = useState(true)
 	const [isFirstTime, setIsFirstTime] = useState(false)
+	const [crisisId, setCrisisId] = useState(null)
+
+	// resolve crisisId (retry briefly) so UnlockForm works even if crisis bootstrap completes slightly after this mounts.
+    useEffect(() => {
+        let cancelled = false
+        let attempts = 0
+
+        const tryResolve = () => {
+            if (cancelled) return
+
+            const cid = disasterStorage.getCrisisMetadata()?.id || null
+            if (cid) {
+                setCrisisId(cid)
+                return
+            }
+
+            // Retry a few times to allow bootstrap to populate local storage.
+            attempts += 1
+            if (attempts <= 10) {
+                setTimeout(tryResolve, 250)
+            } else {
+                setCrisisId(null)
+            }
+        }
+
+        tryResolve()
+
+        return () => {
+            cancelled = true
+        }
+    }, [])
 
 	// CHECK FOR EXISTING LOCAL KEY ON COMPONENT LOAD (OFFLINE-SAFE)
 	useEffect(() => {
@@ -17,6 +50,13 @@ export default function UnlockForm({ familyId, onUnlock }) {
 			setError('')
 
 			try {
+
+				if (!crisisId) {
+                    // We can’t locate namespaced keys without a crisisId
+                    setIsFirstTime(true)
+                    return
+                }
+				
 				// derive crisisId from pinned crisis metadata / active pointer
 				const crisisId = disasterStorage.getCrisisMetadata()?.id || null
 
@@ -46,17 +86,23 @@ export default function UnlockForm({ familyId, onUnlock }) {
 		}
 
 		checkExistingKey()
-	}, [familyId, onUnlock])
+	}, [crisisId, familyId, onUnlock])
 
 	const handleUnlock = async (e) => {
 		e.preventDefault()
 		setLoading(true)
 		setError('')
 
+		// Online unlock / first-time unlock on this device.
+		// NOTE: KeyManager is responsible for caching the private key into
+		// namespaced storage after successful validation.
 		try {
-			// Online unlock / first-time unlock on this device.
-			// NOTE: KeyManager is responsible for caching the private key into
-			// namespaced storage after successful validation.
+			if (!crisisId) {
+				throw new Error('Crisis not bootstrapped yet (missing crisisId). ' + 'Go back online once to pin the crisis.')
+            }
+
+            // CHANGED: crisisId is now in scope (state), so this call is valid.
+            // Note: KeyManager must be updated to accept this signature.
 			const privateKey = await KeyManager.getOrUnlockPrivateKey({ crisisId, familyId, passphrase })
 
 			if (privateKey) {
