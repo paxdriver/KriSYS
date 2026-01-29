@@ -13,19 +13,29 @@ const STATION_URL = process.env.NEXT_PUBLIC_STATION_URL || 'http://localhost:600
 // Relay/Pool URL for dumb rendezvous cache sync (untrusted relay backend)
 const RELAY_URL = process.env.NEXT_PUBLIC_RELAY_URL || 'http://localhost:6002'
 
-export default function DevTools({ onRefresh }) {
+export default function DevTools({ onRefresh, familyId = null }) {
     const [mining, setMining] = useState(false)
     const [isOnline, setIsOnline] = useState(true)
     const [queuedMessages, setQueuedMessages] = useState(0)
     const [rateLimitOverride, setRateLimitOverride] = useState(false)
     const [meshInfo, setMeshInfo] = useState(null)
-    
     const [syncingStation, setSyncingStation] = useState(false)
     const [flushingStation, setFlushingStation] = useState(false)
-
     const [syncingRelay, setSyncingRelay] = useState(false)
-
     const [p2pStatus, setP2pStatus] = useState(null)    // p2p connection visual indicator
+
+    // Helper function for translating localStorage data share in a domain (scoped) crisis to match production data shape
+    const getCtx = () => {
+        const crisisId = disasterStorage.getCrisisMetadata()?.id || null
+        if (!crisisId) return { crisisId: null, familyId: null }
+
+        // DevTools runs in landing + wallet pages; get familyId from cached key if needed
+        // const pk = localStorage.getItem('krisys_private_key')
+        return crisisId
+    }
+    const crisisId = getCtx()
+    const crisis = disasterStorage.getCrisisMetadata()
+
     useEffect(() => {
 		const onP2P = (evt) => {
 			setP2pStatus(evt?.detail || null)
@@ -38,16 +48,13 @@ export default function DevTools({ onRefresh }) {
 			setP2pStatus(window.KRISYS_P2P_STATUS)
 		}
 
-		return () => {
-			window.removeEventListener('krisys:p2p_status', onP2P)
-		}
+		return () => window.removeEventListener('krisys:p2p_status', onP2P)
 	}, [])
 
 
     // Update queued message count periodically
     useEffect(() => {
         const updateQueueCount = () => {
-            const { crisisId, familyId } = getCtx()
             if (!crisisId || !familyId) return setQueuedMessages(0)
     		const queue = disasterStorage.getMessageQueue({ crisisId, familyId })
             setQueuedMessages(queue.filter((msg) => msg.status === 'pending').length)
@@ -69,23 +76,20 @@ export default function DevTools({ onRefresh }) {
     useEffect(() => {
         const updateMeshInfo = () => {
             try {
-                const crisis = disasterStorage.getCrisisMetadata()
-                const blocks = disasterStorage.getBlockchain() || []
-                const blockCount = Array.isArray(blocks)
-                    ? blocks.length
-                    : 0
+                const blocks = disasterStorage.getBlockchain(crisisId) || []
+                const blockCount = Array.isArray(blocks) ? blocks.length : 0
 
                 let firstIndex = null
                 let lastIndex = null
                 if (blockCount > 0) {
                     firstIndex = blocks[0].block_index
-                    lastIndex =
-                        blocks[blockCount - 1].block_index
+                    lastIndex = blocks[blockCount - 1].block_index 
                 }
 
-                const hasPrivateKey =
-                    !!localStorage.getItem('krisys_private_key')
-
+                // const hasPrivateKey = !!localStorage.getItem('krisys_private_key')
+                let hasPrivateKey
+                if (familyId && crisisId) hasPrivateKey = disasterStorage.getCachedPrivateKey({ crisisId, familyId })
+                
                 setMeshInfo({
                     crisisId: crisis?.id || null,
                     hasBlockKey: !!crisis?.block_public_key,
@@ -116,22 +120,6 @@ export default function DevTools({ onRefresh }) {
             throw new Error(`Admin request failed: ${error.message}`)
         }
     }
-    // Helper function for translating localStorage data share in a domain (scoped) crisis to match production data shape
-    const getCtx = () => {
-        const crisisId = disasterStorage.getCrisisMetadata()?.id || null
-        if (!crisisId) return { crisisId: null, familyId: null }
-
-        // DevTools runs in landing + wallet pages; get familyId from cached key if needed
-        const pk = localStorage.getItem('krisys_private_key')
-        let familyId = null
-        try {
-            familyId = pk ? JSON.parse(pk).familyId : null
-        } catch {
-            familyId = null
-        }
-
-        return { crisisId, familyId }
-    }
 
     // For testing loads of transactions without having to manually generate them all... use this function
     const generateTestMessages = ({
@@ -140,11 +128,7 @@ export default function DevTools({ onRefresh }) {
 		prefix = 'TEST',
 	}) => {
 		const deviceId = disasterStorage.getDeviceId()
-		const familyId = disasterStorage.getCrisisMetadata()?.id || 'unknown'
-        const {crisisId, familyId} = getCtx()
-
 		let created = 0
-
 
 		for (let i = 0; i < count; i++) {
 			const relayHash =
@@ -153,7 +137,7 @@ export default function DevTools({ onRefresh }) {
 
 			const msg = {
 				timestamp_created: Math.floor(Date.now() / 1000),
-				station_address: `${familyId}-dev`,
+				station_address: `${familyId || "TESTING"}-dev`,
 				message_data: `${prefix} message ${i + 1}/${count}`,
 				related_addresses: [],
 				type_field: 'message',
@@ -164,7 +148,7 @@ export default function DevTools({ onRefresh }) {
 				queuedAt: Date.now(),
 			}
 
-			disasterStorage.queueMessage( {crisisId, familyId, message: msg} )
+			if (crisisId && familyId) disasterStorage.queueMessage( {crisisId, familyId, message: msg} )
 			created++
 		}
 
@@ -178,7 +162,7 @@ export default function DevTools({ onRefresh }) {
         const deviceId = disasterStorage.getDeviceId()
 
         // Identify active wallet via cached private key
-        const privateKeyEntry = localStorage.getItem('krisys_private_key')
+        const privateKeyEntry = disasterStorage.getCachedPrivateKey({crisisId, familyId})
         if (!privateKeyEntry) {
             alert('No unlocked wallet found')
             return
@@ -187,36 +171,35 @@ export default function DevTools({ onRefresh }) {
         let publicKey
         try {
             // Must already be cached; offline-safe
-            publicKey = await KeyManager.getPublicKey(familyId)
+            publicKey = await KeyManager.getPublicKey({crisisId, targetFamilyId: familyId})
         } 
         catch {
-            alert( 'Public key not cached.\n\n' +
-                'Unlock the wallet once while online first.')
+            alert( 'Public key not cached.\n\n Unlock the wallet once while online first.')
             return
         }
 
         let created = 0
-
+        
         for (let i = 0; i < count; i++) {
             const relayHash = globalThis.crypto?.randomUUID?.() ??
-                `${Date.now()}_${Math.random().toString(36).slice(2)}`
-
+            `${Date.now()}_${Math.random().toString(36).slice(2)}`
+            
             const plaintext = `${prefix} message ${i + 1}/${count}`
-
+            
             let encrypted
             try {
-                // ✅ Encrypt only to self
+                // Encrypt only to self
                 encrypted = await KeyManager.encryptMessage(
                     plaintext,
                     familyId,
-                    familyId
+                    familyId,
+                    crisisId,
                 )
             } 
             catch (e) {
                 alert(`Encryption failed: ${e?.message || String(e)}`)
                 return
             }
-            const {crisisId, familyId} = getCtx()
             const msg = {
                 timestamp_created: Math.floor(Date.now() / 1000),
                 station_address: `${familyId}-dev`,
@@ -396,12 +379,12 @@ export default function DevTools({ onRefresh }) {
     }
 
     const processQueue = async () => {
-        const queue = disasterStorage.getMessageQueue()
+        const queue = disasterStorage.getMessageQueue({ crisisId, familyId })
 
         // Only pending meaning sent but not already in a block (messages in blocks are "confirmed")
         const pending = queue.filter( msg =>
             (msg.status || 'pending') === 'pending' &&
-            !disasterStorage.isMessageConfirmed(msg.relay_hash)
+            !disasterStorage.isMessageConfirmed({ crisisId, relayHash: msg.relay_hash})
         )
         setQueuedMessages(pending.length)
 
@@ -424,7 +407,7 @@ export default function DevTools({ onRefresh }) {
         }
 
         // Persist new queue state
-        localStorage.setItem( 'krisys_message_queue', JSON.stringify(queue) )
+        disasterStorage.setMessageQueue({crisisId, familyId, queue})
 
         alert(`Posted ${sent}/${pending.length} messages from process queue.`)
 

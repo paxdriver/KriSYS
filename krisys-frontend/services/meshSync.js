@@ -78,7 +78,7 @@ export async function syncWithMeshHost({
 
 	if (inv?.confirmed && typeof inv.confirmed === 'object') {
 		if (walletFamilyId) {
-			disasterStorage.importSyncPayload({
+			await disasterStorage.importSyncPayloadAsync({
 				crisisId,
 				familyId: walletFamilyId,
 				payload: { queued: [], confirmed: inv.confirmed },

@@ -64,6 +64,7 @@ class DisasterStorage {
         return this._buildKey({ crisisId, domainType: 'shared', bucket })
     }
 	_getJson(key, fallback) {
+        if (typeof window === 'undefined') return null
 		const raw = localStorage.getItem(key)
 		if (!raw) return fallback
 		try {
@@ -73,16 +74,19 @@ class DisasterStorage {
 		}
 	}
 	_setJson(key, value) {
+        if (typeof window === 'undefined') return null
 		localStorage.setItem(key, JSON.stringify(value))
 	}
     // -----------------------------
 
 	setActiveCrisisId(crisisId) {
+        if (typeof window === 'undefined') return null
 		const cid = this._requireCrisisId(crisisId)
 		localStorage.setItem(this.ACTIVE_CRISIS_ID_KEY, cid)
 	}
 
 	getActiveCrisisId() {
+        if (typeof window === 'undefined') return null
 		const cid = localStorage.getItem(this.ACTIVE_CRISIS_ID_KEY)
 		return typeof cid === 'string' && cid.trim() ? cid.trim() : null
 	}
@@ -286,7 +290,8 @@ class DisasterStorage {
     }
 
     // DEV NOTE: NOT yet used
-    deletePrivateKey({crisisId, familyId}) {
+    deleteCachedPrivateKey({crisisId, familyId}) {
+        if (typeof window === 'undefined') return null
         // DEV NOTE: familyId might be needed if one device shared by a few families,
         // but NOT at public device stations where users log in to public devices.
         const key = this._walletKey({
@@ -299,7 +304,7 @@ class DisasterStorage {
     }
 
     // PRIVATE KEY MANAGEMENT - Store locally for offline access
-	savePrivateKey({ crisisId, familyId, targetFamilyId, privateKey }) {
+	saveCachedPrivateKey({ crisisId, familyId, privateKey }) {
 		const key = this._walletKey({
 			crisisId,
 			familyId,
@@ -314,7 +319,7 @@ class DisasterStorage {
 		})
 	}
 
-	getPrivateKey({ crisisId, familyId }) {
+	getCachedPrivateKey({ crisisId, familyId }) {
 		const key = this._walletKey({
 			crisisId,
 			familyId,
@@ -327,7 +332,7 @@ class DisasterStorage {
 	}
 
     // WALLET DATA STORAGE - per-family cached wallet metadata for offline use
-    saveWalletData(familyId, walletData) {
+    saveWalletData({crisisId, familyId, walletData}) {
         console.log('Storing wallet metadata locally for offline access')
 		const key = this._walletKey({
 			crisisId,
@@ -341,7 +346,7 @@ class DisasterStorage {
 		})
     }
 
-    getWalletData(familyId) {
+    getWalletData( {crisisId, familyId} ) {
         try {
             const key = this._walletKey({
                 crisisId,
@@ -394,9 +399,8 @@ class DisasterStorage {
     }
 	getCrisisMetadata({ crisisId } = {}) {
 		// allow explicit crisisId, else fall back to active pointer
-		const cid =
-			typeof crisisId === 'string' && crisisId.trim() ? 
-                crisisId.trim() : this.getActiveCrisisId()
+		const cid = typeof crisisId === 'string' && crisisId.trim() ? 
+            crisisId.trim() : this.getActiveCrisisId()
 
 		if (!cid) return null
 
@@ -439,6 +443,7 @@ class DisasterStorage {
 	}
 
     getBlockchain({ crisisId }) {
+        if (!crisisId) return null
         try {
             const key = this._sharedKey({ crisisId, bucket: 'blocks' })
             const parsed = this._getJson(key, null)
@@ -583,9 +588,6 @@ class DisasterStorage {
             familyId,
             queue: filtered,
         })
-
-        // Fire event to trigger re-render
-        this._emit(this.EVENTS.QUEUE_UPDATED, { source: 'pruneConfirmedFromQueue' })
 
         // DEV LOG
         console.log(`Pruned ${queue.length - filtered.length} confirmed messages from queue`)
@@ -785,8 +787,6 @@ class DisasterStorage {
                 familyId,
                 queue,
             })
-            // Fire event to trigger re-render
-            this._emit(this.EVENTS.QUEUE_UPDATED, { source: 'importSyncPayload' })
         }
 
         // 3) Final cleanup: remove any now-confirmed items from queue

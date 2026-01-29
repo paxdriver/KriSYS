@@ -44,7 +44,7 @@ export default function WalletDashboard({ walletData, transactions, familyId, on
     return (<>
             {/* DEV TOOLS ONLY, NOT FOR PROD */}
             {process.env.NODE_ENV === 'development' && (
-                <DevTools onRefresh={onRefresh} />
+                <DevTools onRefresh={onRefresh} familyId={familyId}/>
             )}
     
         <div className="dashboard-container">

@@ -46,7 +46,8 @@ async function sleep(ms) {
 	return new Promise((r) => setTimeout(r, ms))
 }
 
-export function P2PProvider({ children }) {
+// accept familyId via props
+export function P2PProvider({ children, crisisId, familyId }) {
 	const pcRef = useRef(null)
 	const dcRef = useRef(null)
 
@@ -72,27 +73,12 @@ export function P2PProvider({ children }) {
 	// Persisted across page switches; used by p2pSyncNow()
 	const [pushOnlyOnJoin, setPushOnlyOnJoin] = useState(false)
 
-	const crisisId = useMemo(() => {
-		try {
-			return disasterStorage.getCrisisMetadata()?.id || null
-		} catch {
-			return null
-		}
-	}, [])
-	const familyId = useMemo(() => {
-		try {
-			const pk = localStorage.getItem('krisys_private_key')
-			return pk ? JSON.parse(pk).familyId : null
-		} catch {
-			return null
-		}
-	}, [])
+	if (!crisisId || !familyId) {
+		throw new Error('P2PProvider requires crisisId and familyId')
+	}
 
 	const canWebRTC = useMemo(() => {
-		return (
-			typeof window !== 'undefined' &&
-			typeof RTCPeerConnection !== 'undefined'
-		)
+		return typeof window !== 'undefined' && typeof RTCPeerConnection !== 'undefined'
 	}, [])
 
 	const log = useCallback((line) => {
@@ -103,20 +89,15 @@ export function P2PProvider({ children }) {
 		})
 	}, [])
 
-	const emitP2PStatus = useCallback(
-		(next) => {
-			try {
-				if (typeof window === 'undefined') return
-				window.KRISYS_P2P_STATUS = next
-				window.dispatchEvent(
-					new CustomEvent('krisys:p2p_status', { detail: next })
-				)
-			} catch {
-				// ignore
-			}
-		},
-		[]
-	)
+	const emitP2PStatus = useCallback((next) => {
+		try {
+			if (typeof window === 'undefined') return
+			window.KRISYS_P2P_STATUS = next
+			window.dispatchEvent(new CustomEvent('krisys:p2p_status', { detail: next }))
+		} catch {
+			// ignore
+		}
+	}, [])
 
 	useEffect(() => {
 		emitP2PStatus({
@@ -217,6 +198,10 @@ export function P2PProvider({ children }) {
 	const handleIncomingJson = useCallback(
 		async (obj) => {
 			if (!obj || typeof obj !== 'object') return
+			if (!crisisId || !familyId) {
+				log('recv sync req: missing crisisId/familyId context locally')
+				return
+			}
 
 			if (obj.t === 'krisys_mesh_sync_req_v1') {
 				const id = obj.id
@@ -229,8 +214,13 @@ export function P2PProvider({ children }) {
 					return
 				}
 
+
 				try {
-					await disasterStorage.importSyncPayloadAsync({ crisisId, familyId, payload})
+					await disasterStorage.importSyncPayloadAsync({
+						crisisId,
+						familyId,
+						payload,
+					})
 					log(`imported peer payload (req id=${id})`)
 				} catch (e) {
 					log(`import failed (req id=${id}): ${e?.message || String(e)}`)
@@ -243,7 +233,11 @@ export function P2PProvider({ children }) {
 				}
 
 				try {
-					const myPayload = disasterStorage.exportSyncPayload({crisisId, familyId})
+					const myPayload = disasterStorage.exportSyncPayload({
+						crisisId,
+						familyId,
+					})
+
 					sendJson({
 						t: 'krisys_mesh_sync_res_v1',
 						id,
@@ -272,9 +266,18 @@ export function P2PProvider({ children }) {
 					return
 				}
 
+				if (!crisisId || !familyId) {
+					log('recv sync res: missing crisisId/familyId context locally')
+					return
+				}
+
 				try {
-					await disasterStorage.importSyncPayloadAsync({crisisId, familyId, payload})
-					log(`imported peer payload (res id=${id})`) 
+					await disasterStorage.importSyncPayloadAsync({
+						crisisId,
+						familyId,
+						payload,
+					})
+					log(`imported peer payload (res id=${id})`)
 				} catch (e) {
 					log(`import failed (res id=${id}): ${e?.message || String(e)}`)
 				}
@@ -296,7 +299,7 @@ export function P2PProvider({ children }) {
 				return
 			}
 		},
-		[log, sendJson]
+		[crisisId, familyId, log, sendJson]
 	)
 
 	const attachDataChannelHandlers = useCallback(
@@ -380,6 +383,7 @@ export function P2PProvider({ children }) {
 		await waitForIceGatheringComplete(pc)
 
 		const local = pc.localDescription
+
 		const code = createWebRTCRoomCode({
 			kind: 'offer',
 			crisisId,
@@ -424,7 +428,6 @@ export function P2PProvider({ children }) {
 				setError('That code is not an offer.')
 				return
 			}
-
 			if (parsed.crisisId && crisisId && parsed.crisisId !== crisisId) {
 				const ok = confirm(
 					`Offer crisisId mismatch.\n\nLocal: ${crisisId}\nOffer: ${parsed.crisisId}\n\nContinue anyway?`
@@ -450,6 +453,7 @@ export function P2PProvider({ children }) {
 			await waitForIceGatheringComplete(pc)
 
 			const local = pc.localDescription
+
 			const code = createWebRTCRoomCode({
 				kind: 'answer',
 				crisisId,
@@ -544,10 +548,11 @@ export function P2PProvider({ children }) {
 		setError(null)
 
 		try {
+			
 			const id = makeId()
 			pendingSyncIdsRef.current.add(id)
 
-			const payload = disasterStorage.exportSyncPayload({crisisId, familyId})
+			const payload = disasterStorage.exportSyncPayload({ crisisId, familyId })
 			sendJson({
 				t: 'krisys_mesh_sync_req_v1',
 				id,
@@ -565,7 +570,7 @@ export function P2PProvider({ children }) {
 		} catch (e) {
 			setError(e?.message || String(e))
 		}
-	}, [closeAfterDrain, log, pushOnlyOnJoin, sendJson])
+	}, [closeAfterDrain, crisisId, familyId, log, pushOnlyOnJoin, sendJson])
 
 	const value = useMemo(() => {
 		return {

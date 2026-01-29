@@ -1,3 +1,4 @@
+// krisys-frontend/components/DevTools/dev-cache-size.js
 // GET SIZE OF LOCAL STORAGE
 (() => {
 	const bytes = Object.entries(localStorage).reduce(

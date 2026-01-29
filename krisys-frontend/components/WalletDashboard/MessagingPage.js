@@ -295,7 +295,7 @@ const handleImportPublicKey = async () => {
 				totalGroups++
 
 				try {
-					const encryptedMessage = await KeyManager.encryptMessage(messageText, familyId, walletData.family_id)
+					const encryptedMessage = await KeyManager.encryptMessage(messageText, familyId, walletData.family_id, crisisId)
 
 					const relayHash = (typeof window !== 'undefined' &&
 						window.crypto && window.crypto.randomUUID && window.crypto.randomUUID()) ||

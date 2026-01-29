@@ -24,6 +24,7 @@ export default function BlockList() {
                 ])
                 
                 const crisisData = crisisRes.data
+                const crisisId = crisisData?.id
                 const blockPublicKey = crisisData.block_public_key
                 const allBlocks = chainRes.data || []
 
@@ -39,31 +40,28 @@ export default function BlockList() {
                 )
 
                 if (canonicalBlocks.length !== allBlocks.length) {
-                    console.warn(
-                        `Discarded ${
-                            allBlocks.length - canonicalBlocks.length
-                        } unverified blocks`
-                    )
+                    console.warn(`Discarded ${allBlocks.length - canonicalBlocks.length} unverified blocks`)
                 }
 
                 setBlocks(canonicalBlocks)
 
                 // Cache only canonical blocks offline
                 if (canonicalBlocks.length > 0) {
-                    disasterStorage.saveBlockchain(canonicalBlocks)
+                    disasterStorage.saveBlockchain({
+                        crisisId,
+                        blocks: canonicalBlocks,
+                    })
                 }
             } catch (e) {
-                console.error(
-                    'Failed to load canonical blockchain from backend:',
-                    e
-                )
+                console.error( 'Failed to load canonical blockchain from backend:', e)
 
                 // OFFLINE / ERROR FALLBACK: use locally cached canonical blocks
-                const cachedBlocks = disasterStorage.getBlockchain() || []
+                const crisisMeta = disasterStorage.getCrisisMetadata()
+                const cid = crisisMeta?.id
+
+                const cachedBlocks = cid ? disasterStorage.getBlockchain({ crisisId: cid }) : []
                 if (cachedBlocks.length > 0) {
-                    console.log(
-                        'Using cached blockchain from localStorage for offline access'
-                    )
+                    console.log('Using cached blockchain from localStorage for offline access')
                     setBlocks(cachedBlocks)
                     // Optionally mark that we're in offline mode instead of a hard error
                     setError(null)
