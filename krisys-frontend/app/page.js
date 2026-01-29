@@ -2,6 +2,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { disasterStorage } from '@/services/localStorage'
+import { api } from '@/services/api'
 import BlockchainMeta from '../components/BlockchainExplorer/BlockchainMeta'
 import WalletCreator from '../components/BlockchainExplorer/WalletCreator'
 import BlockList from '../components/BlockchainExplorer/BlockList'
