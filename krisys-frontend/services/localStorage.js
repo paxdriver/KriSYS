@@ -297,47 +297,54 @@ class DisasterStorage {
         }
     }
 
-    // DEV NOTE: NOT yet used
-    deleteCachedPrivateKey({crisisId, familyId}) {
-        if (typeof window === 'undefined') return null
-        // DEV NOTE: familyId might be needed if one device shared by a few families,
-        // but NOT at public device stations where users log in to public devices.
-        const key = this._walletKey({
-			crisisId,
-			familyId,
-			bucket: 'private_key',
-		})
-        console.log('Deleting invalid private key from localStorage', key)
-		localStorage.removeItem(key)
+    // PRIVATE KEY MANAGEMENT - Store locally for offline access (MOVED TO SESSION STORAGE)
+    clearSession() {
+        if (typeof window === 'undefined') return
+        sessionStorage.clear()
     }
-
-    // PRIVATE KEY MANAGEMENT - Store locally for offline access
+    _getSessionJson(key) {
+        if (typeof window === 'undefined') return null
+        const raw = sessionStorage.getItem(key)
+        if (!raw) return null
+        try { return JSON.parse(raw) } catch { return null }
+    }
+    _setSessionJson(key, value) {
+        if (typeof window === 'undefined') return
+        sessionStorage.setItem(key, JSON.stringify(value))
+    }
 	saveCachedPrivateKey({ crisisId, familyId, privateKey }) {
 		const key = this._walletKey({
 			crisisId,
 			familyId,
 			bucket: 'private_key',
 		})
-
-		this._setJson(key, {
-			familyId,
-			privateKey,
-			storedAt: Date.now(),
-			deviceId: this.getDeviceId(),
-		})
+        this._setSessionJson(key, {
+            familyId,
+            privateKey,
+            storedAt: Date.now(),
+            deviceId: this.getDeviceId(),
+        })
 	}
-
 	getCachedPrivateKey({ crisisId, familyId }) {
 		const key = this._walletKey({
 			crisisId,
 			familyId,
 			bucket: 'private_key',
 		})
-		const obj = this._getJson(key, null)
-		if (!obj || typeof obj.privateKey !== 'string') return null
-		
+        const obj = this._getSessionJson(key)
+        if (!obj || typeof obj.privateKey !== 'string') return null
+
         return obj.privateKey
 	}
+    deleteCachedPrivateKey({ crisisId, familyId }) {
+        if (typeof window === 'undefined') return
+        const key = this._walletKey({
+            crisisId,
+            familyId,
+            bucket: 'private_key',
+        })
+        sessionStorage.removeItem(key)
+    }
 
     // WALLET DATA STORAGE - per-family cached wallet metadata for offline use
     saveWalletData({crisisId, familyId, walletData}) {

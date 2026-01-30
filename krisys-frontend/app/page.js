@@ -37,27 +37,10 @@ export default function LandingPage() {
     }
 
 
-
     // ------------ DEV NOTE: IMPORTANT --------------
     useEffect(() => {
 		// DEV ONLY: cache blockchain master private key for DevTools
 		if (process.env.NODE_ENV !== 'development') return
-
-		// try {
-		// 	// This file exists ONLY in dev via docker volume mount
-		// 	fetch('/blockchain/master_private_key.asc')
-		// 		.then( res => {
-		// 			if (!res.ok) throw new Error('Missing master_private_key.asc')
-		// 			return res.text()
-		// 		})
-		// 		.then( key => {
-		// 			localStorage.setItem('krisys_private_key', key)
-		// 			console.warn('DEV NOTE: Cached blockchain master private key in localStorage. REMOVE BEFORE PROD.')
-		// 		})
-		// 		.catch( e => console.warn('DEV NOTE: Could not load master private key:', e) )
-		// } catch (e) {
-		// 	console.warn('DEV NOTE: Failed to seed krisys_private_key:', e)
-		// }
 
         let cancelled = false
 

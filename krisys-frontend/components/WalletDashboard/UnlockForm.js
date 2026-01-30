@@ -1,9 +1,9 @@
 // krisys-frontend/components/WalletDashboard/UnlockForm.js
-
 'use client'
 import { useState, useEffect } from 'react'
 import { KeyManager } from '../../services/keyManager'
 import { disasterStorage } from '@/services/localStorage'
+import {useRouter} from 'next/navigation'
 
 export default function UnlockForm({ familyId, onUnlock }) {
 	const [passphrase, setPassphrase] = useState('')
@@ -12,6 +12,8 @@ export default function UnlockForm({ familyId, onUnlock }) {
 	const [validating, setValidating] = useState(true)
 	const [isFirstTime, setIsFirstTime] = useState(false)
 	const [crisisId, setCrisisId] = useState(null)
+	
+	const router = useRouter()
 
 	// resolve crisisId (retry briefly) so UnlockForm works even if crisis bootstrap completes slightly after this mounts.
     useEffect(() => {
@@ -88,6 +90,12 @@ export default function UnlockForm({ familyId, onUnlock }) {
 		checkExistingKey()
 	}, [crisisId, familyId, onUnlock])
 
+	const handleGoHome = () => {
+		disasterStorage.clearSession()
+		// Do NOT attempt unlock, do NOT keep wallet context
+		router.push('/')
+	}
+
 	const handleUnlock = async (e) => {
 		e.preventDefault()
 		setLoading(true)
@@ -135,8 +143,20 @@ export default function UnlockForm({ familyId, onUnlock }) {
 			</div>
 		)
 	}
-
-	return (
+	return (<>
+		<br />
+		<button
+			type="button"
+			className="btn secondary"
+			onClick={handleGoHome}
+			disabled={loading}
+			style={{ marginTop: '12px' }}
+		>
+			<h1>← Back to Home</h1>
+		</button>
+		<br />
+		
+		<br />
 		<form onSubmit={handleUnlock} className="unlock-form">
 			<h3>Unlock Wallet</h3>
 
@@ -168,5 +188,5 @@ export default function UnlockForm({ familyId, onUnlock }) {
 
 			{error && <p className="error">{error}</p>}
 		</form>
-	)
+	</>)
 }

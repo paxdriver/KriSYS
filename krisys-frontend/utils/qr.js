@@ -255,7 +255,6 @@ export async function showTextQr({
 	`)
 }
 
-//  Backwards-compatible helper used by Members/Overview UI
 export async function showAddressQr({
 	address,
 	displayName,
