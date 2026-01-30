@@ -190,7 +190,6 @@ def db_get_meta(key: str) -> str | None:
 		).fetchone()
 		return row["value"] if row else None
 
-
 def db_set_meta(key: str, value: str) -> None:
 	with relay_db() as conn:
 		conn.execute(
@@ -202,6 +201,14 @@ def db_set_meta(key: str, value: str) -> None:
 			(key, value),
 		)
 		conn.commit()
+
+# META TABLE FLAGS - HARDENING FOR FILLING STORAGE
+# DEV NOTE: This will get defaults and more options when the policy/station/relay setup wizards are done
+def db_get_intake_paused() -> bool:
+	val = db_get_meta("intake_paused")
+	return val == "true"
+def db_set_intake_paused(paused: bool) -> None:
+	db_set_meta("intake_paused", "true" if paused else "false")
 
 
 def db_get_crisis_id() -> str | None:
@@ -293,8 +300,12 @@ def db_put_queued(msg: dict) -> bool:
 	Insert into queued if not already present.
 	Returns True if inserted, False if already existed.
 
-	After insert, run pruning to keep the relay stable under load.
+	After insert, run pruning to keep the RELAY stable under load.
 	"""
+	# Hard stop: intake paused
+	if db_get_intake_paused():
+		logger.warning("RELAY intake paused: rejecting queued message")
+		return False
 	relay_hash = msg.get("relay_hash")
 	if not isinstance(relay_hash, str) or not relay_hash:
 		return False
@@ -318,7 +329,17 @@ def db_put_queued(msg: dict) -> bool:
 				status,
 				int(msg.get("queuedAt") or 0),
 			),
-		)
+			)
+		# Check hard cap
+		row = conn.execute("SELECT COUNT(1) AS c FROM queued").fetchone()
+		count = int(row["c"]) if row else 0
+
+		if count > int(QUEUED_HIGH_WATER):
+			logger.error(
+				"RELAY storage full (queued=%d). Pausing intake.",
+				count,
+			)
+			db_set_intake_paused(True)
 		conn.commit()
 
 	inserted = cur.rowcount == 1
@@ -326,9 +347,9 @@ def db_put_queued(msg: dict) -> bool:
 	try:
 		res = db_prune_queued()
 		if res.get("deleted_ttl") or res.get("deleted_evicted"):
-			logger.info(f"Relay queued prune: {res}")
+			logger.info(f"RELAY queued prune: {res}")
 	except Exception as e:
-		logger.warning(f"Relay queued prune failed: {e}")
+		logger.warning(f"RELAY queued prune failed: {e}")
 
 	return inserted
 
@@ -418,17 +439,34 @@ def db_prune_queued() -> dict:
 		row = conn.execute("SELECT COUNT(1) AS c FROM queued").fetchone()
 		remaining = int(row["c"]) if row else 0
 
+		# Even if we don't need eviction, check whether pruning
+		# has reduced storage enough to safely resume intake
 		if remaining <= int(QUEUED_HIGH_WATER):
+			if remaining <= int(QUEUED_LOW_WATER):
+				if db_get_intake_paused():
+					logger.info(
+						"Queued reduced to %d, resuming RELAY intake",
+						remaining,
+					)
+					db_set_intake_paused(False)
+
 			conn.commit()
 			return {
 				"deleted_ttl": deleted_ttl,
 				"deleted_evicted": deleted_evicted,
 				"remaining": remaining,
 			}
-
+		
 		# 2) High/low water eviction (priority-aware)
 		to_delete = remaining - int(QUEUED_LOW_WATER)
 		if to_delete <= 0:
+			# Same resume logic applies here — eviction not needed,
+			# but intake may have been paused earlier
+			if remaining <= int(QUEUED_LOW_WATER):
+				if db_get_intake_paused():
+					logger.info("Queued reduced to %d, resuming RELAY intake", remaining,)
+					db_set_intake_paused(False)
+
 			conn.commit()
 			return {
 				"deleted_ttl": deleted_ttl,
@@ -467,6 +505,15 @@ def db_prune_queued() -> dict:
 
 		row2 = conn.execute("SELECT COUNT(1) AS c FROM queued").fetchone()
 		remaining = int(row2["c"]) if row2 else 0
+		
+		# Eviction completed — resume intake if we've recovered enough RELAY HDD space
+		if remaining <= int(QUEUED_LOW_WATER):
+			if db_get_intake_paused():
+				logger.info(
+					"Queued reduced to %d, resuming RELAY intake",
+					remaining,
+				)
+				db_set_intake_paused(False)
 
 		conn.commit()
 
