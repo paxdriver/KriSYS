@@ -11,31 +11,42 @@ export default function MembersPage({ walletData, transactions, privateKey }) {
 	const [editingMember, setEditingMember] = useState(null)
 	const [editName, setEditName] = useState('')
 
+	const crisisId = disasterStorage.getCrisisMetadata()?.id || null
+	const familyId = walletData?.family_id || null
+
 	const getDisplayName = (address) => {
 		if (!isUnlocked) return address
-		const savedName = contactStorage.getDisplayName(address)
+		const savedName = contactStorage.getDisplayName({crisisId, familyId, address})
 		return savedName === address ? address : savedName
 	}
 
 	const hasCustomName = (address) => {
 		if (!isUnlocked) return false
-		return contactStorage.getContacts()[address] !== undefined
+		return contactStorage.getContacts({crisisId, familyId,})[address] !== undefined
 	}
 
 	const startEditingMember = (member) => {
-		setEditingMember(member.address)
-		setEditName(
-			hasCustomName(member.address)
-				? contactStorage.getDisplayName(member.address)
-				: ''
-		)
+		const address = member?.address
+		if (!address) return false
+		setEditingMember(address)
+		setEditName( hasCustomName(address) ? 
+			contactStorage.getDisplayName({crisisId, familyId, address}) : '')
 	}
 
 	const saveMemberName = () => {
 		if (editName.trim()) {
-			contactStorage.setContact(editingMember, editName.trim())
+			contactStorage.setContact({
+				crisisId,
+				familyId,
+				address: editingMember,
+				name: editName.trim(),
+			})
 		} else {
-			contactStorage.deleteContact(editingMember)
+			contactStorage.deleteContact({
+				crisisId,
+				familyId,
+				address: editingMember,
+			})
 		}
 		setEditingMember(null)
 		setEditName('')
@@ -57,8 +68,9 @@ export default function MembersPage({ walletData, transactions, privateKey }) {
 		if (!familyId) return
 
 		try {
-			const publicKeyArmored = await KeyManager.getPublicKey(familyId)
 			const crisisId = disasterStorage.getCrisisMetadata()?.id || null
+			if (!crisisId) throw new Error('Missing crisisId in MembersPage')
+			const publicKeyArmored = await KeyManager.getPublicKey({ crisisId, targetFamilyId: familyId})
 
 			const code = createPublicKeyShareCode({
 				familyId,
@@ -77,10 +89,7 @@ export default function MembersPage({ walletData, transactions, privateKey }) {
 				},
 			})
 		} catch (e) {
-			alert(
-				`Could not load public key.\n\n` +
-					`Error: ${e?.message || String(e)}`
-			)
+			alert( `Could not load public key.\n\n` + `Error: ${e?.message || String(e)}` )
 		}
 	}
 
@@ -114,12 +123,10 @@ export default function MembersPage({ walletData, transactions, privateKey }) {
 					{walletData?.members?.map((member) => (
 						<div key={member.address} className="member-item">
 							<div className="member-avatar">
-								{hasCustomName(member.address)
-									? contactStorage
-											.getDisplayName(member.address)
-											.charAt(0)
-											.toUpperCase()
-									: 'M'}
+								{hasCustomName(member.address) ? contactStorage
+									.getDisplayName(member.address)
+									.charAt(0)
+									.toUpperCase() : 'M'}
 							</div>
 
 							<div className="member-info">
@@ -127,13 +134,11 @@ export default function MembersPage({ walletData, transactions, privateKey }) {
 									<div className="member-edit-form">
 										<input
 											value={editName}
-											onChange={(e) => setEditName(e.target.value)}
+											onChange={ (e) => setEditName(e.target.value) }
 											className="member-name-input"
 											placeholder="Enter member name"
 											autoFocus
-											onKeyPress={(e) =>
-												e.key === 'Enter' && saveMemberName()
-											}
+											onKeyPress={ (e) => e.key === 'Enter' && saveMemberName() }
 										/>
 										<div className="edit-actions">
 											<button onClick={saveMemberName} className="btn-save">
@@ -142,15 +147,13 @@ export default function MembersPage({ walletData, transactions, privateKey }) {
 											<button
 												onClick={() => setEditingMember(null)}
 												className="btn-cancel"
-											>
-												❌
+											>❌
 											</button>
 										</div>
 									</div>
 								) : (
 									<>
-										<div
-											className={`member-name ${isUnlocked ? 'editable' : ''}`}
+										<div className={`member-name ${isUnlocked ? 'editable' : ''}`}
 											onClick={() => isUnlocked && startEditingMember(member)}
 										>
 											{getDisplayName(member.address)}
@@ -164,16 +167,14 @@ export default function MembersPage({ walletData, transactions, privateKey }) {
 							<div className="member-actions">
 								{isUnlocked && (
 									<>
-										<button
-											className="btn-icon"
+										<button className="btn-icon"
 											title="Show address QR + text"
 											onClick={() => generateMemberAddressQr(member.address)}
 										>
 											📇
 										</button>
 
-										<button
-											className="btn-icon"
+										<button className="btn-icon"
 											title="Copy address to clipboard"
 											onClick={() => {
 												navigator.clipboard.writeText(member.address)

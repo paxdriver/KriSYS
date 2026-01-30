@@ -506,7 +506,7 @@ class DisasterStorage {
 	}
 
     // PUBLIC KEYS - Store other wallets' keys for offline encryption
-    savePublicKey({ crisisId, targetFamilyId, publicKey }) {
+    saveCachedPublicKey({ crisisId, targetFamilyId, publicKey }) {
         const key = this._sharedKey({
             crisisId,
             bucket: 'public_keys',
@@ -519,7 +519,7 @@ class DisasterStorage {
         }
         this._setJson(key, keys)
     }
-    getPublicKeys({ crisisId }) {
+    getCachedPublicKeys({ crisisId }) {
         const key = this._sharedKey({
             crisisId,
             bucket: 'public_keys',

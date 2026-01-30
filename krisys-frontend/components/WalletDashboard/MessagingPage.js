@@ -204,7 +204,7 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 	}, [recipientsList])
 
 	const recipientKeyStatus = useMemo(() => {
-		const publicKeys = crisisId ? disasterStorage.getPublicKeys({crisisId}) : {}
+		const publicKeys = crisisId ? disasterStorage.getCachedPublicKeys({crisisId}) : {}
 		return selectedFamilyIds.map((fid) => {
 			const k = publicKeys[fid]?.publicKey
 			return {
@@ -223,7 +223,7 @@ const handleImportPublicKey = async () => {
 		const targetFamilyId = parsed.familyId
 		
 		// pulled from local cache all public keys on devices (shared across crisis namespace aka the domain)
-		const publicKeys = crisisId ? disasterStorage.getPublicKeys({ crisisId }) : {}	
+		const publicKeys = crisisId ? disasterStorage.getCachedPublicKeys({ crisisId }) : {}	
 		const existing = publicKeys[parsed.familyId]?.publicKey
 
 		if (existing && existing !== parsed.publicKeyArmored) {
@@ -239,7 +239,7 @@ const handleImportPublicKey = async () => {
 			if (!ok) return
 		}
 
-		disasterStorage.savePublicKey({
+		disasterStorage.saveCachedPublicKey({
 			crisisId,
 			targetFamilyId,
 			publicKey: parsed.publicKeyArmored,
@@ -385,6 +385,8 @@ const handleImportPublicKey = async () => {
 										<ContactName
 											address={member.address}
 											isUnlocked={!!privateKey}
+											crisisId={crisisId}
+    										familyId={walletData.family_id}
 										/>
 									</button>
 								))}
@@ -431,6 +433,8 @@ const handleImportPublicKey = async () => {
 											<ContactName
 												address={member.address}
 												isUnlocked={!!privateKey}
+												crisisId={crisisId}
+    											familyId={walletData.family_id}
 											/>
 										</button>
 									))}
@@ -443,7 +447,12 @@ const handleImportPublicKey = async () => {
 									<span className="selected-list">
 										{selectedRecipients.map((addr) => (
 											<span key={addr} className="selected-chip">
-												<ContactName address={addr} isUnlocked={!!privateKey} />
+												<ContactName 
+													address={addr} 
+													isUnlocked={!!privateKey}
+													crisisId={crisisId}
+													familyId={walletData.family_id}
+												/>
 												<button
 													type="button"
 													className="clear-recipient"

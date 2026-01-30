@@ -16,7 +16,7 @@ export class KeyManager {
             if (!public_key) throw new Error('No public key found for wallet')
             
             // cache own private key if not already saved to localStorage
-       		disasterStorage.savePublicKey({
+       		disasterStorage.saveCachedPublicKey({
                 crisisId,
                 targetFamilyId: familyId,
                 publicKey: public_key,
@@ -240,7 +240,7 @@ export class KeyManager {
     // Get public key (from cache or server)
     static async getPublicKey({ crisisId, targetFamilyId }) {
         // Check cache first
-        const publicKeys = disasterStorage.getPublicKeys({crisisId}) // Get all locally cached public keys stored on this device
+        const publicKeys = disasterStorage.getCachedPublicKeys({crisisId}) // Get all locally cached public keys stored on this device
         const publicKeyString = publicKeys[targetFamilyId]?.publicKey
 
         if (publicKeyString) {
@@ -258,7 +258,7 @@ export class KeyManager {
 
         const { public_key } = await response.json()
         if (public_key) {
-            disasterStorage.savePublicKey({
+            disasterStorage.saveCachedPublicKey({
                 crisisId,
                 targetFamilyId: targetFamilyId,
                 publicKey: public_key,

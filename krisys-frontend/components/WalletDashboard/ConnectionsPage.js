@@ -211,14 +211,13 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 			const familyId = walletData?.family_id
 			if (!familyId) throw new Error('Missing wallet family_id')
 
-			const publicKeys = disasterStorage.getPublicKeys({ crisisId }) || {} // public keys are domain shared scope, not wallet scoped
+			// public keys are domain shared scope, not wallet scoped
+			const publicKeys = disasterStorage.getCachedPublicKeys({ crisisId }) || {} 
 			const myKey = publicKeys[familyId]?.publicKey
 
 			if (!myKey) {
-				throw new Error(
-					'Your public key is not cached on this device yet. ' +
-						'Go online once (or unlock/validate key) so it can be cached.'
-				)
+				throw new Error('Your public key is not cached on this device yet. ' + 
+					'Go online once (or unlock/validate key) so it can be cached.')
 			}
 
 			const crisisId = disasterStorage.getCrisisMetadata()?.id || null
@@ -255,7 +254,7 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 			const parsed = parsePublicKeyShareCode(keyCodeInput)
 
 			// Store in cache so KeyManager.getPublicKey() works offline.
-			disasterStorage.savePublicKey({crisisId, targetFamilyId: parsed.familyId, publicKey: parsed.publicKeyArmored})
+			disasterStorage.saveCachedPublicKey({crisisId, targetFamilyId: parsed.familyId, publicKey: parsed.publicKeyArmored})
 
 			alert(`Saved public key for family: ${parsed.familyId}`)
 		} 

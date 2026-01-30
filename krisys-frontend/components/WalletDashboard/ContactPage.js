@@ -1,32 +1,36 @@
-// components/WalletDashboard/ContactsPage.js
+// krisys-frontend/components/WalletDashboard/ContactsPage.js
 'use client'
-import { useState, useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { contactStorage } from '../../services/contactStorage'
 import { useRouter } from 'next/navigation'
 import { showAddressQr } from '../../utils/qr'
+import { disasterStorage } from '@/services/localStorage'
 
-export default function ContactPage({
-    walletData,
-    transactions,
-    privateKey,
-}) {
-    const [contacts, setContacts] = useState({})
-    const [searchTerm, setSearchTerm] = useState('')
-    const [editingContact, setEditingContact] = useState(null)
-    const [editName, setEditName] = useState('')
-    // add contact state values
-    const [newName, setNewName] = useState('')
-    const [newAddress, setNewAddress] = useState('')
-    const [showAddForm, setShowAddForm] = useState(false)
-    const router = useRouter()
+export default function ContactPage({ walletData, transactions, privateKey, }) {
+	const router = useRouter()
+
+	const crisisId = useMemo(() => {
+		return disasterStorage.getCrisisMetadata()?.id || null
+	}, [])
+
+	const familyId = walletData?.family_id || null
+
+	const [contacts, setContacts] = useState({})
+	const [searchTerm, setSearchTerm] = useState('')
+	const [editingContact, setEditingContact] = useState(null)
+	const [editName, setEditName] = useState('')
+	const [newName, setNewName] = useState('')
+	const [newAddress, setNewAddress] = useState('')
+	const [showAddForm, setShowAddForm] = useState(false)
+
+	const refreshContacts = () => {
+		if (!crisisId || !familyId) return
+		setContacts(contactStorage.getContacts({ crisisId, familyId }))
+	}
 
     useEffect(() => {
-        setContacts(contactStorage.getContacts())
-    }, [])
-
-    const refreshContacts = () => {
-        setContacts(contactStorage.getContacts())
-    }
+		refreshContacts()
+	}, [crisisId, familyId])
 
     const filteredContacts = Object.entries(contacts).filter(
         ([address, name]) =>
@@ -59,21 +63,28 @@ export default function ContactPage({
         setEditingContact(address)
         setEditName(contacts[address] || '')
     }
+    
+	const saveContact = () => {
+		if (!crisisId || !familyId) return
+		if (editName.trim()) {
+			contactStorage.setContact({
+				crisisId,
+				familyId,
+				address: editingContact,
+				name: editName.trim(),
+			})
+			refreshContacts()
+		}
+		setEditingContact(null)
+	}
 
-    const saveContact = () => {
-        if (editName.trim()) {
-            contactStorage.setContact(editingContact, editName.trim())
-            refreshContacts()
-        }
-        setEditingContact(null)
-    }
-
-    const deleteContact = (address) => {
-        if (confirm(`Remove contact "${contacts[address]}"?`)) {
-            contactStorage.deleteContact(address)
-            refreshContacts()
-        }
-    }
+	const deleteContact = (address) => {
+		if (!crisisId || !familyId) return
+		if (confirm(`Remove contact "${contacts[address]}"?`)) {
+			contactStorage.deleteContact({ crisisId, familyId, address })
+			refreshContacts()
+		}
+	}
 
     const copyToClipboard = async (address) => {
         try {
@@ -116,19 +127,25 @@ export default function ContactPage({
     }
 
 
-    const addNewContact = () => {
-        if (!newAddress || !newName.trim()) {
-            alert('Please enter both address and name')
-            return
-        }
+	const addNewContact = () => {
+		if (!crisisId || !familyId) return
+		if (!newAddress || !newName.trim()) {
+			alert('Please enter both address and name')
+			return
+		}
 
-        contactStorage.setContact(newAddress, newName.trim())
-        setNewAddress('')
-        setNewName('')
-        setShowAddForm(false)
-        refreshContacts()
-        alert('Contact added!')
-    }
+		contactStorage.setContact({
+			crisisId,
+			familyId,
+			address: newAddress,
+			name: newName.trim(),
+		})
+		setNewAddress('')
+		setNewName('')
+		setShowAddForm(false)
+		refreshContacts()
+		alert('Contact added!')
+	}
 
     if (!privateKey) {
         return (

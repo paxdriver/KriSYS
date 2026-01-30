@@ -21,13 +21,13 @@ export default function Overview({ walletData, transactions, onRefresh }) {
 
 	const handleShowFamilyPublicKey = async () => {
 		const familyId = walletData?.family_id
-		if (!familyId) return
+		const crisisId = disasterStorage.getCrisisMetadata()?.id || null
+		if (!familyId || !crisisId) return
 
 		try {
 			// Prefer local cache; fetch from server only if needed and online.
-			const publicKeyArmored = await KeyManager.getPublicKey(familyId)
+			const publicKeyArmored = await KeyManager.getPublicKey({crisisId, familyId})
 
-			const crisisId = disasterStorage.getCrisisMetadata()?.id || null
 			const code = createPublicKeyShareCode({
 				familyId,
 				publicKeyArmored,
@@ -68,11 +68,8 @@ export default function Overview({ walletData, transactions, onRefresh }) {
 						<span>Family Public Key</span>
 					</button>
 
-					<button
-						className="btn"
-						onClick={() => {
-							if (typeof onRefresh === 'function') onRefresh()
-						}}
+					<button className="btn"
+						onClick={() => { if (typeof onRefresh === 'function') onRefresh() }}
 					>
 						<span>Refresh</span>
 					</button>
