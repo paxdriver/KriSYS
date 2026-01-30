@@ -100,8 +100,7 @@ export default function ContactPage({ walletData, transactions, privateKey, }) {
             const familyId = getFamilyAddress(address)
             const displayName = contacts[address] || address
             await showAddressQr({
-                familyId,
-                address,
+                address: familyId,
                 displayName,
                 title: 'Contact QR Code',
                 heading: 'Contact QR Code',

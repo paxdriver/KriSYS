@@ -2,7 +2,6 @@
 'use client'
 import { useMemo, useState } from 'react'
 import { contactStorage } from '@/services/contactStorage'
-import { disasterStorage } from '@/services/localStorage'
 
 export default function ContactName({
 	address,

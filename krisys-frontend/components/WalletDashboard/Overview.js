@@ -8,10 +8,9 @@ import { disasterStorage } from '@/services/localStorage'
 import { createPublicKeyShareCode } from '@/services/walletPublicKeyShare'
 
 export default function Overview({ walletData, transactions, onRefresh }) {
-	const handleShowFamilyQr = () => {
+	const handleShowFamilyQr = async () => {
 		if (!walletData?.family_id) return
-		showAddressQr({
-			familyId: walletData.family_id,
+		await showAddressQr({
 			address: walletData.family_id,
 			displayName: 'Family Wallet',
 			title: 'Family Wallet QR Code',
@@ -26,7 +25,7 @@ export default function Overview({ walletData, transactions, onRefresh }) {
 
 		try {
 			// Prefer local cache; fetch from server only if needed and online.
-			const publicKeyArmored = await KeyManager.getPublicKey({crisisId, familyId})
+			const publicKeyArmored = await KeyManager.getPublicKey({crisisId, targetFamilyId: familyId})
 
 			const code = createPublicKeyShareCode({
 				familyId,
