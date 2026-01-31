@@ -39,21 +39,123 @@ CORS(app, origins=['http://localhost:3000', 'http://localhost:5000', 'http://loc
 # app.secret_key = os.environ.get('SECRET_KEY', 'dev_secret_key_please_change_in_prod')  # PRODUCTION: Use secure random key
 ################
 
-def dev_bootstrap_policy_id_and_cleanup() -> str | None:
-	"""
-	DEV ONLY.
-	Rule: if dev_policy_id.txt is missing, we treat that as "reset everything".
-	We immediately create a new policy id file (to avoid Flask reloader double-run
-	making two different ids), then delete stale DBs/keys/station DB.
+# docker-compose setup that spins up relay, station, app and blockchain
+is_dev = os.environ.get("FLASK_ENV") == "development"
+# Individual containers intended to simulate real network, using webserver, linode, and separate devices
+dev_remote = os.environ.get("FLASK_ENV") == "dev_remote"
+# if neither dev mode, production, just making sure devtools and endpoints never leak into prod
+# if not is_dev and not dev_remote:
+	# return None
+if dev_remote:
+	# ---------------------------------------------------------------------------
+	# DEV-REMOTE ONLY: Station registration endpoint
+	# This endpoint exists ONLY when FLASK_ENV == "dev_remote"
+	# It allows a remote station to register itself and receive its API key once.
+	# ---------------------------------------------------------------------------
+	# DEV ONLY - dev_remote
+	@app.route("/dev/station/register", methods=["POST"])
+	def dev_register_station():
+		"""
+		DEV-REMOTE ONLY.
 
-	Returns:
-		policy_id (str) in development, else None
+		Register a station and issue its API key once.
+
+		Request JSON:
+		{
+			"crisisId": "...",
+			"station_id": "HOSPITAL_NW_001",
+			"name": "North-West Field Hospital",
+			"type": "hospital",
+			"location": "Sector A"
+		}
+
+		Response (201):
+		{
+			"station_id": "...",
+			"api_key": "PLAINTEXT_API_KEY"
+		}
+
+		This endpoint MUST NOT exist in production.
+		"""
+
+		data = request.get_json(force=True, silent=True) or {}
+
+		crisis_id = data.get("crisisId")
+		station_id = data.get("station_id")
+		name = data.get("name")
+		stype = data.get("type")
+		location = data.get("location")
+
+		if not all([crisis_id, station_id, name, stype]):
+			return jsonify({"error": "Missing required fields"}), 400
+
+		# Ensure station exists (metadata only)
+		ensure_station(
+			crisis_id=crisis_id,
+			station_id=station_id,
+			name=name,
+			stype=stype,
+			location=location,
+		)
+
+		# Check if API key already exists
+		with db_connection() as conn:
+			row = conn.execute(
+				"""
+				SELECT api_key_hash, status
+				FROM stations
+				WHERE crisis_id = ? AND station_id = ?
+				""",
+				(crisis_id, station_id),
+			).fetchone()
+
+		if row and row["api_key_hash"]:
+			return jsonify({
+				"error": "Station already registered",
+			}), 409
+
+		# Generate API key ONCE
+		api_key = secrets.token_urlsafe(32)
+		api_key_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+		with db_connection() as conn:
+			conn.execute(
+				"""
+				UPDATE stations
+				SET api_key_hash = ?, status = 'active'
+				WHERE crisis_id = ? AND station_id = ?
+				""",
+				(api_key_hash, crisis_id, station_id),
+			)
+			conn.commit()
+
+		logger.warning(
+			"DEV-REMOTE: issued API key for station %s (%s)",
+			station_id,
+			crisis_id,
+		)
+
+		# Return plaintext API key ONCE
+		return jsonify({
+			"station_id": station_id,
+			"api_key": api_key,
+		}), 201
+
+# DEV ONLY - with docker-compose
+def dev_local_bootstrap_policy_id_and_cleanup() -> str | None:
 	"""
-	# docker-compose setup that spins up relay, station, app and blockchain
-	is_dev = os.environ.get("FLASK_ENV") == "development"
-	# Individual containers intended to simulate real network, using webserver, linode, and separate devices
-	dev_remote = os.environ.get("FLASK_ENV") == "dev_remote"
-	if not is_dev and not dev_remote:
+	DEV LOCAL ONLY (docker-compose)
+
+	If dev_policy_id.txt is missing:
+	- generate new policy_id
+	- wipe blockchain DB
+	- wipe station DB
+	- wipe relay DB
+	- wipe keys
+
+	Returns policy_id or None.
+	"""
+	if not is_dev:
 		return None
 
 	policy_file = os.path.join("blockchain", "dev_policy_id.txt")
@@ -68,36 +170,23 @@ def dev_bootstrap_policy_id_and_cleanup() -> str | None:
 		logger.info(f"DEV: reusing persisted policy_id={policy_id}")
 		return policy_id
 
-	# Missing/empty policy file => create a new id FIRST (prevents reload races)
 	policy_id = uuid.uuid4().hex
 	with open(policy_file, "w", encoding="utf-8") as f:
 		f.write(policy_id)
 
 	logger.warning(
-		"DEV: dev_policy_id.txt was missing; created new policy_id and "
-		"cleaning stale artifacts for a fresh start."
+		"DEV: dev_policy_id.txt missing; resetting ALL local state"
 	)
 
 	db_path = os.getenv("BLOCKCHAIN_DB_PATH", "blockchain.db")
 
-	# Also wipe station & relay DB so it can't stay pinned to an old crisisId/key
-	station_db_host_path = os.path.join("device-offline-server", "station-data", "station.db")
-	relay_db_host_path = os.path.join("relay-offline-server", "relay-data", "relay.db")
 	stale_paths = [
 		db_path,
 		"blockchain/master_public_key.asc",
 		"blockchain/master_private_key.asc",
-		station_db_host_path,
-		relay_db_host_path,
+		os.path.join("device-offline-server", "station-data", "station.db"),
+		os.path.join("relay-offline-server", "relay-data", "relay.db"),
 	]
-
-	identity_glob = os.path.join(
-		"device-offline-server",
-		"station-data",
-		"station_identity_*.json",
-	)
-
-	stale_paths.extend(glob.glob(identity_glob))
 
 	for path in stale_paths:
 		try:
@@ -109,9 +198,44 @@ def dev_bootstrap_policy_id_and_cleanup() -> str | None:
 
 	return policy_id
 
+def dev_remote_bootstrap_policy_id()-> str | None:
+	"""
+	REMOTE DEVELOPMENT ENVIRONMENT ONLY (spinning up on remote server independent of stations/relays/app)
+
+	If dev_policy_id.txt is missing:
+	- generate new policy_id
+	- wipe blockchain DB
+
+	Returns policy_id or None.
+	"""
+	if not dev_remote:
+		return None
+
+	policy_file = os.path.join("blockchain", "dev_policy_id.txt")
+	if not os.path.exists(policy_file):
+		logger.warning(
+			"DEV-REMOTE: dev_policy_id.txt missing. "
+			"Assuming intentional reset by operator."
+		)
+		return dev_local_bootstrap_policy_id_and_cleanup()
+
+	with open(policy_file, "r", encoding="utf-8") as f:
+		policy_id = f.read().strip() or None
+
+	logger.info(f"DEV-REMOTE: using persisted policy_id={policy_id}")
+	return policy_id
+
+
 # GENERATING CRISIS BLOCKCHAIN - (an event and aftermath all tied to the same chain)
 # persists policy across reloads until the policy_id textfile is deleted. When that happens we'll delete old databases (station.db and blockchain.db) and asc pgp key files belonging to the old blockchain (master_public_key.asc/master_private_key.asc) so that we're starting fresh.
-persisted_policy_id = dev_bootstrap_policy_id_and_cleanup() 
+
+if is_dev:
+	persisted_policy_id = dev_local_bootstrap_policy_id_and_cleanup()
+elif dev_remote:
+	persisted_policy_id = dev_remote_bootstrap_policy_id()
+else:
+	persisted_policy_id = None
+
 # Policy is the settings and details of the crisis for which we need a KriSys blockchain 
 policy_system = PolicySystem()
 hurricane_policy_id = policy_system.create_crisis_policy(
@@ -238,7 +362,6 @@ def provision_dev_station_api_key(crisis_id: str, station_id: str) -> None:
 			f"({identity_path}). Plain API key cannot be recovered. "
 			"Dev recovery: delete blockchain/dev_policy_id.txt to reset and regenerate "
 			"DB + keys + identity files together.")
-		return
 
 	# Generate a new key only when needed (or forced)
 	api_key = secrets.token_urlsafe(32)
@@ -271,26 +394,28 @@ def provision_dev_station_api_key(crisis_id: str, station_id: str) -> None:
 		logger.error(f"DEV: failed writing station identity file: {e}")
 		return
 
-# DEV NOTE: SIMULATED VERIFIED STATION FOR DEMO
+# DEV NOTE: SIMULATED VERIFIED STATION FOR DEMO (not when testing remotely, only docker-compose)
 crisis_id = blockchain.crisis_metadata['id']
-ensure_station(
-	crisis_id=crisis_id,
-	station_id="HOSPITAL_SE_001",
-	name="Southeast Field Hospital",
-	stype="hospital",
-	location="Sector SE"
-)
-provision_dev_station_api_key(crisis_id, "HOSPITAL_SE_001")
+if is_dev:
+	ensure_station(
+		crisis_id=crisis_id,
+		station_id="HOSPITAL_SE_001",
+		name="Southeast Field Hospital",
+		stype="hospital",
+		location="Sector SE"
+	)
+	provision_dev_station_api_key(crisis_id, "HOSPITAL_SE_001")
 
-# DEV NOTE: SECOND SIMULATED VERIFIED STATION FOR DEMO
-ensure_station(
-	crisis_id=crisis_id,
-	station_id="STATION_001",
-	name="Default Check-in Station",
-	stype="generic",
-	location=None
-)
-provision_dev_station_api_key(crisis_id, "STATION_001")
+# DEV NOTE: SECOND SIMULATED VERIFIED STATION FOR DEMO (not when testing remotely, only docker-compose)
+if is_dev:
+	ensure_station(
+		crisis_id=crisis_id,
+		station_id="STATION_001",
+		name="Default Check-in Station",
+		stype="generic",
+		location=None
+	)
+	provision_dev_station_api_key(crisis_id, "STATION_001")
 
 ########### TESTING IN DEV MODE ###############
 

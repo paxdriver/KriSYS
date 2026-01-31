@@ -1,0 +1,44 @@
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+	libsqlite3-0 \
+	&& rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Explicit dev-remote environment
+ENV FLASK_ENV=dev_remote
+ENV PYTHONUNBUFFERED=1
+
+# You will expose a non-standard port for remote testing
+ENV PORT=5123
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . /app
+
+# Bind explicitly to the dev-remote port
+EXPOSE 5123
+
+CMD ["gunicorn", "-b", "0.0.0.0:5123", "app:app", "--workers", "2"]
+
+
+# USAGE on Linode
+# docker build -f Dockerfile.HQ.dev_remote -t krisys-hq .
+# docker run -d \
+# 	-p 5123:5123 \
+# 	-v $(pwd)/data:/app/data \
+# 	--name krisys-hq \
+# 	krisys-hq
+
+# USAGE on Station device that needs to be registered
+# curl -X POST http://krisys.krisdriver.com:5123/dev/station/register \
+# 	-H "Content-Type: application/json" \
+# 	-d '{
+# 		"crisisId": "…",
+# 		"station_id": "HOSPITAL_NW_001",
+# 		"name": "North-West Field Hospital",
+# 		"stype": "hospital",
+# 		"location": "Sector A"
+# 	}'
