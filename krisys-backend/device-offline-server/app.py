@@ -77,6 +77,7 @@ CENTRAL_URL = os.environ.get("CENTRAL_API_URL", "http://backend:5000")
 # Persistent data for offline unconfirmed messages, blockchain, etc.
 DATA_DIR = os.environ.get("STATION_DATA_DIR", "/app/data")
 STATION_DB_PATH = os.path.join(DATA_DIR, "station.db")
+STATION_IDENTITY_FILE = os.path.join(DATA_DIR, "krisys_station_identity.json")
 
 ####### THESE VALUES ARE FOR DEVELOPMENT ONLY, WILL BE SET BY POLICY IN PROD
 # Storage pruning (DEV-TUNED DEFAULTS)
@@ -94,28 +95,47 @@ CONFIRMED_MAX_ROWS = 20
 
 #               IMPORTANT                   #
 #############################################
-# Station API key is set up on-site by trusted delegate of the blockchain service provider via one-time password
-# DEV NOTE: hard coded for development, this will be saved on device during setup
-STATION_ID = os.environ.get("STATION_ID", "STATION_001")
-
-def load_station_api_key_from_file() -> str | None:
+def load_station_identity() -> dict | None:
 	try:
-		path = os.path.join(DATA_DIR, f"station_identity_{STATION_ID}.json")
+		# DEV MODE: explicit station selection (docker-compose)
+		if STATION_ID:
+			path = os.path.join(
+				DATA_DIR,
+				f"station_identity_{STATION_ID}.json",
+			)
+		# REAL DEVICE MODE: single station identity
+		else:
+			path = STATION_IDENTITY_FILE
+
 		if not os.path.exists(path):
 			return None
 
 		with open(path, "r", encoding="utf-8") as f:
 			obj = json.loads(f.read())
-		
-		key = obj.get("api_key")
-		return key if isinstance(key, str) and key else None
-	
+
+		if not isinstance(obj.get("station_id"), str):
+			return None
+		if not isinstance(obj.get("api_key"), str):
+			return None
+		if not isinstance(obj.get("crisis_id"), str):
+			return None
+
+		return obj
 	except Exception:
 		return None
-def get_station_api_key() -> str | None:
-	return load_station_api_key_from_file()
 
-logger.info(f'Station API key (DEV ONLY): {get_station_api_key()} (may not be loaded, race condition on first load)')
+
+# Station API key is set up on-site by trusted delegate of the blockchain service provider via one-time password
+# DEV NOTE: hard coded for development, this will be saved on device during setup
+_station_identity = load_station_identity()
+
+# Optional: used only for docker-compose dev to simulate multiple stations
+STATION_ID = _station_identity["station_id"] if _station_identity else None
+
+def get_station_api_key() -> str | None:
+	return _station_identity["api_key"] if _station_identity else None
+
+logger.info(f'Station API key (DEV ONLY): {_station_identity} (may not be loaded, race condition on first load)')
 #############################################
 
 @contextmanager
