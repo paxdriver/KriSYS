@@ -49,8 +49,11 @@ def dev_bootstrap_policy_id_and_cleanup() -> str | None:
 	Returns:
 		policy_id (str) in development, else None
 	"""
+	# docker-compose setup that spins up relay, station, app and blockchain
 	is_dev = os.environ.get("FLASK_ENV") == "development"
-	if not is_dev:
+	# Individual containers intended to simulate real network, using webserver, linode, and separate devices
+	dev_remote = os.environ.get("FLASK_ENV") == "dev_remote"
+	if not is_dev and not dev_remote:
 		return None
 
 	policy_file = os.path.join("blockchain", "dev_policy_id.txt")
