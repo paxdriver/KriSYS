@@ -1,3 +1,16 @@
+IMPLEMENTATION CONSIDERATION FOR HASHING JSON AND BLOCK SIGNATURE VERIFICATIONS
+
+Binary canonical encoding (CBOR / MessagePack / Protobuf)
+Instead of JSON, encode the block into bytes using a deterministic binary format and hash those bytes.
+- CBOR has a canonical form (deterministic key order, etc.)
+- Protobuf has stable encodings if you enforce deterministic serialization
+
+Currently set up to just parse json and clean it up to make Python dicts play nice with JS, but this is probably worth
+looking into down the road when seeking optimizations and the rest of the project is built and functioning properly.
+[as of Phase 3.6, offline message relays and setting up offline stations in branch phase-three-react January 10 2026]
+
+-------------------------------------
+
 <!-- send test alert -->
 curl -X POST http://localhost:5000/admin/alert \
   -H "X-Admin-Token: valid_admin_token" \

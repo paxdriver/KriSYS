@@ -2,15 +2,17 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
+import { disasterStorage } from '@/services/localStorage'
 import Sidebar from './Sidebar'
 import Overview from './Overview'
 import MembersPage from './MembersPage'
 import ContactsPage from './ContactPage'
-import UnlockForm from './UnlockForm'
 import MessagingPage from './MessagingPage'
-import DevTools from '../DevTools'
+import ConnectionsPage from './ConnectionsPage'
+import UserSettings from './UserSettings'
+import UnlockForm from './UnlockForm'
 import '../../styles/wallet_dashboard.css'
-
+import DevTools from '../DevTools'  // DEV NOTE: DEVELOPMENT ONLY
 
 export default function WalletDashboard({ walletData, transactions, familyId, onRefresh }) {
     const [currentPage, setCurrentPage] = useState('overview')
@@ -18,6 +20,17 @@ export default function WalletDashboard({ walletData, transactions, familyId, on
     const [isUnlocked, setIsUnlocked] = useState(false) 
     const searchParams = useSearchParams()
 
+    const crisisId = disasterStorage.getCrisisMetadata()?.id || null    
+
+    useEffect(() => {
+        if (!crisisId || !familyId) return
+        const key = disasterStorage.getCachedPrivateKey({ crisisId, familyId })
+        // Attempt session rehydration on refresh to keep wallet unlocked
+        if (key && !privateKey) setPrivateKey(key)
+        if (!key) {
+            disasterStorage.clearSession()
+        }
+    }, [crisisId, familyId, privateKey])
 
     // Listen for URL changes from any component Page and update currentPage to perform the route
     useEffect(() => {
@@ -32,26 +45,36 @@ export default function WalletDashboard({ walletData, transactions, familyId, on
         }
     }, [searchParams])
 
-    
-
     useEffect(() => {
-        if (privateKey) {
-            setIsUnlocked(true)
-        } else {
-            setIsUnlocked(false)
-        }
+        if (privateKey) setIsUnlocked(true)
+        else setIsUnlocked(false)
     }, [privateKey])
 
-    const handleUnlock = key => {
-        setPrivateKey(key)
+    const handleUnlock = key => setPrivateKey(key)
+    const handleLockWallet = () => {
+        const crisisId = disasterStorage.getCrisisMetadata()?.id || null
+        if (!crisisId || !familyId) return
+
+        // Remove private key from session storage
+        disasterStorage.deleteCachedPrivateKey({ crisisId, familyId })
+
+        // Clear in-memory key from client
+        setPrivateKey(null)
+
+        // UX feedback
+        alert('Wallet locked')
+
+        disasterStorage.clearSession()
+        setPrivateKey(null)
     }
 
     return (<>
             {/* DEV TOOLS ONLY, NOT FOR PROD */}
             {process.env.NODE_ENV === 'development' && (
-                <DevTools onRefresh={onRefresh} />
+                <DevTools onRefresh={onRefresh} familyId={familyId}/>
             )}
-    
+    <br />
+    <br />
         <div className="dashboard-container">
             <Sidebar 
                 walletData={walletData}
@@ -60,11 +83,20 @@ export default function WalletDashboard({ walletData, transactions, familyId, on
             />
             
             <main className="main-content">
-                {!privateKey ? (
+                {!isUnlocked ? (    // <--- HERE change to isUnlocked and make isUnlocked check privateKey and set itself so that we can check for session storage if the page refreshes to keep us in the wallet dashboard?
                     <UnlockForm 
                         familyId={familyId}
                         onUnlock={handleUnlock}
                     />) : (<>
+                        <div className="unlock-controls">
+                            <button
+                                className="btn danger"
+                                onClick={handleLockWallet}
+                                title="Lock wallet and clear session key"
+                            >
+                                🔒 Lock Wallet
+                            </button>
+                        </div>
                     
                     <div className="unlock-status">🔓 Wallet unlocked</div>
                         {currentPage === 'overview' && (
@@ -99,7 +131,11 @@ export default function WalletDashboard({ walletData, transactions, familyId, on
                             />
                         )}
                     
-                    {/* other pages */}
+                        {currentPage === 'connections' && (
+                            <ConnectionsPage onRefresh={onRefresh} walletData={walletData} />
+                        )}
+
+                        {currentPage === 'settings' && <UserSettings />}
                     
                     </>)
                 }

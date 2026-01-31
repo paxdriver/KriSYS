@@ -49,12 +49,14 @@ export default async function handler(req, res) {
     
     // Forward request to Flask with admin token
     const response = await fetch(backendUrl, {
-        method: req.method,
-        headers: {
-            'Content-Type': 'application/json',
-            'X-Admin-Token': encodedToken
-        },
-        body: req.body ? req.body : undefined
+      method: req.method,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Admin-Token': encodedToken,
+      },
+      body: req.method !== 'GET' && req.method !== 'HEAD' 
+        ? JSON.stringify(req.body) 
+        : undefined,
     })
     
     const data = await response.json()

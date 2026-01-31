@@ -1,63 +1,96 @@
+// krisys-frontend/services/contactStorage.js
+
 /**
- * LOCAL CONTACT STORAGE - PRIVACY FIRST
- * 
- * Stores address -> name mappings ONLY locally
- * Never synced to server or blockchain
- * Only accessible when wallet is unlocked
- * Protects identities in dangerous situations
+ * LOCAL CONTACT STORAGE — WALLET + CRISIS SCOPED
+ *
+ * Stores address -> name mappings ONLY locally.
+ * Never synced to server or blockchain.
+ * Private to a specific wallet within a specific crisis.
  */
 
 class ContactStorage {
-    constructor() {
-        this.STORAGE_KEY = 'krisys_contacts_private'
-    }
+	_buildKey({ crisisId, familyId }) {
+		if (typeof crisisId !== 'string' || !crisisId.trim()) {
+			throw new Error('contactStorage requires crisisId')
+		}
+		if (typeof familyId !== 'string' || !familyId.trim()) {
+			throw new Error('contactStorage requires familyId')
+		}
 
-    // GET ALL CONTACTS (address -> name mappings)
-    getContacts() {
-        const stored = localStorage.getItem(this.STORAGE_KEY)
-        return stored ? JSON.parse(stored) : {}
-    }
+		const cid = crisisId.trim()
+		const fid = familyId.trim()
 
-    // ADD OR UPDATE CONTACT
-    setContact(address, name) {
-        const contacts = this.getContacts()
-        contacts[address] = name.trim()
-        localStorage.setItem(this.STORAGE_KEY, JSON.stringify(contacts))
-        console.log(`📝 Saved contact: ${address} -> ${name}`)
-    }
+		// krisys:<crisisId>:domain:wallet:<familyId>:contacts
+		return `krisys:${cid}:domain:wallet:${fid}:contacts`
+	}
 
-    // GET DISPLAY NAME (name if known, address if not)
-    getDisplayName(address) {
-        const contacts = this.getContacts()
-        return contacts[address] || address
-    }
+	_getJson(key, fallback) {
+		if (typeof window === 'undefined') return fallback
+		const raw = localStorage.getItem(key)
+		if (!raw) return fallback
+		try {
+			return JSON.parse(raw)
+		} catch {
+			return fallback
+		}
+	}
 
-    // DELETE CONTACT
-    deleteContact(address) {
-        const contacts = this.getContacts()
-        delete contacts[address]
-        localStorage.setItem(this.STORAGE_KEY, JSON.stringify(contacts))
-        console.log(`🗑️ Deleted contact: ${address}`)
-    }
+	_setJson(key, value) {
+		if (typeof window === 'undefined') return
+		localStorage.setItem(key, JSON.stringify(value))
+	}
 
-    // BULK UPDATE (useful for importing)
-    updateContacts(newContacts) {
-        const existing = this.getContacts()
-        const merged = { ...existing, ...newContacts }
-        localStorage.setItem(this.STORAGE_KEY, JSON.stringify(merged))
-        console.log(`📦 Updated ${Object.keys(newContacts).length} contacts`)
-    }
+	getContacts({ crisisId, familyId }) {
+		const key = this._buildKey({ crisisId, familyId })
+		return this._getJson(key, {})
+	}
 
-    // CLEAR ALL CONTACTS (for privacy/security)
-    clearAllContacts() {
-        localStorage.removeItem(this.STORAGE_KEY)
-        console.log('🗑️ Cleared all contacts for privacy')
-    }
+	setContact({ crisisId, familyId, address, name }) {
+		if (typeof address !== 'string' || !address.trim()) return
+		if (typeof name !== 'string' || !name.trim()) return
 
-    // EXPORT CONTACTS (for manual backup)
-    exportContacts() {
-        return this.getContacts()
-    }
+		const key = this._buildKey({ crisisId, familyId })
+		const contacts = this.getContacts({ crisisId, familyId })
+
+		contacts[address.trim()] = name.trim()
+		this._setJson(key, contacts)
+	}
+
+	getDisplayName({ crisisId, familyId, address }) {
+		if (typeof address !== 'string' || !address.trim()) return ''
+		const contacts = this.getContacts({ crisisId, familyId })
+		return contacts[address] || address
+	}
+
+	deleteContact({ crisisId, familyId, address }) {
+		if (typeof address !== 'string' || !address.trim()) return
+
+		const key = this._buildKey({ crisisId, familyId })
+		const contacts = this.getContacts({ crisisId, familyId })
+
+		delete contacts[address.trim()]
+		this._setJson(key, contacts)
+	}
+
+	updateContacts({ crisisId, familyId, newContacts }) {
+		if (!newContacts || typeof newContacts !== 'object') return
+
+		const key = this._buildKey({ crisisId, familyId })
+		const existing = this.getContacts({ crisisId, familyId })
+
+		const merged = { ...existing, ...newContacts }
+		this._setJson(key, merged)
+	}
+
+	clearAllContacts({ crisisId, familyId }) {
+		if (typeof window === 'undefined') return
+		const key = this._buildKey({ crisisId, familyId })
+		localStorage.removeItem(key)
+	}
+
+	exportContacts({ crisisId, familyId }) {
+		return this.getContacts({ crisisId, familyId })
+	}
 }
 
 export const contactStorage = new ContactStorage()

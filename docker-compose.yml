@@ -30,3 +30,29 @@ services:
     command: npm run dev
     depends_on:
       - backend
+  station:
+    build: 
+      context: ./krisys-backend
+      dockerfile: ./device-offline-server/Dockerfile
+    ports:
+      - "6001:5000"
+    environment:
+      - FLASK_ENV=development
+    volumes:
+      # DEV: local folder where station stores its own mesh DB/cache
+      - ./krisys-backend/device-offline-server/station-data:/app/data
+    depends_on:
+      - backend
+  relay:
+    build: 
+      context: ./krisys-backend
+      dockerfile: ./relay-offline-server/Dockerfile
+    ports:
+      - "6002:5000"
+    environment:
+      - FLASK_ENV=development
+    volumes:
+      # DEV: local folder where dumb relay stores its own mesh DB/cache
+      - ./krisys-backend/relay-offline-server/relay-data:/app/data
+    depends_on:
+      - backend

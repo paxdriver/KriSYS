@@ -4,10 +4,10 @@ import MessageDisplay from './MessageDisplay'
 import ContactName from './ContactName'
 
 export default function TransactionItem({ transaction, privateKey, familyId, isConfirmed=true }) {
-    const itemClass = `message-item ${isConfirmed ? 'confiremed' : 'unconfirmed'}`  // checking block signature to see if message is canonical on chain, signed by the server, or a message relayed from another user
+    const itemClass = `message-item ${isConfirmed ? 'confirmed' : 'unconfirmed'}`  // checking block signature to see if message is canonical on chain, signed by the server, or a message relayed from another user
 
     return (
-        <div className="message-item">  {/* Changed from "transaction" */}
+        <div className={itemClass}>  {/* Changed from "transaction" */}
             <div className="message-header">  {/* Changed from "tx-header" */}
                 <span className="message-from">
                     From: <ContactName 

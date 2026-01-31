@@ -4,9 +4,7 @@ import axios from 'axios'
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'
 
 // Create axios instance with interceptor for dev overrides
-const apiClient = axios.create({
-    baseURL: API_BASE
-})
+const apiClient = axios.create({ baseURL: API_BASE })
 
 // blockchain's private_key
 const ADMIN_TOKEN = process.env.NEXT_PUBLIC_ADMIN_TOKEN // this should be taken from blockchain/master_private_key.asc
@@ -22,7 +20,7 @@ apiClient.interceptors.request.use(config => {
 })
 // SIMULATED OFFLINE MODE FOR DEVELOPMENT ONLINE
 
-// Add request interceptor to include dev headers
+// Add request interceptor to include dev headers (used in production with verified stations)
 apiClient.interceptors.request.use((config) => {
     // Add rate limit override header if enabled
     if (localStorage.getItem('dev_bypass_rate_limit') === 'true') {
@@ -52,8 +50,8 @@ apiClient.interceptors.response.use(
 
 export const api = {
     // Blockchain endpoints
-    getBlockchain: () => axios.get(`${API_BASE}/blockchain`),
-    getCrisisInfo: () => axios.get(`${API_BASE}/crisis`),
+    getBlockchain: () => apiClient.get(`${API_BASE}/blockchain`),
+    getCrisisInfo: () => apiClient.get(`${API_BASE}/crisis`),
     getCurrentPolicy: () => apiClient.get('/policy'),
   
     // Wallet endpoints
@@ -63,9 +61,9 @@ export const api = {
             num_members: numMembers,
             passphrase: passphrase 
         }),
-    getWallet: (familyId) => axios.get(`${API_BASE}/wallet/${familyId}`),
-    getWalletTransactions: (familyId) => axios.get(`${API_BASE}/wallet/${familyId}/transactions`),
-    getWalletQR: (familyId, address) => axios.get(`${API_BASE}/wallet/${familyId}/qr/${address}`),
+    getWallet: (familyId) => apiClient.get(`${API_BASE}/wallet/${familyId}`),
+    getWalletTransactions: (familyId) => apiClient.get(`${API_BASE}/wallet/${familyId}/transactions`),
+    getWalletQR: (familyId, address) => apiClient.get(`${API_BASE}/wallet/${familyId}/qr/${address}`),
         
     // Auth endpoints
     unlockWallet: (familyId, passphrase) => 
@@ -84,36 +82,47 @@ export const api = {
     // CHECKING IN FROM A VERIFIED STATION USING LOCALLY STORED API KEY PROVIDED BY THE BLOCKCHAIN PROVIDER EXCLUSIVELY 
     // (replaces passphrase protection that the typical wallets would use and does not pgp encrypt its messages, all plain text)
     checkin: (address, stationId = 'STATION_001', stationApiKey) =>
-    axios.post(
-        `${API_BASE}/checkin`,
+    axios.post( `${API_BASE}/checkin`,
         { address, station_id: stationId },
-        {
-        headers: stationApiKey
+        { headers: stationApiKey
             ? { 'X-Station-API-Key': stationApiKey }
             : {}
         }
     ),
-    
-    // Admin endpoints (you can add headers for admin token later)
     adminMine: () => {
-        return fetch(`${API_BASE}/admin/mine`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-Admin-Token': ADMIN_TOKEN // THIS IS SUPPOSED TO INTERCEPTED BY APICLIENT, I THOUGHT?
-            }
-        }).then(res => res.json())
+        return apiClient.post('/admin/mine').then(res => res.data)
     },
-    
+
     adminAlert: (message, priority) => {
-        return fetch(`${API_BASE}/admin/alert`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-Admin-Token': ADMIN_TOKEN // You'll need to set this properly
-            },
-            body: JSON.stringify({ message, priority })
-        })
-    }
+        return apiClient.post('/admin/alert', { message, priority })
+    },
 
 }
+
+
+
+
+
+// OLD VERSIONS - these don't get intercepted by the simulated offline. done testing them so probably no longer needed
+
+// Admin endpoints (you can add headers for admin token later)
+// adminMine: () => {
+//     return fetch(`${API_BASE}/admin/mine`, {
+//         method: 'POST',
+//         headers: {
+//             'Content-Type': 'application/json',
+//             'X-Admin-Token': ADMIN_TOKEN // DEV NOTE: You'll need to set this properly
+//         }
+//     }).then(res => res.json())
+// },
+
+// adminAlert: (message, priority) => {
+//     return fetch(`${API_BASE}/admin/alert`, {
+//         method: 'POST',
+//         headers: {
+//             'Content-Type': 'application/json',
+//             'X-Admin-Token': ADMIN_TOKEN // DEV NOTE: You'll need to set this properly
+//         },
+//         body: JSON.stringify({ message, priority })
+//     })
+// }

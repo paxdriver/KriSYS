@@ -31,6 +31,9 @@ body {
     min-height: 100vh;
     margin-top: 3rem; /* Space for dev tools */
 }
+.btn-gohome {
+    display: flex;
+}
 
 .sidebar {
     background: linear-gradient(180deg, var(--dark) 0%, var(--primary) 100%);

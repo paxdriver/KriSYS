@@ -2,7 +2,14 @@
 **/.pytest_cache/
 **/blockchain/
 **/node_modules/
-DEV\ -\ prompt*
+**/DEV*
 .env*
 NEW_PROMPT.py
 DELETE.txt
+**/*.db
+/**/.vscode/settings.json
+# stations that act as hub when online to cull and batch messages (avoiding many direct connections to online server) and offline (storing blockchain to share and gathering unconfirmed messages from other offline users)
+krisys-backend/device-offline-server/station-data/
+krisys-backend/relay-offline-server/relay-data/
+krisys-backend/device-offline-server/station-data/station_identity_HOSPITAL_SE_001.json
+krisys-backend/device-offline-server/station-data/station_identity_STATION_001.json
