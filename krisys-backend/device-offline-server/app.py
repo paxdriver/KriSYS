@@ -83,6 +83,9 @@ STATION_DB_PATH = os.path.join(DATA_DIR, "station.db")
 QUEUED_TTL_MS = 7 * 24 * 60 * 60 * 1000
 QUEUED_HIGH_WATER = 40
 QUEUED_LOW_WATER = 20
+QUEUED_SOFT_WATER = int(QUEUED_HIGH_WATER * 0.6) # heads up before the stop, just for soft warnings
+def is_storage_under_pressure(count: int) -> bool:
+	return count >= int(QUEUED_SOFT_WATER)
 
 CONFIRMED_TTL_MS = 2 * 24 * 60 * 60 * 1000
 CONFIRMED_MAX_ROWS = 20
@@ -501,8 +504,18 @@ def db_put_queued(msg: dict) -> bool:
 		row = conn.execute("SELECT COUNT(1) AS c FROM queued").fetchone()
 		count = int(row["c"]) if row else 0
 
-		if count > int(QUEUED_HIGH_WATER):
+
+		if count > int(QUEUED_HIGH_WATER): # HARD STOP
 			pause_needed = True
+
+		# DEV NOTE: Soft pressure warning only; intake still allowed.
+		# Used for pre-507 signaling and future UX.
+		if is_storage_under_pressure(count) and not db_get_intake_paused(): # SOFT WARNING
+			logger.warning("STATION storage nearing capacity (queued=%d, soft=%d, hard=%d)",
+				count, 
+				QUEUED_SOFT_WATER, 
+				QUEUED_HIGH_WATER,
+			)
 
 		conn.commit()
 
@@ -550,11 +563,7 @@ def db_update_queued_status(relay_hash: str, status: str) -> None:
 			SET status = ?, json = ?
 			WHERE relay_hash = ?
 			""",
-			(
-				status,
-				json.dumps(msg, separators=(",", ":"), ensure_ascii=False),
-				relay_hash,
-			),
+			(status, json.dumps(msg, separators=(",", ":"), ensure_ascii=False), relay_hash,),
 		)
 		conn.commit()
 
@@ -1202,6 +1211,13 @@ def export_station_payload() -> dict:
 	raw_queued = db_list_queued(limit=MAX_QUEUED_PER_PAYLOAD)
 	sorted_queued = _sort_queued_for_export(raw_queued)
 
+	with station_db() as conn:
+		row = conn.execute("SELECT COUNT(1) AS c FROM queued").fetchone()
+		count = int(row["c"]) if row else 0
+	warnings = []
+	if is_storage_under_pressure(count):
+		warnings.append("storage_pressure")
+
 	return {
 		"version": 1,
 		"deviceId": "station_local",
@@ -1212,6 +1228,8 @@ def export_station_payload() -> dict:
 		"queued": sorted_queued,
 		# Confirmations are returned via inventory (filtered by relay_hashes).
 		"confirmed": {},
+		# DEV NOTE: warnings are informational only. Clients should not change behavior yet.
+		"warnings": warnings,
 	}
 
 
