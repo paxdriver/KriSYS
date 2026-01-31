@@ -86,8 +86,8 @@ BOTTOM_PRIORITY = 5
 ####### THESE VALUES ARE FOR DEVELOPMENT ONLY, WILL BE SET BY POLICY IN PROD
 # Storage pruning (DEV-TUNED DEFAULTS)
 QUEUED_TTL_MS = 7 * 24 * 60 * 60 * 1000
-QUEUED_HIGH_WATER = 100
-QUEUED_LOW_WATER = 50
+QUEUED_HIGH_WATER = 40
+QUEUED_LOW_WATER = 20
 
 CONFIRMED_TTL_MS = 2 * 24 * 60 * 60 * 1000
 CONFIRMED_MAX_ROWS = 20
@@ -306,6 +306,7 @@ def db_put_queued(msg: dict) -> bool:
 	if db_get_intake_paused():
 		logger.warning("RELAY intake paused: rejecting queued message")
 		return False
+
 	relay_hash = msg.get("relay_hash")
 	if not isinstance(relay_hash, str) or not relay_hash:
 		return False
@@ -313,6 +314,9 @@ def db_put_queued(msg: dict) -> bool:
 	status = msg.get("status")
 	if not isinstance(status, str) or not status:
 		status = "pending"
+
+	pause_needed = False
+	count = 0
 
 	with relay_db() as conn:
 		cur = conn.execute(
@@ -329,20 +333,25 @@ def db_put_queued(msg: dict) -> bool:
 				status,
 				int(msg.get("queuedAt") or 0),
 			),
-			)
-		# Check hard cap
+		)
+
 		row = conn.execute("SELECT COUNT(1) AS c FROM queued").fetchone()
 		count = int(row["c"]) if row else 0
 
 		if count > int(QUEUED_HIGH_WATER):
-			logger.error(
-				"RELAY storage full (queued=%d). Pausing intake.",
-				count,
-			)
-			db_set_intake_paused(True)
+			pause_needed = True
+
 		conn.commit()
 
 	inserted = cur.rowcount == 1
+
+	# Set intake pause OUTSIDE the DB transaction to avoid sqlite lock
+	if pause_needed and not db_get_intake_paused():
+		logger.error(
+			"RELAY storage full (queued=%d). Pausing intake.",
+			count,
+		)
+		db_set_intake_paused(True)
 
 	try:
 		res = db_prune_queued()
@@ -1160,6 +1169,17 @@ def mesh_sync():
 	)
 	if not ok:
 		return jsonify({"error": err}), 400
+	
+	# Hard stop: refuse new queued intake when storage is full
+	if db_get_intake_paused():
+		logger.error("RELAY storage full: rejecting /mesh/sync intake")
+		return (
+			jsonify({
+				"error": "storage_full",
+				"message": "RELAY storage full; not accepting new queued messages",
+			}),
+			507,
+		)
 
 	incoming_queued = sanitize_sync_payload_server(incoming)
 	for msg in incoming_queued:

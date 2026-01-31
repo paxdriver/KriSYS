@@ -81,8 +81,8 @@ STATION_DB_PATH = os.path.join(DATA_DIR, "station.db")
 ####### THESE VALUES ARE FOR DEVELOPMENT ONLY, WILL BE SET BY POLICY IN PROD
 # Storage pruning (DEV-TUNED DEFAULTS)
 QUEUED_TTL_MS = 7 * 24 * 60 * 60 * 1000
-QUEUED_HIGH_WATER = 100
-QUEUED_LOW_WATER = 50
+QUEUED_HIGH_WATER = 40
+QUEUED_LOW_WATER = 20
 
 CONFIRMED_TTL_MS = 2 * 24 * 60 * 60 * 1000
 CONFIRMED_MAX_ROWS = 20
@@ -469,6 +469,7 @@ def db_put_queued(msg: dict) -> bool:
 	if db_get_intake_paused():
 		logger.warning("STATION intake paused: rejecting queued message")
 		return False
+
 	relay_hash = msg.get("relay_hash")
 	if not isinstance(relay_hash, str) or not relay_hash:
 		return False
@@ -476,6 +477,9 @@ def db_put_queued(msg: dict) -> bool:
 	status = msg.get("status")
 	if not isinstance(status, str) or not status:
 		status = "pending"
+
+	pause_needed = False
+	count = 0
 
 	with station_db() as conn:
 		cur = conn.execute(
@@ -493,21 +497,23 @@ def db_put_queued(msg: dict) -> bool:
 				int(msg.get("queuedAt") or 0),
 			),
 		)
-		# Check hard cap
+
 		row = conn.execute("SELECT COUNT(1) AS c FROM queued").fetchone()
 		count = int(row["c"]) if row else 0
 
 		if count > int(QUEUED_HIGH_WATER):
-			logger.error(
-				"STATION storage full (queued=%d). Pausing intake.",
-				count,
-			)
-			db_set_intake_paused(True)
+			pause_needed = True
+
 		conn.commit()
 
 	inserted = cur.rowcount == 1
 
-	# Prune regardless of whether we inserted; TTL cleanup is always safe.
+	# Set intake pause OUTSIDE the DB transaction to avoid sqlite lock
+	if pause_needed and not db_get_intake_paused():
+		logger.error("STATION storage full (queued=%d). Pausing intake.",count,)
+		db_set_intake_paused(True)
+
+	# Prune regardless of whether we inserted; TTL cleanup is always safe
 	try:
 		res = db_prune_queued()
 		if res.get("deleted_ttl") or res.get("deleted_evicted"):
@@ -641,10 +647,7 @@ def db_prune_queued() -> dict:
 			# but intake may have been paused earlier
 			if remaining <= int(QUEUED_LOW_WATER):
 				if db_get_intake_paused():
-					logger.info(
-						"Queued reduced to %d, resuming STATION intake",
-						remaining,
-					)
+					logger.info("Queued reduced to %d, resuming STATION intake",remaining,)
 					db_set_intake_paused(False)
 
 			conn.commit()
@@ -686,7 +689,7 @@ def db_prune_queued() -> dict:
 		row2 = conn.execute("SELECT COUNT(1) AS c FROM queued").fetchone()
 		remaining = int(row2["c"]) if row2 else 0
 
-		# Eviction completed — resume intake if we've recovered enough space
+		# Eviction completed — resume intake if we've recovered enough STATION HDD space
 		if remaining <= int(QUEUED_LOW_WATER):
 			if db_get_intake_paused():
 				logger.info(
@@ -1293,6 +1296,17 @@ def station_checkin_offline():
 	ok, err = ensure_crisis_id(incoming.get("crisisId"))
 	if not ok:
 		return jsonify({"error": err}), 400
+	
+	# Hard stop: refuse new check-ins when storage is full
+	if db_get_intake_paused():
+		logger.error("STATION storage full: rejecting /station/checkin")
+		return (
+			jsonify({
+				"error": "storage_full",
+				"message": "Station storage full; not accepting new check-ins",
+			}),
+			507,
+		)
 
 	address = incoming.get("address")
 	if not isinstance(address, str) or not address.strip():
@@ -1400,6 +1414,17 @@ def mesh_sync():
 	ok, err = ensure_crisis_id(incoming.get("crisisId"))
 	if not ok:
 		return jsonify({"error": err}), 400
+	
+	# Hard stop: refuse new queued intake when storage is full
+	if db_get_intake_paused():
+		logger.error("STATION storage full: rejecting /mesh/sync intake")
+		return (
+			jsonify({
+				"error": "storage_full",
+				"message": "STATION storage full; not accepting new queued messages",
+			}),
+			507,
+		)
 
 	incoming_queued, _ignored_confirmed = sanitize_sync_payload_server(incoming)
 
