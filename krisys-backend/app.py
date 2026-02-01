@@ -6,6 +6,7 @@ from flask_cors import CORS
 from blockchain import Blockchain, Transaction, PolicySystem
 import time
 import json
+import fcntl
 import glob
 import os
 import base64
@@ -33,16 +34,32 @@ logger = logging.getLogger(__name__)
 MAX_MEMBERS = 20     # DEV NOTE: THIS SHOULD BE DEFINED IN THE BLOCKCHAIN ISNTANTIATION POLICY BY ADMIN
 MIN_PASSPHRASE_LENGTH = 1   # set small limit, just for obfuscation not security
 
+def _hq_state_dir() -> str:
+	# Where dev_remote stores persistent artifacts (DB + keys + policy_id)
+	return os.environ.get("KRISYS_HQ_STATE_DIR", "/app/data")
+
 app = Flask(__name__, static_folder='static')
-################ DEV NOTE: CHANGE ADMIN SECRETS!!!!!!!
-CORS(app, origins=['http://localhost:3000', 'http://localhost:5000', 'http://localhost:5000/crisis'])
-# app.secret_key = os.environ.get('SECRET_KEY', 'dev_secret_key_please_change_in_prod')  # PRODUCTION: Use secure random key
-################
 
 # docker-compose setup that spins up relay, station, app and blockchain
 is_dev = os.environ.get("FLASK_ENV") == "development"
 # Individual containers intended to simulate real network, using webserver, linode, and separate devices
 dev_remote = os.environ.get("FLASK_ENV") == "dev_remote"
+
+# ----------------------------
+# CORS configuration (browser access only)
+# ----------------------------
+################ DEV NOTE: CHANGE ADMIN SECRETS!!!!!!!
+# CORS(app, origins=['http://localhost:3000', 'http://localhost:5000', 'http://localhost:5000/crisis'])
+# app.secret_key = os.environ.get('SECRET_KEY', 'dev_secret_key_please_change_in_prod')  # PRODUCTION: Use secure random key
+################
+if is_dev or dev_remote:
+	FRONTEND_ORIGINS = ["http://localhost:3000",]
+else:
+	# Production (locked down later via setup wizard)
+	FRONTEND_ORIGINS = []
+
+CORS(app, origins=FRONTEND_ORIGINS)
+
 # if neither dev mode, production, just making sure devtools and endpoints never leak into prod
 # if not is_dev and not dev_remote:
 	# return None
@@ -80,18 +97,26 @@ if dev_remote:
 
 		data = request.get_json(force=True, silent=True) or {}
 
-		crisis_id = data.get("crisisId")
+		requested_crisis_id = data.get("crisisId")
 		station_id = data.get("station_id")
 		name = data.get("name")
-		stype = data.get("type")
+		stype = data.get("stype") or data.get("type")
 		location = data.get("location")
 
-		if not all([crisis_id, station_id, name, stype]):
+		if not all([requested_crisis_id, station_id, name, stype]):
 			return jsonify({"error": "Missing required fields"}), 400
 
-		# Ensure station exists (metadata only)
+		# HARD SAFETY: only allow the current HQ crisis
+		current_crisis_id = blockchain.crisis_metadata.get("id")
+		if requested_crisis_id != current_crisis_id:
+			return jsonify({
+				"error": "crisisId_mismatch",
+				"expected": current_crisis_id,
+				"got": requested_crisis_id,
+			}), 409
+
 		ensure_station(
-			crisis_id=crisis_id,
+			crisis_id=current_crisis_id,
 			station_id=station_id,
 			name=name,
 			stype=stype,
@@ -197,33 +222,102 @@ def dev_local_bootstrap_policy_id_and_cleanup() -> str | None:
 			logger.warning(f"DEV: failed to delete {path}: {e}")
 
 	return policy_id
-
-def dev_remote_bootstrap_policy_id()-> str | None:
+def dev_remote_bootstrap_policy_id_and_cleanup() -> str | None:
 	"""
-	REMOTE DEVELOPMENT ENVIRONMENT ONLY (spinning up on remote server independent of stations/relays/app)
+	DEV-REMOTE ONLY (HQ on Linode).
 
-	If dev_policy_id.txt is missing:
-	- generate new policy_id
-	- wipe blockchain DB
+	Rule:
+	- If dev_policy_id.txt exists: reuse it.
+	- If dev_policy_id.txt is missing/empty: treat as operator reset:
+		- wipe HQ DB + master keys
+		- generate and persist a new policy_id
+	- Uses a file lock so only one gunicorn worker performs reset.
 
-	Returns policy_id or None.
+	Returns:
+		policy_id (str) in dev_remote, else None
 	"""
 	if not dev_remote:
 		return None
 
-	policy_file = os.path.join("blockchain", "dev_policy_id.txt")
-	if not os.path.exists(policy_file):
+	state_dir = _hq_state_dir()
+	os.makedirs(state_dir, exist_ok=True)
+
+	policy_file = os.path.join(state_dir, "dev_policy_id.txt")
+	lock_file = os.path.join(state_dir, ".reset.lock")
+
+	# IMPORTANT: DB + key paths must match where Blockchain writes them.
+	# If your Blockchain still writes keys under /app/blockchain, align that first.
+	db_path = os.environ.get(
+		"BLOCKCHAIN_DB_PATH",
+		os.path.join(state_dir, "blockchain.db"),
+	)
+	pub_path = os.path.join(state_dir, "master_public_key.asc")
+	priv_path = os.path.join(state_dir, "master_private_key.asc")
+
+	with open(lock_file, "w", encoding="utf-8") as lf:
+		fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+
+		# If policy exists and is non-empty, reuse it
+		if os.path.exists(policy_file):
+			try:
+				with open(policy_file, "r", encoding="utf-8") as f:
+					existing = f.read().strip() or None
+				if existing:
+					logger.info("DEV-REMOTE: reusing persisted policy_id=%s", existing)
+					return existing
+			except Exception as e:
+				logger.warning("DEV-REMOTE: failed reading policy file: %s", e)
+
+		# Missing/empty policy file => operator reset
 		logger.warning(
-			"DEV-REMOTE: dev_policy_id.txt missing. "
-			"Assuming intentional reset by operator."
+			"DEV-REMOTE: dev_policy_id.txt missing/empty; performing HQ reset"
 		)
-		return dev_local_bootstrap_policy_id_and_cleanup()
 
-	with open(policy_file, "r", encoding="utf-8") as f:
-		policy_id = f.read().strip() or None
+		for path in [db_path, pub_path, priv_path]:
+			try:
+				if os.path.exists(path):
+					os.remove(path)
+					logger.info("DEV-REMOTE: deleted %s", path)
+			except Exception as e:
+				logger.warning("DEV-REMOTE: failed deleting %s: %s", path, e)
 
-	logger.info(f"DEV-REMOTE: using persisted policy_id={policy_id}")
-	return policy_id
+		# Generate and persist new policy id after cleanup
+		policy_id = uuid.uuid4().hex
+		try:
+			with open(policy_file, "w", encoding="utf-8") as f:
+				f.write(policy_id)
+		except Exception as e:
+			logger.error("DEV-REMOTE: failed writing policy file: %s", e)
+			raise
+
+		logger.warning("DEV-REMOTE: created new policy_id=%s", policy_id)
+		return policy_id
+# def dev_remote_bootstrap_policy_id()-> str | None:
+# 	"""
+# 	REMOTE DEVELOPMENT ENVIRONMENT ONLY (spinning up on remote server independent of stations/relays/app)
+
+# 	If dev_policy_id.txt is missing:
+# 	- generate new policy_id
+# 	- wipe blockchain DB
+
+# 	Returns policy_id or None.
+# 	"""
+# 	if not dev_remote:
+# 		return None
+
+# 	policy_file = os.path.join("blockchain", "dev_policy_id.txt")
+# 	if not os.path.exists(policy_file):
+# 		logger.warning(
+# 			"DEV-REMOTE: dev_policy_id.txt missing. "
+# 			"Assuming intentional reset by operator."
+# 		)
+# 		return dev_local_bootstrap_policy_id_and_cleanup()
+
+# 	with open(policy_file, "r", encoding="utf-8") as f:
+# 		policy_id = f.read().strip() or None
+
+# 	logger.info(f"DEV-REMOTE: using persisted policy_id={policy_id}")
+# 	return policy_id
 
 
 # GENERATING CRISIS BLOCKCHAIN - (an event and aftermath all tied to the same chain)
@@ -232,7 +326,7 @@ def dev_remote_bootstrap_policy_id()-> str | None:
 if is_dev:
 	persisted_policy_id = dev_local_bootstrap_policy_id_and_cleanup()
 elif dev_remote:
-	persisted_policy_id = dev_remote_bootstrap_policy_id()
+	persisted_policy_id = dev_remote_bootstrap_policy_id_and_cleanup()
 else:
 	persisted_policy_id = None
 

@@ -1,3 +1,5 @@
+# krisys-backend/Dockerfile.HQ.dev_remote
+# “DEV / EPHEMERAL ONLY — DO NOT USE IN PRODUCTION”
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -8,6 +10,8 @@ WORKDIR /app
 
 # Explicit dev-remote environment
 ENV FLASK_ENV=dev_remote
+ENV KRISYS_HQ_STATE_DIR=/app/blockchain
+ENV BLOCKCHAIN_DB_PATH=/app/blockchain/blockchain.db
 ENV PYTHONUNBUFFERED=1
 
 # You will expose a non-standard port for remote testing
@@ -21,17 +25,22 @@ COPY . /app
 # Bind explicitly to the dev-remote port
 EXPOSE 5123
 
-CMD ["gunicorn", "-b", "0.0.0.0:5123", "app:app", "--workers", "2"]
+CMD ["gunicorn", "-b", "0.0.0.0:5123", "app:app", "--workers", "1"]
 
 
 # USAGE on Linode
-# docker build -f Dockerfile.HQ.dev_remote -t krisys-hq .
-# docker run -d \
-# 	-p 5123:5123 \
-# 	-v $(pwd)/data:/app/data \
-# 	--name krisys-hq \
-# 	krisys-hq
-
+#################
+# [KriSys]/DEV_REMOTE_TEST$
+# docker build --no-cache -f ../krisys-backend/Dockerfile.HQ.dev_remote -t krisys-hq ../krisys-backend/
+# docker save krisys-hq > krisys-hq.tar
+# rsync -avP -e "ssh -o IdentitiesOnly=yes" ./krisys-hq.tar [username]@[cloud ip address]:~/dev_krisys/krisys-hq.tar
+#
+# [on linode]
+# cd dev_krisys
+# mkdir ~/dev_krisys/data
+# sudo docker load < krisys-hq.tar
+# sudo docker run -d -p 5123:5123 -v ~/dev_krisys/data:/app/blockchain --name krisys-hq krisys-hq
+#################
 # USAGE on Station device that needs to be registered
 # curl -X POST http://krisys.krisdriver.com:5123/dev/station/register \
 # 	-H "Content-Type: application/json" \

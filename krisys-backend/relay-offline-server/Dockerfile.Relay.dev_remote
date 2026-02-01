@@ -1,0 +1,43 @@
+# krisys-backend/relay-offline-server/Dockerfile.Relay.dev_remote
+# “DEV / EPHEMERAL ONLY — DO NOT USE IN PRODUCTION”
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+libsqlite3-0 \
+&& rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Explicit dev-remote environment
+ENV FLASK_ENV=dev_remote
+ENV PYTHONUNBUFFERED=1
+
+# Central server URL (Linode)
+ENV CENTRAL_API_URL=http://krisys.krisdriver.com:5123
+
+# Relay data directory
+ENV RELAY_DATA_DIR=/app/data
+
+# Reuse top-level requirements
+COPY ./requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy only the relay app
+COPY ./relay-offline-server/ /app
+
+EXPOSE 5000
+
+CMD ["gunicorn", "-b", "0.0.0.0:5000", "app:app", "--workers", "1"]
+
+
+# Dockerfile for development setting testing on separate physical machines (ie: NOT using docker-compose)
+# docker build \
+# 	-f krisys-backend/relay-offline-server/Dockerfile.Relay.dev_remote \
+# 	-t krisys-relay-dev-remote \
+# 	.
+
+# docker run -d \
+# 	-p 6002:5000 \
+# 	-v $(pwd)/relay-data:/app/data \
+# 	--name krisys-relay \
+# 	krisys-relay-dev-remote

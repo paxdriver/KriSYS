@@ -1,0 +1,23 @@
+# Dockerfile.App.dev_remote
+# “DEV / EPHEMERAL ONLY — DO NOT USE IN PRODUCTION”
+FROM node:22-alpine
+
+WORKDIR /app
+
+# Explicit dev-remote environment
+ENV NODE_ENV=production
+ENV NEXT_PUBLIC_API_URL=http://krisys.krisdriver.com:5123
+
+# Copy package files
+COPY package*.json ./
+RUN npm ci --only=production
+
+# Copy source code
+COPY . .
+
+# Build with dev-remote API URL baked in
+RUN npm run build
+
+EXPOSE 3000
+
+CMD ["npm", "start"]

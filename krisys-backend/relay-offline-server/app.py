@@ -51,7 +51,22 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app, origins=["http://localhost:3000"])
+
+# ----------------------------
+# CORS configuration (browser DevTools access)
+# ----------------------------
+# docker-compose setup that spins up relay, station, app and blockchain
+is_dev = os.environ.get("FLASK_ENV") == "development"
+# Individual containers intended to simulate real network, using webserver, linode, and separate devices
+dev_remote = os.environ.get("FLASK_ENV") == "dev_remote"
+
+if is_dev or dev_remote:
+	FRONTEND_ORIGINS = ["http://localhost:3000",]
+else:
+	# Production, lock this down later
+	FRONTEND_ORIGINS = []
+CORS(app, origins=FRONTEND_ORIGINS)
+###########################################
 
 # Hard cap request size (abuse protection). Tune as needed.
 # Note: inventory is tiny; sync can be larger due to blocks + queued.

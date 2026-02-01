@@ -1,0 +1,44 @@
+# krisys-backend/device-offline-server/Dockerfile.Station.dev_remote
+# “DEV / EPHEMERAL ONLY — DO NOT USE IN PRODUCTION”
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+libsqlite3-0 \
+&& rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Explicit dev-remote environment
+ENV FLASK_ENV=dev_remote
+ENV PYTHONUNBUFFERED=1
+
+# Central server URL (Linode)
+ENV CENTRAL_API_URL=http://krisys.krisdriver.com:5123
+
+# Station data directory
+ENV STATION_DATA_DIR=/app/data
+
+# Reuse top-level requirements
+COPY ./requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy only the station app
+COPY ./device-offline-server/ /app
+
+EXPOSE 5000
+
+# No reload in dev_remote (closer to real deployment)
+CMD ["gunicorn", "-b", "0.0.0.0:5000", "app:app", "--workers", "1"]
+
+
+# Dockerfile for development setting testing on separate physical machines (ie: NOT using docker-compose)
+# docker build \
+# 	-f krisys-backend/device-offline-server/Dockerfile.Station.dev_remote \
+# 	-t krisys-station-dev-remote \
+# 	.
+
+# docker run -d \
+# 	-p 6001:5000 \
+# 	-v $(pwd)/station-data:/app/data \
+# 	--name krisys-station \
+# 	krisys-station-dev-remote
