@@ -1,3 +1,4 @@
+// krisys-frontend/services/walletPublicKeyShare.js
 function normalizeLineEndings(s) {
 	return s.replaceAll('\r\n', '\n').replaceAll('\r', '\n')
 }
