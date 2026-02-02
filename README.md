@@ -717,7 +717,7 @@ Dev reset behavior (dev-only):
 
 ---
 
-### Phase 4 — Operational hardening (In progress)
+### Phase 4 — Operational hardening (Completed)
 Goal: align dev prototype with real-world operation before multi-device field tests.
 
 Phase 4a — Client hardening (In progress)
@@ -753,7 +753,7 @@ Phase 4b — Station/relay hardening (In progress)
 
 ---
 
-### Phase 5 — System Validation & Field Testing (Planned)
+### Phase 5 — System Validation & Field Testing (In-progress)
 Goal: prove the system survives realistic conditions across devices and networks.
 
 Core validation scenarios:
