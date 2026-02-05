@@ -153,6 +153,39 @@ def get_station_api_key() -> str | None:
 logger.info(f'Station API key (DEV ONLY): {_station_identity} (may not be loaded, race condition on first load)')
 #############################################
 
+def _identity_path_for_write() -> str:
+	# Matches load_station_identity() behavior so compose/dev and real device both work.
+	env_station_id = os.environ.get("STATION_ID")
+	if env_station_id and isinstance(env_station_id, str) and env_station_id.strip():
+		safe = env_station_id.strip()
+		return os.path.join(DATA_DIR, f"station_identity_{safe}.json")
+
+	return STATION_IDENTITY_FILE
+
+
+def reload_station_identity_in_memory() -> None:
+	global _station_identity
+	global STATION_ID
+
+	_station_identity = load_station_identity()
+	STATION_ID = _station_identity["station_id"] if _station_identity else None
+
+
+def get_or_create_station_device_id() -> str:
+	"""
+	Local device ID for audit only. Not a trust mechanism.
+	Stored in station meta so it persists across restarts.
+	"""
+	init_station_db()
+
+	existing = db_get_meta("deviceId")
+	if isinstance(existing, str) and existing.strip():
+		return existing.strip()
+
+	new_id = str(uuid.uuid4())
+	db_set_meta("deviceId", new_id)
+	return new_id
+
 @contextmanager
 def station_db():
 	"""
@@ -1270,7 +1303,10 @@ def export_station_payload() -> dict:
 
 # Initialize DB and bootstrap trust anchor (genesis + public key + crisisId).
 init_station_db()
-bootstrap_station_or_die()
+try:
+	bootstrap_station_or_die()
+except Exception as e:
+	logger.warning(f"Station bootstrap failed; continuing unbootstrapped: {e}")
 
 
 @app.route("/health", methods=["GET"])
@@ -1416,6 +1452,118 @@ def station_checkin_offline():
 		),
 		201,
 	)
+
+@app.route("/station/provision", methods=["POST"])
+def station_provision():
+	"""
+	Provision this station by exchanging a one-time passphrase for an API key.
+	Request JSON: { "passphrase": "foodtruck" }
+	Response (200):
+	{
+		"status": "active",
+		"station_id": "...",
+		"crisisId": "...",
+		"device_id": "..."
+	}
+	"""
+	init_station_db()
+
+	incoming = request.get_json(force=True, silent=True) or {}
+	passphrase = incoming.get("passphrase")
+
+	if not isinstance(passphrase, str) or not passphrase.strip():
+		return jsonify({"error": "Missing passphrase"}), 400
+
+	device_id = get_or_create_station_device_id()
+
+	# Call HQ to activate
+	try:
+		resp = requests.post(
+			f"{CENTRAL_URL}/station/activate",
+			json={
+				"passphrase": passphrase.strip(),
+				"device_id": device_id,
+			},
+			timeout=20,
+		)
+	except Exception as e:
+		return jsonify({"error": f"Failed to reach central: {e}"}), 502
+
+	if resp.status_code != 200:
+		try:
+			return jsonify(resp.json()), resp.status_code
+		except Exception:
+			return jsonify({"error": resp.text}), resp.status_code
+
+	obj = resp.json() or {}
+
+	api_key = obj.get("api_key")
+	crisis = obj.get("crisis") or {}
+	station = obj.get("station") or {}
+
+	crisis_id = crisis.get("id")
+	block_public_key = crisis.get("block_public_key")
+	station_id = station.get("station_id")
+
+	if not isinstance(api_key, str) or not api_key:
+		return jsonify({"error": "Central response missing api_key"}), 500
+	if not isinstance(crisis_id, str) or not crisis_id:
+		return jsonify({"error": "Central response missing crisis.id"}), 500
+	if not isinstance(block_public_key, str) or not block_public_key:
+		return jsonify({"error": "Central response missing crisis.block_public_key"}), 500
+	if not isinstance(station_id, str) or not station_id:
+		return jsonify({"error": "Central response missing station.station_id"}), 500
+
+	# Persist identity to disk
+	identity_path = _identity_path_for_write()
+	identity = {
+		"station_id": station_id,
+		"crisis_id": crisis_id,
+		"api_key": api_key,
+		"createdAt": int(time.time()),
+	}
+
+	try:
+		os.makedirs(DATA_DIR, exist_ok=True)
+		with open(identity_path, "w", encoding="utf-8") as f:
+			f.write(json.dumps(identity, indent=2))
+	except Exception as e:
+		return jsonify({"error": f"Failed to write identity file: {e}"}), 500
+
+	# Pin trust anchor + crisisId locally
+	db_set_meta("crisisId", crisis_id)
+	db_set_meta("block_public_key", block_public_key)
+	station_state["crisisId"] = crisis_id
+
+	# Store genesis (verified) and pull suffix blocks (best effort)
+	genesis = crisis.get("genesis_block")
+	if isinstance(genesis, dict):
+		try:
+			process_incoming_blocks([genesis])
+		except Exception as e:
+			logger.warning(f"Provision: failed to store genesis: {e}")
+
+	try:
+		chain_resp = requests.get(f"{CENTRAL_URL}/blockchain", timeout=20)
+		if chain_resp.ok:
+			chain = chain_resp.json()
+			if isinstance(chain, list) and chain:
+				process_incoming_blocks(chain[-MAX_BLOCKS_STORED:])
+	except Exception as e:
+		logger.warning(f"Provision: failed to pull chain suffix: {e}")
+
+	# Refresh in-memory identity (so /station/flush can use it immediately)
+	reload_station_identity_in_memory()
+
+	return jsonify(
+		{
+			"status": "active",
+			"station_id": station_id,
+			"crisisId": crisis_id,
+			"device_id": device_id,
+		}
+	), 200
+
 
 @app.route("/mesh/inventory", methods=["POST"])
 def mesh_inventory():

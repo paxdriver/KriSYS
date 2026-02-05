@@ -99,17 +99,29 @@ def init_db():
 			id INTEGER PRIMARY KEY,
 			crisis_id TEXT NOT NULL,
 			station_id TEXT NOT NULL,
+
 			name TEXT,
 			type TEXT,
 			location TEXT,
-			registration_code_hash TEXT,  -- hash of one-time activation code (future)
-			api_key_hash TEXT,            -- hash of long-term API key
-			status TEXT DEFAULT 'pending',
+
+			-- One-time activation (pending state)
+			registration_code_hash TEXT,   -- hash of activation passphrase
+
+			-- Long-term identity (active state)
+			api_key_hash TEXT,             -- hash of station API key
+
+			-- Lifecycle
+			status TEXT DEFAULT 'pending', -- pending | active | revoked (future)
+
+			-- Audit / metadata
+			activated_device_id TEXT,      -- device UUID that activated this station
+			activated_at INTEGER,          -- unix seconds when activated
 			created_at INTEGER DEFAULT (CAST(strftime('%s','now') AS INTEGER)),
-			UNIQUE(crisis_id, station_id)
+
+			UNIQUE(crisis_id, station_id),
+			UNIQUE(registration_code_hash)
 		)
 		''')
-		
 		conn.commit()
 		
 if __name__ == "__main__":

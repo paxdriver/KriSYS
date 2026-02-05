@@ -17,14 +17,6 @@ import hmac
 import secrets
 import qrcode
 from io import BytesIO
-
-###############
-# TODO: For each block loaded: Wrap up Phase 2
-# - Reconstruct the signed header (block_index, previous_hash, hash).
-# - Verify block.signature with the public key.
-# - Only treat blocks with valid signatures as canonical.
-###############
-
 # DEV NOTE: logging for development only
 import logging
 # Configure logging
@@ -37,6 +29,40 @@ MIN_PASSPHRASE_LENGTH = 1   # set small limit, just for obfuscation not security
 def _hq_state_dir() -> str:
 	# Where dev_remote stores persistent artifacts (DB + keys + policy_id)
 	return os.environ.get("KRISYS_HQ_STATE_DIR", "/app/data")
+
+#####################################
+# Station activation passphrase hashing (Phase 5)
+# -------------------------------
+# DEV NOTE:
+# In production, this must be a long random secret set via environment variable and protected like a password.
+# It prevents offline guessing if the stations table is ever leaked.
+STATION_ACTIVATION_PEPPER = os.environ.get(	"STATION_ACTIVATION_PEPPER","DEV_ONLY_CHANGE_ME",)
+
+def hash_station_activation_passphrase(passphrase: str) -> str:
+	"""
+	Hash a station activation passphrase for safe storage and lookup.
+
+	- Deterministic (same passphrase -> same hash)
+	- Non-reversible
+	- Uses HMAC-SHA256 with a server-side pepper
+
+	This hash is stored only while the station is in 'pending' state.
+	It is deleted immediately after successful activation.
+	"""
+	if not isinstance(passphrase, str):
+		raise ValueError("Activation passphrase must be a string")
+
+	p = passphrase.strip()
+	if not p:
+		raise ValueError("Activation passphrase cannot be empty")
+
+	return hmac.new(
+		STATION_ACTIVATION_PEPPER.encode("utf-8"),
+		p.encode("utf-8"),
+		hashlib.sha256,
+	).hexdigest()
+# -------------------------------
+####################################
 
 app = Flask(__name__, static_folder='static')
 
@@ -60,111 +86,6 @@ else:
 
 CORS(app, origins=FRONTEND_ORIGINS)
 
-# if neither dev mode, production, just making sure devtools and endpoints never leak into prod
-# if not is_dev and not dev_remote:
-	# return None
-if dev_remote:
-	# ---------------------------------------------------------------------------
-	# DEV-REMOTE ONLY: Station registration endpoint
-	# This endpoint exists ONLY when FLASK_ENV == "dev_remote"
-	# It allows a remote station to register itself and receive its API key once.
-	# ---------------------------------------------------------------------------
-	# DEV ONLY - dev_remote
-	@app.route("/dev/station/register", methods=["POST"])
-	def dev_register_station():
-		"""
-		DEV-REMOTE ONLY.
-
-		Register a station and issue its API key once.
-
-		Request JSON:
-		{
-			"crisisId": "...",
-			"station_id": "HOSPITAL_NW_001",
-			"name": "North-West Field Hospital",
-			"type": "hospital",
-			"location": "Sector A"
-		}
-
-		Response (201):
-		{
-			"station_id": "...",
-			"api_key": "PLAINTEXT_API_KEY"
-		}
-
-		This endpoint MUST NOT exist in production.
-		"""
-
-		data = request.get_json(force=True, silent=True) or {}
-
-		requested_crisis_id = data.get("crisisId")
-		station_id = data.get("station_id")
-		name = data.get("name")
-		stype = data.get("stype") or data.get("type")
-		location = data.get("location")
-
-		if not all([requested_crisis_id, station_id, name, stype]):
-			return jsonify({"error": "Missing required fields"}), 400
-
-		# HARD SAFETY: only allow the current HQ crisis
-		current_crisis_id = blockchain.crisis_metadata.get("id")
-		if requested_crisis_id != current_crisis_id:
-			return jsonify({
-				"error": "crisisId_mismatch",
-				"expected": current_crisis_id,
-				"got": requested_crisis_id,
-			}), 409
-
-		ensure_station(
-			crisis_id=current_crisis_id,
-			station_id=station_id,
-			name=name,
-			stype=stype,
-			location=location,
-		)
-
-		# Check if API key already exists
-		with db_connection() as conn:
-			row = conn.execute(
-				"""
-				SELECT api_key_hash, status
-				FROM stations
-				WHERE crisis_id = ? AND station_id = ?
-				""",
-				(crisis_id, station_id),
-			).fetchone()
-
-		if row and row["api_key_hash"]:
-			return jsonify({
-				"error": "Station already registered",
-			}), 409
-
-		# Generate API key ONCE
-		api_key = secrets.token_urlsafe(32)
-		api_key_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
-
-		with db_connection() as conn:
-			conn.execute(
-				"""
-				UPDATE stations
-				SET api_key_hash = ?, status = 'active'
-				WHERE crisis_id = ? AND station_id = ?
-				""",
-				(api_key_hash, crisis_id, station_id),
-			)
-			conn.commit()
-
-		logger.warning(
-			"DEV-REMOTE: issued API key for station %s (%s)",
-			station_id,
-			crisis_id,
-		)
-
-		# Return plaintext API key ONCE
-		return jsonify({
-			"station_id": station_id,
-			"api_key": api_key,
-		}), 201
 
 # DEV ONLY - with docker-compose
 def dev_local_bootstrap_policy_id_and_cleanup() -> str | None:
@@ -292,33 +213,6 @@ def dev_remote_bootstrap_policy_id_and_cleanup() -> str | None:
 
 		logger.warning("DEV-REMOTE: created new policy_id=%s", policy_id)
 		return policy_id
-# def dev_remote_bootstrap_policy_id()-> str | None:
-# 	"""
-# 	REMOTE DEVELOPMENT ENVIRONMENT ONLY (spinning up on remote server independent of stations/relays/app)
-
-# 	If dev_policy_id.txt is missing:
-# 	- generate new policy_id
-# 	- wipe blockchain DB
-
-# 	Returns policy_id or None.
-# 	"""
-# 	if not dev_remote:
-# 		return None
-
-# 	policy_file = os.path.join("blockchain", "dev_policy_id.txt")
-# 	if not os.path.exists(policy_file):
-# 		logger.warning(
-# 			"DEV-REMOTE: dev_policy_id.txt missing. "
-# 			"Assuming intentional reset by operator."
-# 		)
-# 		return dev_local_bootstrap_policy_id_and_cleanup()
-
-# 	with open(policy_file, "r", encoding="utf-8") as f:
-# 		policy_id = f.read().strip() or None
-
-# 	logger.info(f"DEV-REMOTE: using persisted policy_id={policy_id}")
-# 	return policy_id
-
 
 # GENERATING CRISIS BLOCKCHAIN - (an event and aftermath all tied to the same chain)
 # persists policy across reloads until the policy_id textfile is deleted. When that happens we'll delete old databases (station.db and blockchain.db) and asc pgp key files belonging to the old blockchain (master_public_key.asc/master_private_key.asc) so that we're starting fresh.
@@ -405,6 +299,7 @@ def ensure_station(crisis_id: str, station_id: str, name: str, stype: str, locat
 		)
 		conn.commit()
 		logger.info(f"Created station {station_id} ({name}) for crisis {crisis_id}")
+
 
 # Auth for registered stations, rather than passphrase to unlock one-time set-up stores an api key registered remotely by the sys admin
 def _dev_station_identity_file_path(station_id: str) -> str:
@@ -499,7 +394,6 @@ if is_dev:
 		location="Sector SE"
 	)
 	provision_dev_station_api_key(crisis_id, "HOSPITAL_SE_001")
-
 # DEV NOTE: SECOND SIMULATED VERIFIED STATION FOR DEMO (not when testing remotely, only docker-compose)
 if is_dev:
 	ensure_station(
@@ -547,7 +441,7 @@ def admin_required(f):
 	return decorated_function
 #####################
 
-# # Create admin key file
+# # DEV NOTE: Create admin key file
 # admin_key_file = os.path.join('blockchain', 'admin_keys.txt')
 # try:
 #     with open(admin_key_file, 'w') as f:
@@ -1064,6 +958,114 @@ def check_in():
 	#
 	# ---------------------------------------------------------------------------
 
+# Stations are registered at central HQ, one-time passphrase required for activation.
+# Once a station is activated, it stores its api key locally and uses that to unlock.
+@app.route("/station/activate", methods=["POST"])
+def station_activate():
+	"""
+	One-time station activation by passphrase (passphrase-only).
+
+	Request JSON:
+	{
+		"passphrase": "foodtruck",
+		"device_id": "optional-device-uuid"
+	}
+
+	Response (200):
+	{
+		"crisis": {
+			"id": "...",
+			"name": "...",
+			"block_public_key": "...",
+			"genesis_block": { ... }
+		},
+		"station": {
+			"station_id": "...",
+			"name": "...",
+			"stype": "...",
+			"location": "..."
+		},
+		"api_key": "..."
+	}
+	"""
+	data = request.get_json(force=True, silent=True) or {}
+
+	passphrase = data.get("passphrase")
+	device_id = data.get("device_id")
+
+	if not isinstance(passphrase, str) or not passphrase.strip():
+		return jsonify({"error": "Missing passphrase"}), 400
+
+	try:
+		code_hash = hash_station_activation_passphrase(passphrase)
+	except Exception as e:
+		return jsonify({"error": str(e)}), 400
+
+	# Find the pending station by passphrase hash (one-time)
+	with db_connection() as conn:
+		row = conn.execute(
+			"""
+			SELECT crisis_id, station_id, name, type, location, status, api_key_hash
+			FROM stations
+			WHERE registration_code_hash = ?
+			LIMIT 1
+			""",
+			(code_hash,),
+		).fetchone()
+
+	if not row:
+		return jsonify({"error": "Invalid passphrase"}), 404
+
+	# If somehow already active, do not re-issue keys
+	if row["status"] == "active" and row["api_key_hash"]:
+		return jsonify({"error": "Station already active"}), 409
+
+	# Issue API key ONCE (never stored plaintext)
+	api_key = secrets.token_urlsafe(32)
+	api_key_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+	now_s = int(time.time())
+
+	with db_connection() as conn:
+		conn.execute(
+			"""
+			UPDATE stations
+			SET
+				api_key_hash = ?,
+				status = 'active',
+				registration_code_hash = NULL,
+				activated_device_id = ?,
+				activated_at = ?
+			WHERE crisis_id = ? AND station_id = ?
+			""",
+			(
+				api_key_hash,
+				device_id.strip() if isinstance(device_id, str) else None,
+				now_s,
+				row["crisis_id"],
+				row["station_id"],
+			),
+		)
+		conn.commit()
+
+	genesis = blockchain.chain[0].to_dict() if blockchain.chain else None
+
+	return jsonify(
+		{
+			"crisis": {
+				"id": blockchain.crisis_metadata["id"],
+				"name": blockchain.crisis_metadata["name"],
+				"block_public_key": blockchain.crisis_metadata["public_key"],
+				"genesis_block": genesis,
+			},
+			"station": {
+				"station_id": row["station_id"],
+				"name": row["name"],
+				"stype": row["type"],
+				"location": row["location"],
+			},
+			"api_key": api_key,
+		}
+	), 200
 
 # Authentication endpoint that returns private key for client-side decryption
 @app.route('/auth/unlock', methods=['POST'])
@@ -1101,6 +1103,113 @@ def unlock_wallet_endpoint():
 		logger.error(f"Unlock error: {str(e)}")
 		return jsonify({"error": "Internal server error"}), 500
 
+# DEV NOTE: move to admin UI in production, requiring admin key to access internally, not exposed by default
+@app.route("/admin/station/create", methods=["POST"])
+def admin_station_create():
+	"""
+	DEV / DEV-REMOTE ONLY CAN ACCESS WITHOUT AUTH
+
+	Create or update a *pending* station that is waiting for activation
+	via a one-time passphrase.
+
+	Request JSON:
+	{
+		"station_id": "FOODTRUCK_001",
+		"name": "Food Truck 001",
+		"stype": "foodtruck",
+		"location": "Sector A",
+		"passphrase": "foodtruck"
+	}
+
+	Response (201):
+	{
+		"status": "pending",
+		"crisis_id": "...",
+		"station_id": "FOODTRUCK_001"
+	}
+	"""
+
+	data = request.get_json(force=True, silent=True) or {}
+
+	station_id = data.get("station_id")
+	name = data.get("name")
+	stype = data.get("stype") or data.get("type")
+	location = data.get("location")
+	passphrase = data.get("passphrase")
+
+	if station_id and isinstance(station_id, str): station_id = station_id.strip()
+
+	if not isinstance(station_id, str) or not station_id:
+		return jsonify({"error": "Missing station_id"}), 400
+	if not isinstance(name, str) or not name.strip():
+		return jsonify({"error": "Missing name"}), 400
+	if not isinstance(stype, str) or not stype.strip():
+		return jsonify({"error": "Missing stype"}), 400
+	if not isinstance(passphrase, str) or not passphrase.strip():
+		return jsonify({"error": "Missing passphrase"}), 400
+
+	try:
+		code_hash = hash_station_activation_passphrase(passphrase)
+	except Exception as e:
+		return jsonify({"error": str(e)}), 400
+
+	crisis_id = blockchain.crisis_metadata["id"]
+
+	# Ensure the station exists (metadata only)
+	ensure_station(
+		crisis_id=crisis_id,
+		station_id=station_id,
+		name=name.strip(),
+		stype=stype.strip(),
+		location=location.strip() if isinstance(location, str) else None,
+	)
+
+	with db_connection() as conn:
+		# Do not overwrite active stations
+		row = conn.execute(
+			"""
+			SELECT status, api_key_hash
+			FROM stations
+			WHERE crisis_id = ? AND station_id = ?
+			""",
+			(crisis_id, station_id),
+		).fetchone()
+
+		if row and row["status"] == "active" and row["api_key_hash"]:
+			return jsonify({
+				"error": "Station already active"
+			}), 409
+
+		# Store pending activation hash
+		conn.execute(
+			"""
+			UPDATE stations
+			SET
+				name = ?,
+				type = ?,
+				location = ?,
+				status = 'pending',
+				registration_code_hash = ?,
+				api_key_hash = NULL
+			WHERE crisis_id = ? AND station_id = ?
+			""",
+			(
+				name.strip(),
+				stype.strip(),
+				location.strip() if isinstance(location, str) else None,
+				code_hash,
+				crisis_id,
+				station_id,
+			),
+		)
+		conn.commit()
+
+	return jsonify({
+		"status": "pending",
+		"crisis_id": crisis_id,
+		"station_id": station_id,
+	}), 201
+
 # Debug endpoints
 @app.route('/debug/wallet/<family_id>')
 def debug_wallet(family_id):
@@ -1120,7 +1229,6 @@ def debug_transactions():
 @app.route('/debug/blockchain')
 def debug_blockchain():
 	return jsonify([block.to_dict() for block in blockchain.chain])
-
 
 @app.route('/wallet/<family_id>/public-key')
 def get_wallet_public_key(family_id):
