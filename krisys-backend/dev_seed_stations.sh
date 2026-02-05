@@ -1,21 +1,45 @@
+#!/usr/bin/env bash
 # DEV NOTE: Hard coding the provisioning of 3 stations for ease of testing - maybe consider for wizard later
 # to help simplify setup if KriSys provider knows some of the permanent stations like hospitals at time of init
 # * Seed 3 pending stations for Phase 5 testing.
 # 	- passphrases are intentionally simple for development only
 # 	- in production these must be long, printed, and distributed out-of-band
 
-# STATION PASSPHRASES: "foodtruck", "camp", "border"
-curl -X POST http://localhost:5000/admin/station/create \
+set -e
+
+HQ_URL="http://localhost:5000"
+# ADMIN TOKEN REQUIRED FOR STATION PROVISIONING
+ADMIN_TOKEN_FILE="blockchain/admin_token.txt"
+
+ADMIN_TOKEN="$(cat "$ADMIN_TOKEN_FILE")"
+
+curl -X POST "$HQ_URL/admin/station/create" \
 	-H "Content-Type: application/json" \
+	-H "X-Admin-Token: $ADMIN_TOKEN" \
 	-d '{"station_id":"FOODTRUCK_001","name":"Food Truck 001","stype":"foodtruck","location":"Sector TBD","passphrase":"foodtruck"}'
 
-curl -X POST http://localhost:5000/admin/station/create \
+curl -X POST "$HQ_URL/admin/station/create" \
 	-H "Content-Type: application/json" \
+	-H "X-Admin-Token: $ADMIN_TOKEN" \
 	-d '{"station_id":"CAMP_CENTRAL","name":"Camp Central","stype":"camp","location":"Central","passphrase":"camp"}'
 
-curl -X POST http://localhost:5000/admin/station/create \
+curl -X POST "$HQ_URL/admin/station/create" \
 	-H "Content-Type: application/json" \
+	-H "X-Admin-Token: $ADMIN_TOKEN" \
 	-d '{"station_id":"BORDER_CROSSING_NE","name":"Border Crossing NE","stype":"border","location":"NE","passphrase":"border"}'
+
+# STATION PASSPHRASES: "foodtruck", "camp", "border"
+# curl -X POST http://localhost:5000/admin/station/create \
+# 	-H "Content-Type: application/json" \
+# 	-d '{"station_id":"FOODTRUCK_001","name":"Food Truck 001","stype":"foodtruck","location":"Sector TBD","passphrase":"foodtruck"}'
+
+# curl -X POST http://localhost:5000/admin/station/create \
+# 	-H "Content-Type: application/json" \
+# 	-d '{"station_id":"CAMP_CENTRAL","name":"Camp Central","stype":"camp","location":"Central","passphrase":"camp"}'
+
+# curl -X POST http://localhost:5000/admin/station/create \
+# 	-H "Content-Type: application/json" \
+# 	-d '{"station_id":"BORDER_CROSSING_NE","name":"Border Crossing NE","stype":"border","location":"NE","passphrase":"border"}'
 
 ##############################
 # THEN ACTIVATE ONE

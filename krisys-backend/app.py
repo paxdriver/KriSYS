@@ -30,6 +30,62 @@ def _hq_state_dir() -> str:
 	# Where dev_remote stores persistent artifacts (DB + keys + policy_id)
 	return os.environ.get("KRISYS_HQ_STATE_DIR", "/app/data")
 
+app = Flask(__name__, static_folder='static')
+
+# docker-compose setup that spins up relay, station, app and blockchain
+is_dev = os.environ.get("FLASK_ENV") == "development"
+# Individual containers intended to simulate real network, using webserver, linode, and separate devices
+dev_remote = os.environ.get("FLASK_ENV") == "dev_remote"
+
+
+
+def _admin_token_state_dir() -> str:
+	# In dev_remote, persist under the HQ state dir; otherwise under ./blockchain
+	if dev_remote:
+		return _hq_state_dir()
+	return "blockchain"
+
+def load_or_create_admin_token() -> str:
+	"""
+	File-backed admin token for guarding admin endpoints.
+	Created once, persisted, and reused across restarts.
+	"""
+	state_dir = _admin_token_state_dir()
+	os.makedirs(state_dir, exist_ok=True)
+
+	path = os.path.join(state_dir, "admin_token.txt")
+	lock_path = os.path.join(state_dir, ".admin_token.lock")
+
+	with open(lock_path, "w", encoding="utf-8") as lf:
+		fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+
+		if os.path.exists(path):
+			with open(path, "r", encoding="utf-8") as f:
+				token = f.read().strip()
+			if token:
+				return token
+
+		token = secrets.token_urlsafe(32)
+		with open(path, "w", encoding="utf-8") as f:
+			f.write(token)
+
+		logger.warning("Created admin_token.txt at %s", path)
+		return token
+
+# DEV NOTE: ADMIN TOKEN FOR STATION CREATION/PROVISIONING, SEGREGATED FROM DEVTOOLS ADMIN BYPASS FOR NOW
+# 	- In production, proper auth and secrets will be incorporated into this access so only HQ can hit ADMIN endpoints
+ADMIN_STATION_TOKEN = load_or_create_admin_token()
+
+def station_admin_required(fn):
+	@wraps(fn)
+	def wrapper(*args, **kwargs):
+		token = request.headers.get("X-Admin-Token")
+		if not isinstance(token, str) or not token.strip():
+			return jsonify({"error": "UNAUTHORIZED: MISSING ADMIN TOKEN"}), 401
+		if not hmac.compare_digest(token.strip(), ADMIN_STATION_TOKEN):
+			return jsonify({"error": "UNAUTHORIZED: INVALID ADMIN TOKEN"}), 401
+		return fn(*args, **kwargs)
+	return wrapper
 #####################################
 # Station activation passphrase hashing (Phase 5)
 # -------------------------------
@@ -64,12 +120,6 @@ def hash_station_activation_passphrase(passphrase: str) -> str:
 # -------------------------------
 ####################################
 
-app = Flask(__name__, static_folder='static')
-
-# docker-compose setup that spins up relay, station, app and blockchain
-is_dev = os.environ.get("FLASK_ENV") == "development"
-# Individual containers intended to simulate real network, using webserver, linode, and separate devices
-dev_remote = os.environ.get("FLASK_ENV") == "dev_remote"
 
 # ----------------------------
 # CORS configuration (browser access only)
@@ -439,7 +489,6 @@ def admin_required(f):
 			return jsonify({"error": "UNAUTHORIZED: INVALID TOKEN FORMAT"}), 401    
 		return f(*args, **kwargs)
 	return decorated_function
-#####################
 
 # # DEV NOTE: Create admin key file
 # admin_key_file = os.path.join('blockchain', 'admin_keys.txt')
@@ -1105,6 +1154,7 @@ def unlock_wallet_endpoint():
 
 # DEV NOTE: move to admin UI in production, requiring admin key to access internally, not exposed by default
 @app.route("/admin/station/create", methods=["POST"])
+@station_admin_required
 def admin_station_create():
 	"""
 	DEV / DEV-REMOTE ONLY CAN ACCESS WITHOUT AUTH
