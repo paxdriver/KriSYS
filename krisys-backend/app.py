@@ -1009,6 +1009,7 @@ def check_in():
 
 # Stations are registered at central HQ, one-time passphrase required for activation.
 # Once a station is activated, it stores its api key locally and uses that to unlock.
+# DEV NOTE: THIS RETURNS SECRETS AND IS USED BY HQ ADMIN AND STATION REQUESTING API KEY
 @app.route("/station/activate", methods=["POST"])
 def station_activate():
 	"""

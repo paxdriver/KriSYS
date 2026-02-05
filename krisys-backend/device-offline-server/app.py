@@ -1453,6 +1453,7 @@ def station_checkin_offline():
 		201,
 	)
 
+# DEV NOTE: /station/provision does NOT return secrets, it safely stores api key returned from server
 @app.route("/station/provision", methods=["POST"])
 def station_provision():
 	"""
