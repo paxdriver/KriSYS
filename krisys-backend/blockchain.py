@@ -19,6 +19,8 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Adaptive mining (DEV NOTE: PROD SAFE but consider adding to blockchain setup wizard)
+ADAPTIVE_MINE_THRESHOLD = 0.8   # 80% of max block size
 
 # DEV NOTE: POLICY will define many parameters to be tailored by the crisis management host and blockchain maintainer, things like class priority of transactions (org, user, warnings, alert, etc)
 # Policy configuration
@@ -507,6 +509,20 @@ class Blockchain:
 		# Start automatic background miner
 		self.miner_thread = threading.Thread(target=self.miner_loop, daemon=True)
 		self.miner_thread.start()
+
+	# Adaptive mining helper function for diagnostics
+	def _estimate_pending_block_size(self) -> int:
+		"""
+		Estimate serialized size (bytes) of pending transactions
+		as they would appear inside a block.
+		"""
+		try:
+			return sum(
+				len(json.dumps(tx.to_dict(), separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+				for tx in self.pending_transactions
+			)
+		except Exception:
+			return 0
 		
 
 	def load_or_generate_master_key(self):
@@ -832,22 +848,48 @@ class Blockchain:
 				self.save_block(block)
 		
 	def miner_loop(self):
-		"""Background thread for automatic block mining"""
+		"""Background thread for automatic block mining (with adaptive cadence)"""
 		while True:
 			try:
-				# Get current block interval from policy
-				block_interval = self.policy_system.get_policy()['policy']['block_interval']
-				
-				# Only mine if we have transactions
+				policy = self.policy_system.get_policy()['policy']
+				block_interval = int(policy['block_interval'])
+				max_block_size = int(policy['size_limit'])
+
+				now = int(time.time())
+
 				if self.pending_transactions:
+					# --- Adaptive mining check ---
+					pending_size = self._estimate_pending_block_size()
+					fullness = pending_size / max_block_size if max_block_size > 0 else 0
+
+					if fullness >= ADAPTIVE_MINE_THRESHOLD:
+						logger.info(
+							f"Adaptive mining triggered: "
+							f"pending_size={pending_size}B "
+							f"max={max_block_size}B "
+							f"fullness={int(fullness * 100)}%"
+						)
+						self.mine_and_save()
+						continue  # restart loop immediately after mining
+
+					# --- Normal mining path ---
 					self.mine_and_save()
-				
-				# Sleep for the remaining time in the block interval
-				sleep_time = block_interval - (int(time.time()) % block_interval)
-				time.sleep(sleep_time)
+
+				# DEV NOTE: this is a HACK for adaptive mining, consider using signal or threads in prod
+				# Sleep until next aligned block boundary
+				sleep_time = block_interval - (now % block_interval)
+				if sleep_time <= 0:
+					sleep_time = block_interval
+				# Sleep in short ticks so adaptive mining can pre-empt if pending_transactions are piling up
+				sleep_remaining = sleep_time
+				while sleep_remaining > 0:
+					time.sleep(min(1, sleep_remaining))
+					sleep_remaining -= 1
+				# DEV --------------------
+
 			except Exception as e:
 				logger.error(f"Mining error: {str(e)}")
-				time.sleep(5)  # Wait before retrying
+				time.sleep(5)
 
 	def validate_chain(self) -> bool:
 		"""Validate blockchain integrity"""

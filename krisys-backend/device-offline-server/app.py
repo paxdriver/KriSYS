@@ -516,6 +516,42 @@ def update_station_mode() -> None:
 		else "unknown"
 	)
 
+# -----------------------
+# Station vs Relay guards
+# ----------------------
+# Add guards on station automation to prevent undesired thrashing
+def require_station_mode() -> tuple[bool, str]:
+	update_station_mode()
+
+	if STATION_STATE.get("mode") != "station":
+		return False, f"Station-only endpoint (mode={STATION_STATE.get('mode')})"
+
+	return True, ""
+def require_relay_or_station_mode() -> tuple[bool, str]:
+	update_station_mode()
+
+	if STATION_STATE.get("mode") not in ("station", "relay"):
+		return False, f"Relay endpoint unavailable (mode={STATION_STATE.get('mode')})"
+
+	return True, ""
+
+def has_usable_chain() -> bool:
+	# Minimum requirement: verified genesis block exists
+	return db_get_block_hash(0) is not None
+
+def require_usable_relay() -> tuple[bool, str]:
+	update_station_mode()
+
+	if STATION_STATE.get("mode") not in ("station", "relay"):
+		return False, f"Relay unavailable (mode={STATION_STATE.get('mode')})"
+
+	if not has_usable_chain():
+		return False, "Relay unavailable (no verified blockchain)"
+
+	return True, ""
+
+
+
 
 # ----------------------------
 # DB helpers (queued + confirmed)
@@ -980,6 +1016,10 @@ def db_prune_confirmed() -> dict:
 # ----------------------------
 # Bootstrap + crisis pinning
 # ----------------------------
+	# DEV NOTE:
+	# This bootstrap runs at worker startup for dev simplicity.
+	# If central is unreachable, Gunicorn may time out the worker.
+	# In production this will be moved into the background loop or guarded by a central reachability check.
 def bootstrap_station_or_die() -> None:
 	"""
 	Bootstrap station from the trusted central backend.
@@ -1107,11 +1147,25 @@ def ensure_crisis_id(incoming_crisis_id: str | None) -> tuple[bool, str]:
 # Auto-sync
 # ----------------------------
 AUTO_SYNC_DEFAULT = "1" if dev_remote else "0"
-# DEV NOTE: set AUTO_SYNC_DEFAULT in blockchain setup wizard, and intervals as well
+# DEV NOTE: set AUTO_SYNC_DEFAULT in blockchain policy setup wizard, and intervals as well
 STATION_AUTO_SYNC = os.environ.get("STATION_AUTO_SYNC", AUTO_SYNC_DEFAULT) == "1"
-CENTRAL_CHECK_INTERVAL_MS = 5_000
-AUTO_PULL_INTERVAL_MS = 15_000
-AUTO_FLUSH_INTERVAL_MS = 15_000
+CENTRAL_CHECK_INTERVAL_MS = 20_000
+
+# Adaptive sync cadence (for flushing messages to the server, NOT the block mining cadence)
+# Default tiers: busy -> casual
+# SYNC_TIERS_MS = [ # realistic timings
+# 	60_000,		# busy
+# 	180_000,	# medium
+# 	600_000,	# casual max
+# ]
+SYNC_TIERS_MS = [10_000, 30_000, 60_000] # DEV NOTE: faster timings used for development iteration
+
+NO_WORK_ESCALATE_AFTER = 3
+SYNC_STATE = {
+	"tier_idx": 0,
+	"no_work_streak": 0,
+	"next_sync_at_ms": 0,
+}
 
 # If HQ rejects our station API key, do not hammer it
 IDENTITY_REJECT_BACKOFF_MS = 15 * 60 * 1000
@@ -1528,6 +1582,12 @@ def station_checkin_offline():
 
 	Station stores it durably for later flush to central /checkin.
 	"""
+	
+	# Since stations will fallback to relay nodes, this guard prevents a station from behaving like a station if it has not been activated or if api credentials are remotely revoked. It can still operate without changes as a relay but it won't be allowed to flush its queue to be posted to the blockchain anymore.
+	ok, err = require_station_mode()
+	if not ok:
+		return jsonify({"error": err}), 403
+	
 	incoming = request.get_json(force=True, silent=True) or {}
 
 	ok, err = ensure_crisis_id(incoming.get("crisisId"))
@@ -1731,6 +1791,16 @@ def mesh_inventory():
 	"""
 	incoming = request.get_json(force=True, silent=True) or {}
 
+	# First check if it has min requirements to serve as a relay (crisisID, local genesis block)
+	ok, err = require_usable_relay()
+	if not ok:
+		return jsonify({"error": err}), 403
+
+	# Since stations will fallback to relay nodes, we still want mesh to work even if station api key is missing or revoked
+	ok, err = require_relay_or_station_mode()
+	if not ok:
+		return jsonify({"error": err}), 403
+
 	ok, err = ensure_crisis_id(incoming.get("crisisId"))
 	if not ok:
 		return jsonify({"error": err}), 400
@@ -1766,6 +1836,16 @@ def mesh_sync():
 		- uses verified blocks to confirm relay_hash and prune queued
 	"""
 	incoming = request.get_json(force=True, silent=True) or {}
+
+	# First check if it has min requirements to serve as a relay (crisisID, local genesis block)
+	ok, err = require_usable_relay()
+	if not ok:
+		return jsonify({"error": err}), 403
+
+	# Since stations will fallback to relay nodes, we still want mesh to work even if station api key is missing or revoked
+	ok, err = require_relay_or_station_mode()
+	if not ok:
+		return jsonify({"error": err}), 403
 
 	ok, err = ensure_crisis_id(incoming.get("crisisId"))
 	if not ok:
@@ -1818,9 +1898,7 @@ def flush_to_central_internal() -> dict:
 
 	# ---- Flush queued messages ----
 	queued_msgs = db_list_queued(limit=MAX_QUEUED_PER_PAYLOAD)
-	pending_msgs = [
-		m for m in queued_msgs if (m.get("status") or "pending") == "pending"
-	]
+	pending_msgs = [m for m in queued_msgs if (m.get("status") or "pending") == "pending"]
 
 	msg_success = 0
 	msg_failed = 0
@@ -1971,11 +2049,72 @@ def flush_to_central_internal() -> dict:
 # When accumulating messages, flush pushes them to central HQ to be mined in a block
 @app.route("/station/flush", methods=["POST"])
 def station_flush():
+	# Make sure this feature is only available to a station that has activated api key, if revoked it's in relay mode so it's not allowed to add transactions to blocks
+	ok, err = require_station_mode()
+	if not ok:
+		return jsonify({"error": err}), 403
+
 	result = flush_to_central_internal()
 	return jsonify(result), (200 if result.get("ok") else 502)
 
 # BACKGROUND LOOP STARTS vvvvvvvv
 # TODO: set up scheduler process for multi-threading, using "workers", "1" in dockerfiles for now to prevent multiple loops and sql write contentions
+
+# Adaptive intervals for 
+def _sync_interval_ms() -> int:
+	idx = int(SYNC_STATE.get("tier_idx") or 0)
+	idx = max(0, min(idx, len(SYNC_TIERS_MS) - 1))
+	return int(SYNC_TIERS_MS[idx])
+def _sync_note_work(did_work: bool) -> None:
+	# did_work = True => speed up (toward busy), did_work = False => after N misses, slow down (toward casual)
+	if did_work:
+		SYNC_STATE["no_work_streak"] = 0
+		SYNC_STATE["tier_idx"] = max(0, int(SYNC_STATE["tier_idx"]) - 1)
+		return
+
+	SYNC_STATE["no_work_streak"] = int(SYNC_STATE["no_work_streak"]) + 1
+	if int(SYNC_STATE["no_work_streak"]) >= int(NO_WORK_ESCALATE_AFTER):
+		SYNC_STATE["no_work_streak"] = 0
+		SYNC_STATE["tier_idx"] = min( len(SYNC_TIERS_MS) - 1, int(SYNC_STATE["tier_idx"]) + 1 )
+
+# Perform only one sync attempt, returns True if useful work occurred, False otherwise
+# Used for incrementing adaptive sync timings
+def perform_sync_attempt() -> bool:
+	update_station_mode()
+	mode = STATION_STATE.get("mode")
+	did_work = False
+
+	try:
+		# Station: flush (posts + pulls blocks)
+		if mode == "station":
+			result = flush_to_central_internal()
+
+			msg_ok = int(result.get("messages", {}).get("success") or 0) > 0
+			ci_ok = int(result.get("checkins", {}).get("success") or 0) > 0
+			blk_ok = int(result.get("pulled_blocks_stored") or 0) > 0
+
+			did_work = msg_ok or ci_ok or blk_ok
+
+		# Relay: only pull blocks
+		elif mode == "relay":
+			resp = requests.get(f"{CENTRAL_URL}/blockchain", timeout=15)
+			if resp.ok:
+				chain = resp.json()
+				if isinstance(chain, list) and chain:
+					stored = process_incoming_blocks(chain[-MAX_BLOCKS_STORED:])
+					did_work = int(stored or 0) > 0
+
+		# Uninitialized: do nothing
+		else:
+			did_work = False
+
+	except Exception as e:
+		logger.warning(f"Sync attempt failed: {e}")
+		did_work = False
+
+	return bool(did_work)
+
+# The actual loop to check for stuff to sync and adjust refresh timer based on load
 def background_loop():
 	logger.warning("Station auto-sync loop started (enabled=%s)", STATION_AUTO_SYNC)
 
@@ -1986,7 +2125,7 @@ def background_loop():
 			time.sleep(1.0)
 			continue
 
-		# Central reachability check
+		# ---- Central reachability check ----
 		if now_ms >= int(RUNTIME_STATE["next_central_check_at_ms"] or 0):
 			ok, err = can_reach_central()
 			RUNTIME_STATE["central_ok"] = bool(ok)
@@ -1994,36 +2133,24 @@ def background_loop():
 
 			if ok:
 				RUNTIME_STATE["central_last_ok_at_ms"] = now_ms
-				RUNTIME_STATE["next_central_check_at_ms"] = now_ms + CENTRAL_CHECK_INTERVAL_MS
+				RUNTIME_STATE["next_central_check_at_ms"] = (now_ms + CENTRAL_CHECK_INTERVAL_MS)
 			else:
-				# Simple backoff on failure (cap)
+				# Backoff on connectivity failure
 				next_delay = min(CENTRAL_CHECK_INTERVAL_MS * 2, 30_000)
 				RUNTIME_STATE["next_central_check_at_ms"] = now_ms + next_delay
 
-		# If central reachable, do periodic pulls + flushes
+		# ---- Adaptive sync ----
 		if RUNTIME_STATE["central_ok"] is True:
-			# Pull blocks (best effort)
-			if now_ms >= int(RUNTIME_STATE["next_pull_at_ms"] or 0):
-				try:
-					resp = requests.get(f"{CENTRAL_URL}/blockchain", timeout=15)
-					if resp.ok:
-						chain = resp.json()
-						if isinstance(chain, list) and chain:
-							process_incoming_blocks(chain[-MAX_BLOCKS_STORED:])
-				except Exception:
-					pass
-				RUNTIME_STATE["next_pull_at_ms"] = now_ms + AUTO_PULL_INTERVAL_MS
+			if now_ms >= int(SYNC_STATE.get("next_sync_at_ms") or 0):
+				did_work = perform_sync_attempt()
 
-			# Flush (best effort)
-			if now_ms >= int(RUNTIME_STATE["next_flush_at_ms"] or 0):
-				try:
-					flush_to_central_internal()
-				except Exception:
-					pass
-				RUNTIME_STATE["next_flush_at_ms"] = now_ms + AUTO_FLUSH_INTERVAL_MS
+				# Adjust cadence (busy <-> casual)
+				_sync_note_work(did_work)
+
+				# Schedule next attempt
+				SYNC_STATE["next_sync_at_ms"] = (now_ms + _sync_interval_ms())
 
 		time.sleep(0.25)
-
 
 _background_started = False
 
