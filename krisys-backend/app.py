@@ -883,9 +883,14 @@ def check_in():
 	# TEST LIKE THIS OR use the devtools and the api key in the docker server logs with the DevTools button "Check-in":
 	# curl -X POST http://localhost:5000/checkin \
 	#     -H "Content-Type: application/json" \
-	#     -H "X-Station-API-Key: <PASTE_HOSPITAL_SE_001_KEY_HERE>" \
-	#     -d '{"address": "some-wallet-address", "station_id": "HOSPITAL_SE_001"}'
-	
+	#     -H "X-Station-API-Key: <STATION_API_KEY>" \
+	#     -d '{
+	#          "address": "some-wallet-or-member-address",
+	#          "station_id": "HOSPITAL_SE_001",
+	#          "timestamp_created": 1730000000,
+	#          "relay_hash": "uuid-optional-but-recommended-for-offline-dedupe"
+	#     }'
+	#
 	# ---------------------------------------------------------------------------
 	# CHECK-IN ENDPOINT (station-authenticated)
 	# ---------------------------------------------------------------------------
@@ -903,6 +908,22 @@ def check_in():
 	# - The crisis master key still signs blocks; station keys authenticate
 	#   *origin*, not consensus.
 	#
+	# IMPORTANT (lifecycle / security model)
+	# -------------------------------------
+	# - A station MUST be online to become a station (register/activate), because
+	#   activation happens against central HQ and returns:
+	#     - api_key (plaintext, returned ONCE)
+	#     - crisis metadata + block_public_key (+ genesis block)
+	# - The station activation passphrase is delivered out-of-band (separately
+	#   from the station device) to reduce interception/misuse risk.
+	#   Rationale: stations can submit operational check-ins at higher priority
+	#   than normal messages, so station credentials must be treated as sensitive.
+	# - Stations store the issued api_key locally (one key per physical station
+	#   device) in `krisys_station_identity.json` and use it only in the HTTP
+	#   header `X-Station-API-Key` when calling this endpoint.
+	# - The passphrase is NOT used here. Passphrase is for one-time activation
+	#   only (see /admin/station/create + /station/activate).
+	#
 	# Data model (stations table)
 	# ---------------------------
 	# stations (
@@ -912,41 +933,63 @@ def check_in():
 	#   name                  TEXT,            -- human readable name
 	#   type                  TEXT,            -- "hospital", "shelter", etc.
 	#   location              TEXT,            -- optional free text
-	#   registration_code_hash TEXT,           -- FUTURE: one-time activation code
+	#
+	#   -- One-time activation (pending state)
+	#   registration_code_hash TEXT,           -- hash of activation passphrase
+	#
+	#   -- Long-term identity (active state)
 	#   api_key_hash          TEXT,            -- SHA-256 of long-term API key
-	#   status                TEXT DEFAULT 'pending',  -- "pending", "active", "revoked"
-	#   created_at            REAL DEFAULT (strftime('%s', 'now')),
-	#   UNIQUE(crisis_id, station_id)
+	#
+	#   -- Lifecycle
+	#   status                TEXT DEFAULT 'pending',  -- pending | active | revoked (future)
+	#   activated_device_id   TEXT,            -- device UUID that activated (audit)
+	#   activated_at          INTEGER,         -- unix seconds (audit)
+	#   created_at            INTEGER DEFAULT (CAST(strftime('%s','now') AS INTEGER)),
+	#
+	#   UNIQUE(crisis_id, station_id),
+	#   UNIQUE(registration_code_hash)         -- prevents passphrase reuse collisions
 	# )
 	#
-	# In development:
-	# - stations are created by ensure_station(...)
-	# - API keys are provisioned by provision_dev_station_api_key(...):
-	#     - generates a random token_urlsafe(32) key,
-	#     - stores SHA-256(key) in api_key_hash,
-	#     - sets status = "active",
-	#     - logs the *plain* key once for manual testing.
+	# Station provisioning / activation (current implementation)
+	# ---------------------------------------------------------
+	# There are two dev paths right now:
 	#
-	# In production (FUTURE work):
-	# - stations will be created in "pending" with a registration_code_hash.
-	# - on first boot, a station device will send:
-	#       { station_id, registration_code }
-	#   to a dedicated registration endpoint.
-	# - server verifies the registration code, then:
-	#     - generates the API key,
-	#     - stores api_key_hash,
-	#     - sets status = "active",
-	#     - clears registration_code_hash,
-	#     - returns the plain API key once to the device.
-	# - device stores the key locally; operators never type passwords.
+	# 1) docker-compose DEV (legacy convenience for UI/devtools)
+	#    - stations are created by ensure_station(...)
+	#    - API keys are provisioned by provision_dev_station_api_key(...):
+	#        - generates a random token_urlsafe(32) key,
+	#        - stores SHA-256(key) in api_key_hash,
+	#        - sets status = "active",
+	#        - writes plaintext key to station_identity_<STATION_ID>.json
+	#          (used by docker-compose station container + DevTools).
 	#
-	# Request requirements (current endpoint)
-	# --------------------------------------
+	# 2) Phase 5 DEV-REMOTE / more realistic station lifecycle
+	#    - Admin creates a pending station and one-time activation passphrase:
+	#        POST /admin/station/create
+	#        Header: X-Admin-Token: <ADMIN_STATION_TOKEN from admin_token.txt>
+	#        Body: { station_id, name, stype, location, passphrase }
+	#      Notes:
+	#        - This endpoint is guarded by a temporary file-backed admin token
+	#          (admin_token.txt). This is separate from the blockchain master key.
+	#        - It stores only registration_code_hash (not plaintext passphrase).
+	#
+	#    - Station activates by passphrase (must be online):
+	#        POST /station/activate
+	#        Body: { passphrase, device_id }
+	#      HQ returns api_key ONCE + crisis info + block_public_key (+ genesis block).
+	#      Station stores api_key locally into krisys_station_identity.json.
+	#
+	# Request requirements (this /checkin endpoint)
+	# --------------------------------------------
 	# - JSON body must include:
 	#     { "address": "<wallet address>", ... }
 	# - JSON body may include:
 	#     { "station_id": "<station id>" }
 	#   If missing, station_id defaults to "STATION_001".
+	# - JSON body may include (recommended for offline-safe dedupe):
+	#     { "relay_hash": "<uuid>" }
+	# - JSON body may include:
+	#     { "timestamp_created": <int seconds> }  # allow old timestamps (offline)
 	#
 	# - HTTP headers must include:
 	#     X-Station-API-Key: <station's long random API key>
@@ -971,40 +1014,28 @@ def check_in():
 	#
 	# Only after all of the above passes do we:
 	# - Construct a Transaction(...) with:
-	#     type_field      = "check_in"
-	#     station_address = station_id        (appears on-chain)
-	#     related_addresses = [address]       (the wallet being checked in)
-	#     message_data    = "Check-in"
-	#     priority_level  = 1                 (high priority for mining)
+	#     type_field       = "check_in"
+	#     station_address  = station_id        (appears on-chain)
+	#     related_addresses = [address]        (the wallet being checked in)
+	#     message_data     = "Check-in"        (currently fixed string)
+	#     priority_level   = 2                 (operational priority; alerts are priority 1 only)
 	# - Add the transaction to blockchain.pending_transactions.
 	#
 	# Mining and verification
 	# -----------------------
-	# - The background miner (or /admin/mine) picks up pending transactions and
-	#   builds a new Block, which is then:
-	#     - hashed,
-	#     - signed by the crisis master key (sign_block),
-	#     - saved to the DB.
+	# - The background miner picks up pending transactions and builds a new Block,
+	#   which is then hashed and signed by the crisis master key (sign_block).
+	# - Clients verify blocks offline using pinned block_public_key.
 	#
-	# - Clients (frontend) fetch blocks via /blockchain and /crisis, reconstruct the
-	#   signed header (block_index, hash, previous_hash) and verify block.signature
-	#   with block_public_key. Only verified blocks are treated as canonical.
-	#
-	# - A check-in is therefore:
-	#   - station-authenticated at the transaction level (API key),
-	#   - and chain-authorized at the block level (crisis master key signature).
+	# A check-in is therefore:
+	# - station-authenticated at the transaction intake level (API key),
+	# - and chain-authorized at the block level (crisis master key signature).
 	#
 	# Future integration notes
 	# ------------------------
-	# - The ONLY part that will change when we add the full registration flow is
-	#   *how* api_key_hash and status are set:
-	#     - today: via provision_dev_station_api_key(...) in app startup (dev only).
-	#     - future: via a dedicated registration endpoint using registration_code.
-	#
-	# - The logic inside /checkin (address + station_id + API key → transaction)
-	#   should stay the same, so any changes to registration do NOT require
-	#   rewriting this endpoint.
-	#
+	# - We can change station registration/activation UX (passphrases, one-time
+	#   codes, provider workflows) without changing this endpoint.
+	# - This endpoint should remain: address + station_id + API key => check_in tx.
 	# ---------------------------------------------------------------------------
 
 # Stations are registered at central HQ, one-time passphrase required for activation.
