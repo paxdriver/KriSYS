@@ -26,6 +26,37 @@ Trust model:
 Timestamp conventions:
 	- timestamp_created: seconds since epoch (int)
 	- queuedAt / generatedAt / confirmedAt: milliseconds since epoch (int)
+
+RULES:
+1)	If:
+	- has local identity
+	- AND was verified by HQ at least once
+	- AND pinned crisis exists
+Then:
+	role = "station"
+
+2) Else if:
+	- pinned crisis exists
+	- AND has chain
+Then:
+	role = "relay"
+
+3) Else:
+	role = "uninitialized"
+
+4) If HQ reachable:
+	online = true
+Else:
+	online = false
+
+
+Role			|	Online	|	Behavior
+----------------------------------------------------------------------
+station			|	yes		|	accept check‑ins, flush immediately
+station			|	no		|	accept check‑ins, queue, preserve timestamps
+relay			|	yes		|	sync blocks + queued msgs
+relay			|	no		|	local relay only
+uninitialized	|	any		|	reject station + mesh actions
 """
 
 import os
@@ -39,6 +70,7 @@ import requests
 import pgpy
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+import threading
 
 import logging
 # Configure logging
@@ -63,7 +95,13 @@ CORS(app, origins=FRONTEND_ORIGINS)
 ###########################################
 
 # In-memory cache (not source of truth; SQLite is source of truth)
-station_state = {"crisisId": None,}
+STATION_STATE = {
+	"crisisId": None,
+	"mode": "unknown",   # "station" | "relay"
+	"lastCentralOk": None,
+	"lastIdentityVerifiedAt": None,
+	"lastIdentityRejectedAt": None, 
+}
 
 # Abuse / safety limits (keep bounded to protect station)
 MAX_QUEUED_PER_PAYLOAD = 100
@@ -86,7 +124,7 @@ TOP_PRIORITY = 1
 BOTTOM_PRIORITY = 5
 
 # Central backend URL from station's perspective (inside docker network)
-CENTRAL_URL = os.environ.get("CENTRAL_API_URL", "http://backend:5000")
+CENTRAL_URL = os.environ.get("CENTRAL_API_URL")
 
 # Persistent data for offline unconfirmed messages, blockchain, etc.
 DATA_DIR = os.environ.get("STATION_DATA_DIR", "/app/data")
@@ -108,7 +146,6 @@ CONFIRMED_MAX_ROWS = 20
 
 
 #               IMPORTANT                   #
-#############################################
 STATION_ID = os.environ.get("STATION_ID")  # can be None
 def load_station_identity() -> dict | None:
 	try:
@@ -151,7 +188,8 @@ def get_station_api_key() -> str | None:
 	return _station_identity["api_key"] if _station_identity else None
 
 logger.info(f'Station API key (DEV ONLY): {_station_identity} (may not be loaded, race condition on first load)')
-#############################################
+# ------------------
+
 
 def _identity_path_for_write() -> str:
 	# Matches load_station_identity() behavior so compose/dev and real device both work.
@@ -326,9 +364,7 @@ def _msg_priority_level(msg: dict) -> int:
 
 
 def _msg_created_ms(msg: dict) -> int:
-	"""
-	We prefer timestamp_created (seconds) if present; otherwise fall back to queuedAt (ms).
-	"""
+	# We prefer timestamp_created (seconds) if present; otherwise fall back to queuedAt (ms).
 	try:
 		ts_s = msg.get("timestamp_created")
 		if ts_s is not None:
@@ -344,6 +380,44 @@ def _msg_created_ms(msg: dict) -> int:
 		pass
 
 	return 0
+
+
+def _meta_get_int(key: str) -> int | None:
+	val = db_get_meta(key)
+	if not isinstance(val, str) or not val.strip():
+		return None
+	try:
+		return int(val)
+	except Exception:
+		return None
+
+
+def _meta_set_int(key: str, value: int) -> None:
+	db_set_meta(key, str(int(value)))
+
+
+def get_identity_verified_at_ms() -> int | None:
+	return _meta_get_int("identity_verified_at_ms")
+
+
+def set_identity_verified_at_ms(ms: int) -> None:
+	_meta_set_int("identity_verified_at_ms", ms)
+
+
+def get_identity_rejected_at_ms() -> int | None:
+	return _meta_get_int("identity_rejected_at_ms")
+
+
+def set_identity_rejected_at_ms(ms: int) -> None:
+	_meta_set_int("identity_rejected_at_ms", ms)
+
+
+def is_identity_rejected_recently(now_ms: int) -> bool:
+	rej = get_identity_rejected_at_ms()
+	if not isinstance(rej, int):
+		return False
+	return (now_ms - rej) < int(IDENTITY_REJECT_BACKOFF_MS)
+
 
 # ----------------------------
 # DB helpers (blocks)
@@ -407,6 +481,40 @@ def db_list_blocks(limit: int) -> list[dict]:
 	
 def db_get_block_public_key() -> str | None:
 	return db_get_meta("block_public_key")
+
+
+# derived from: identity file, SQLite meta, blockchain DB, cached RUNTIME_STATE["central_ok"]
+def update_station_mode() -> None:
+	global STATION_STATE
+
+	crisis_id = db_get_meta("crisisId")
+	pub = db_get_meta("block_public_key")
+	has_anchor = isinstance(crisis_id, str) and bool(crisis_id) and isinstance(pub, str) and bool(pub)
+
+	# Minimal: require genesis to claim relay usefulness
+	has_genesis = db_get_block_hash(0) is not None
+
+	has_identity = _station_identity is not None
+	if not has_identity:
+		# reload once in case provisioning just happened
+		reload_station_identity_in_memory()
+		has_identity = _station_identity is not None
+
+	if has_identity and has_anchor and has_genesis:
+		STATION_STATE["mode"] = "station"
+	elif has_anchor and has_genesis:
+		STATION_STATE["mode"] = "relay"
+	else:
+		STATION_STATE["mode"] = "uninitialized"
+
+	STATION_STATE["online"] = bool(RUNTIME_STATE.get("central_ok"))
+	STATION_STATE["identity_state"] = (
+		"rejected"
+		if get_identity_rejected_at_ms() is not None
+		else "verified"
+		if get_identity_verified_at_ms() is not None
+		else "unknown"
+	)
 
 
 # ----------------------------
@@ -891,7 +999,7 @@ def bootstrap_station_or_die() -> None:
 	stored_crisis_id = db_get_meta("crisisId")
 	stored_pubkey = db_get_meta("block_public_key")
 	if stored_crisis_id and stored_pubkey:
-		station_state["crisisId"] = stored_crisis_id
+		STATION_STATE["crisisId"] = stored_crisis_id
 		return
 	
 	# DEV - Race condition against flask app
@@ -968,7 +1076,7 @@ def bootstrap_station_or_die() -> None:
 
 	db_set_meta("block_public_key", pubkey)
 	db_set_meta("crisisId", crisis_id)
-	station_state["crisisId"] = crisis_id
+	STATION_STATE["crisisId"] = crisis_id
 
 	# Seed station with last MAX_BLOCKS_STORED blocks from central.
 	# These will be verified before storing.
@@ -991,9 +1099,36 @@ def ensure_crisis_id(incoming_crisis_id: str | None) -> tuple[bool, str]:
 	if stored != incoming_crisis_id:
 		return False, "Station crisisId mismatch"
 
-	station_state["crisisId"] = stored
+	STATION_STATE["crisisId"] = stored
 	return True, ""
 
+
+# ----------------------------
+# Auto-sync
+# ----------------------------
+AUTO_SYNC_DEFAULT = "1" if dev_remote else "0"
+# DEV NOTE: set AUTO_SYNC_DEFAULT in blockchain setup wizard, and intervals as well
+STATION_AUTO_SYNC = os.environ.get("STATION_AUTO_SYNC", AUTO_SYNC_DEFAULT) == "1"
+CENTRAL_CHECK_INTERVAL_MS = 5_000
+AUTO_PULL_INTERVAL_MS = 15_000
+AUTO_FLUSH_INTERVAL_MS = 15_000
+
+# If HQ rejects our station API key, do not hammer it
+IDENTITY_REJECT_BACKOFF_MS = 15 * 60 * 1000
+
+STOP_EVENT = threading.Event()
+
+RUNTIME_STATE = {
+	"central_ok": False,
+	"central_last_ok_at_ms": None,
+	"central_last_err": None,
+	"identity_state": "unknown",	# unknown | verified | rejected
+	"identity_verified_at_ms": None,
+	"identity_rejected_at_ms": None,
+	"next_central_check_at_ms": 0,
+	"next_pull_at_ms": 0,
+	"next_flush_at_ms": 0,
+}
 
 # ----------------------------
 # Block verification + confirmations
@@ -1263,7 +1398,7 @@ def export_station_payload() -> dict:
 	Clients use this to update their local caches.
 	"""
 	now_ms = int(time.time() * 1000)
-	station_state["crisisId"] = db_get_meta("crisisId")
+	STATION_STATE["crisisId"] = db_get_meta("crisisId")
 
 	blocks = db_list_blocks(MAX_BLOCKS_PER_PAYLOAD)
 	last_block = blocks[-1] if blocks else None
@@ -1289,7 +1424,7 @@ def export_station_payload() -> dict:
 	return {
 		"version": 1,
 		"deviceId": "station_local",
-		"crisisId": station_state.get("crisisId"),
+		"crisisId": STATION_STATE.get("crisisId"),
 		"generatedAt": now_ms,
 		"chain_tip": chain_tip,
 		"blocks": blocks,
@@ -1311,7 +1446,20 @@ except Exception as e:
 
 @app.route("/health", methods=["GET"])
 def health():
-	return jsonify({"role": "station", "status": "ok"}), 200
+	update_station_mode()
+	return jsonify({
+		"role": "station",
+		"status": "ok",
+		"mode": STATION_STATE.get("mode"),		
+		"auto_sync": STATION_AUTO_SYNC,
+		"central_ok": RUNTIME_STATE.get("central_ok"),
+		"central_last_ok_at_ms": RUNTIME_STATE.get("central_last_ok_at_ms"),
+		"identity_verified_at_ms": get_identity_verified_at_ms(),
+		"identity_rejected_at_ms": get_identity_rejected_at_ms(),
+		"station_id": STATION_ID,
+		"crisisId": db_get_meta("crisisId"),
+	}), 200
+
 
 def _safe_station_id(station_id: str | None) -> str | None:
 	if not isinstance(station_id, str) or not station_id.strip():
@@ -1534,7 +1682,7 @@ def station_provision():
 	# Pin trust anchor + crisisId locally
 	db_set_meta("crisisId", crisis_id)
 	db_set_meta("block_public_key", block_public_key)
-	station_state["crisisId"] = crisis_id
+	STATION_STATE["crisisId"] = crisis_id
 
 	# Store genesis (verified) and pull suffix blocks (best effort)
 	genesis = crisis.get("genesis_block")
@@ -1555,6 +1703,12 @@ def station_provision():
 
 	# Refresh in-memory identity (so /station/flush can use it immediately)
 	reload_station_identity_in_memory()
+
+	# Update most recent verification marker
+	now_ms = _now_ms()
+	set_identity_verified_at_ms(now_ms)
+	# Clear any previous rejection marker
+	set_identity_rejected_at_ms(0)
 
 	return jsonify(
 		{
@@ -1595,7 +1749,7 @@ def mesh_inventory():
 
 	return jsonify(
 		{
-			"crisisId": station_state.get("crisisId"),
+			"crisisId": STATION_STATE.get("crisisId"),
 			"missing_relay_hashes": missing_relay_hashes,
 			"confirmed": confirmed,
 		}
@@ -1646,33 +1800,27 @@ def mesh_sync():
 	return jsonify(payload), 200
 
 
-@app.route("/station/flush", methods=["POST"])
-def station_flush():
-	"""
-	When internet connectivity is available:
-	- Flush queued messages to central /transaction
-	- Flush queued check-ins to central /checkin (requires station API key)
-	- Mark items as 'sent' on success (keep for dedupe until confirmed by blocks)
-	- Pull latest blocks from central and process confirmations
-	"""
-	def pull_blocks_from_central() -> tuple[int, str | None]:
-		try:
-			resp = requests.get(f"{CENTRAL_URL}/blockchain", timeout=15)
-			resp.raise_for_status()
-			chain = resp.json()
+def can_reach_central(timeout_sec: int = 3) -> tuple[bool, str | None]:
+	try:
+		resp = requests.get(f"{CENTRAL_URL}/health", timeout=timeout_sec)
+		if resp.status_code == 200:
+			return True, None
+		return False, f"HTTP {resp.status_code}"
+	except Exception as e:
+		return False, str(e)
 
-			if not isinstance(chain, list) or not chain:
-				return 0, "Central /blockchain returned empty or invalid chain"
+# Function abstraction for /station/flush endpoint below it to make the background loop and endpoint share behaviour
+def flush_to_central_internal() -> dict:
+	now_ms = _now_ms()
+	ok, err = can_reach_central()
+	if not ok:
+		return {"ok": False, "error": f"central_unreachable: {err}"}
 
-			suffix = chain[-MAX_BLOCKS_STORED:]
-			stored_blocks = process_incoming_blocks(suffix)
-			return stored_blocks, None
-		except Exception as e:
-			return 0, str(e)
-
-	# ---- Flush message transactions (existing behavior) ----
+	# ---- Flush queued messages ----
 	queued_msgs = db_list_queued(limit=MAX_QUEUED_PER_PAYLOAD)
-	pending_msgs = [ m for m in queued_msgs if (m.get("status") or "pending") == "pending" ]
+	pending_msgs = [
+		m for m in queued_msgs if (m.get("status") or "pending") == "pending"
+	]
 
 	msg_success = 0
 	msg_failed = 0
@@ -1680,7 +1828,6 @@ def station_flush():
 
 	for msg in pending_msgs:
 		relay_hash = msg.get("relay_hash")
-
 		try:
 			url = f"{CENTRAL_URL}/transaction"
 			headers = {
@@ -1689,7 +1836,7 @@ def station_flush():
 			}
 			resp = requests.post(url, json=msg, headers=headers, timeout=5)
 
-			if resp.status_code == 201:
+			if resp.status_code in (200, 201):
 				msg_success += 1
 				if isinstance(relay_hash, str) and relay_hash:
 					db_update_queued_status(relay_hash, "sent")
@@ -1700,100 +1847,197 @@ def station_flush():
 			msg_failed += 1
 			msg_errors.append(f"{relay_hash}: {e}")
 
+	# ---- Flush queued check-ins (station-auth) ----
+	checkins = db_list_checkins_queued(limit=MAX_QUEUED_PER_PAYLOAD)
+	pending_checkins = [
+		c for c in checkins if (c.get("status") or "pending") == "pending"
+	]
+
 	checkin_success = 0
 	checkin_failed = 0
 	checkin_errors: list[str] = []
 
-	checkins = db_list_checkins_queued(limit=MAX_QUEUED_PER_PAYLOAD)
-	pending_checkins = [c for c in checkins if (c.get("status") or "pending") == "pending"]
 	api_key = get_station_api_key()
-
 	if pending_checkins and not api_key:
 		checkin_failed = len(pending_checkins)
 		checkin_errors.append("Missing api_key; cannot flush check-ins to central")
-	
 	else:
-		for c in pending_checkins:
-			relay_hash = c.get("relay_hash")
+		if pending_checkins and is_identity_rejected_recently(now_ms):
+			checkin_failed = len(pending_checkins)
+			checkin_errors.append("Identity recently rejected; backoff active")
+		else:
+			for c in pending_checkins:
+				relay_hash = c.get("relay_hash")
+				try:
+					body = {
+						"address": c.get("address"),
+						"station_id": STATION_ID,
+						"timestamp_created": int(c.get("timestamp_created") or 0),
+						"relay_hash": relay_hash,
+					}
 
-			try:
-				body = {
-					"address": c.get("address"),
-					"station_id": STATION_ID,
-					"timestamp_created": int(c.get("timestamp_created") or 0),
-					"relay_hash": relay_hash,
-				}
+					url = f"{CENTRAL_URL}/checkin"
+					headers = {
+						"Content-Type": "application/json",
+						"X-Station-API-Key": api_key,
+					}
 
-				url = f"{CENTRAL_URL}/checkin"
-				headers = {
-					"Content-Type": "application/json",
-					"X-Station-API-Key": api_key,
-				}
+					resp = requests.post(url, json=body, headers=headers, timeout=5)
 
-				resp = requests.post(url, json=body, headers=headers, timeout=5)
+					if resp.status_code in (200, 201):
+						checkin_success += 1
 
-				if resp.status_code == 201:
-					checkin_success += 1
+						# Mark identity as verified (persisted)
+						set_identity_verified_at_ms(_now_ms())
 
-					# Mark as sent in JSON so db_list_checkins_queued sees it
-					c["status"] = "sent"
-					c["sentAt"] = int(time.time() * 1000)
+						# Mark as sent in JSON so db_list_checkins_queued sees it
+						c["status"] = "sent"
+						c["sentAt"] = _now_ms()
 
-					with station_db() as conn:
-						conn.execute(
-							"""
-							UPDATE checkins_queued
-							SET status = ?, json = ?
-							WHERE relay_hash = ?
-							""",
-							(
-								"sent",
-								json.dumps(
-									c,
-									separators=(",", ":"),
-									ensure_ascii=False,
+						with station_db() as conn:
+							conn.execute(
+								"""
+								UPDATE checkins_queued
+								SET status = ?, json = ?
+								WHERE relay_hash = ?
+								""",
+								(
+									"sent",
+									json.dumps(
+										c,
+										separators=(",", ":"),
+										ensure_ascii=False,
+									),
+									relay_hash,
 								),
-								relay_hash,
-							),
+							)
+							conn.commit()
+
+					elif resp.status_code in (401, 403):
+						# Identity invalid / revoked / inactive => persist rejection
+						set_identity_rejected_at_ms(_now_ms())
+						checkin_failed += 1
+						checkin_errors.append(
+							f"{relay_hash}: identity_rejected HTTP {resp.status_code} {resp.text}"
 						)
-						conn.commit()
-				else:
+						# Stop trying further check-ins this cycle
+						break
+					else:
+						checkin_failed += 1
+						checkin_errors.append(
+							f"{relay_hash}: HTTP {resp.status_code} {resp.text}"
+						)
+				except Exception as e:
 					checkin_failed += 1
-					checkin_errors.append(
-						f"{relay_hash}: HTTP {resp.status_code} {resp.text}"
-					)
-			except Exception as e:
-				checkin_failed += 1
-				checkin_errors.append(f"{relay_hash}: {e}")
+					checkin_errors.append(f"{relay_hash}: {e}")
 
-	# Always try to pull blocks (even if nothing was pending)
-	pulled_blocks, pull_error = pull_blocks_from_central()
+	# ---- Pull blocks (always try) ----
+	pulled_blocks_stored = 0
+	pull_error = None
 
-	return (
-		jsonify(
-			{
-				"status": "ok",
-				"central_url": CENTRAL_URL,
-				"messages": {
-					"attempted": len(pending_msgs),
-					"success": msg_success,
-					"failed": msg_failed,
-					"errors": msg_errors,
-				},
-				"checkins": {
-					"attempted": len(pending_checkins),
-					"success": checkin_success,
-					"failed": checkin_failed,
-					"errors": checkin_errors,
-					"station_id": STATION_ID,
-				},
-				"pulled_blocks_stored": pulled_blocks,
-				"pull_error": pull_error,
-			}
-		),
-		200,
-	)
+	try:
+		resp = requests.get(f"{CENTRAL_URL}/blockchain", timeout=15)
+		resp.raise_for_status()
+		chain = resp.json()
 
+		if isinstance(chain, list) and chain:
+			suffix = chain[-MAX_BLOCKS_STORED:]
+			pulled_blocks_stored = process_incoming_blocks(suffix)
+		else:
+			pull_error = "Central /blockchain returned empty or invalid chain"
+	except Exception as e:
+		pull_error = str(e)
+
+	return {
+		"ok": True,
+		"central_url": CENTRAL_URL,
+		"messages": {
+			"attempted": len(pending_msgs),
+			"success": msg_success,
+			"failed": msg_failed,
+			"errors": msg_errors,
+		},
+		"checkins": {
+			"attempted": len(pending_checkins),
+			"success": checkin_success,
+			"failed": checkin_failed,
+			"errors": checkin_errors,
+			"station_id": STATION_ID,
+		},
+		"pulled_blocks_stored": pulled_blocks_stored,
+		"pull_error": pull_error,
+	}
+
+# When accumulating messages, flush pushes them to central HQ to be mined in a block
+@app.route("/station/flush", methods=["POST"])
+def station_flush():
+	result = flush_to_central_internal()
+	return jsonify(result), (200 if result.get("ok") else 502)
+
+# BACKGROUND LOOP STARTS vvvvvvvv
+# TODO: set up scheduler process for multi-threading, using "workers", "1" in dockerfiles for now to prevent multiple loops and sql write contentions
+def background_loop():
+	logger.warning("Station auto-sync loop started (enabled=%s)", STATION_AUTO_SYNC)
+
+	while not STOP_EVENT.is_set():
+		now_ms = _now_ms()
+
+		if not STATION_AUTO_SYNC:
+			time.sleep(1.0)
+			continue
+
+		# Central reachability check
+		if now_ms >= int(RUNTIME_STATE["next_central_check_at_ms"] or 0):
+			ok, err = can_reach_central()
+			RUNTIME_STATE["central_ok"] = bool(ok)
+			RUNTIME_STATE["central_last_err"] = err
+
+			if ok:
+				RUNTIME_STATE["central_last_ok_at_ms"] = now_ms
+				RUNTIME_STATE["next_central_check_at_ms"] = now_ms + CENTRAL_CHECK_INTERVAL_MS
+			else:
+				# Simple backoff on failure (cap)
+				next_delay = min(CENTRAL_CHECK_INTERVAL_MS * 2, 30_000)
+				RUNTIME_STATE["next_central_check_at_ms"] = now_ms + next_delay
+
+		# If central reachable, do periodic pulls + flushes
+		if RUNTIME_STATE["central_ok"] is True:
+			# Pull blocks (best effort)
+			if now_ms >= int(RUNTIME_STATE["next_pull_at_ms"] or 0):
+				try:
+					resp = requests.get(f"{CENTRAL_URL}/blockchain", timeout=15)
+					if resp.ok:
+						chain = resp.json()
+						if isinstance(chain, list) and chain:
+							process_incoming_blocks(chain[-MAX_BLOCKS_STORED:])
+				except Exception:
+					pass
+				RUNTIME_STATE["next_pull_at_ms"] = now_ms + AUTO_PULL_INTERVAL_MS
+
+			# Flush (best effort)
+			if now_ms >= int(RUNTIME_STATE["next_flush_at_ms"] or 0):
+				try:
+					flush_to_central_internal()
+				except Exception:
+					pass
+				RUNTIME_STATE["next_flush_at_ms"] = now_ms + AUTO_FLUSH_INTERVAL_MS
+
+		time.sleep(0.25)
+
+
+_background_started = False
+
+def start_background_loop_once():
+	global _background_started
+	if _background_started:
+		return
+	_background_started = True
+
+	t = threading.Thread(target=background_loop, daemon=True)
+	t.start()
+
+start_background_loop_once()
+# BACKGROUND LOOP ^^^^^
 
 if __name__ == "__main__":
 	app.run(host="0.0.0.0", port=5000, debug=True)

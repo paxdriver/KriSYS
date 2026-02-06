@@ -39,6 +39,8 @@ services:
       - "6001:5000"
     environment:
       - FLASK_ENV=development
+      - CENTRAL_API_URL=http://backend:5000
+      - STATION_AUTO_SYNC=1
     volumes:
       # DEV: local folder where station stores its own mesh DB/cache
       - ./krisys-backend/device-offline-server/station-data:/app/data
