@@ -17,11 +17,22 @@ import hmac
 import secrets
 import qrcode
 from io import BytesIO
+
 # DEV NOTE: logging for development only
 import logging
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# DEV - helper function to print size of blockchain database in kb
+def get_db_size_kb():
+	db_path = os.getenv('BLOCKCHAIN_DB_PATH', 'app/blockchain.db')
+	if not os.path.exists(db_path):
+		return 0.0
+	# Get size in bytes
+	size_bytes = os.path.getsize(db_path)
+	# Convert to Kilobytes (KB)
+	return size_bytes / 1024.0
 
 MAX_MEMBERS = 20     # DEV NOTE: THIS SHOULD BE DEFINED IN THE BLOCKCHAIN ISNTANTIATION POLICY BY ADMIN
 MIN_PASSPHRASE_LENGTH = 1   # set small limit, just for obfuscation not security
@@ -671,6 +682,9 @@ def mine_block():
 			return jsonify({"error": "No transactions to mine"}), 400
 		block = blockchain.mine_block()
 		blockchain.save_block(block)
+
+		logger.info(f'DB SIZE: {get_db_size_kb()}kb')
+
 		return jsonify({
 			"message": f"Block #{block.block_index} mined",
 			"hash": block.hash
