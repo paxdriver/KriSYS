@@ -94,7 +94,7 @@ during future events of crisis requiring deployment of aid and volunteers.
 1. Clone the repo 
     - use the latest branch "phase-five-react" at the time of writing this
     - use the latest commit with "CP" or "CHECKPOINT" prefix to make sure you get the latest working state
-2. Run `docker-compose up` to spin up the blockchain, frontend, and a local station.
+2. Run `docker-compose up --build` to spin up the blockchain, frontend, and a local station.
 3. Navigate to http://localhost:3000 to create a wallet with a passphrase.
 4. Log in to the wallet and use dev tools for some basic functionality tests
 5. Create a second wallet in another browser (separate local storage) and send messages side by side
