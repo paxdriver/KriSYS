@@ -90,9 +90,6 @@ helps train future relief efforts to make the best use of limited resources
 during future events of crisis requiring deployment of aid and volunteers.
 
 ---
-
-## Current Status
-
 ## Quick Start
 1. Clone the repo 
     - use the latest branch "react-phase-five" at the time of writing this
@@ -104,6 +101,9 @@ during future events of crisis requiring deployment of aid and volunteers.
 6. Play with the devtools for simulating offline so you can connect 2 wallets in offline mode by copy-pasting connection codes, sync offline messages
 7. Explore localhost:3000/explorer for the blockchain explorer, the way family members abroad can track loved ones and see the alerts practically live during a crisis
 
+---
+
+## Current Status
 ### Current milestones: Phase 4 complete
 Phase 4 completed the lifecycle of stations, relays and central HQ mining
 - automatically mines
