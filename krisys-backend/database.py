@@ -21,6 +21,7 @@ def db_connection():
 
 def init_db():
 	with db_connection() as conn:
+		# ---- TABLES ----
 		conn.execute('''
 		CREATE TABLE IF NOT EXISTS blocks (
 			id INTEGER PRIMARY KEY,
@@ -32,7 +33,7 @@ def init_db():
 			signature TEXT
 		)
 		''')
-		
+
 		conn.execute('''
 		CREATE TABLE IF NOT EXISTS transactions (
 			id INTEGER PRIMARY KEY,
@@ -60,14 +61,6 @@ def init_db():
 			created_at INTEGER DEFAULT (CAST(strftime('%s','now') AS INTEGER)),
 			crisis_id TEXT NOT NULL
 		)
-		''')
-		
-		# Idempotency guard: relay_hash should uniquely identify an offline tx across all time. We allow empty relay_hash for legacy/system txs
-
-		conn.execute('''
-		CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_relay_hash_unique
-		ON transactions(relay_hash)
-		WHERE relay_hash IS NOT NULL AND relay_hash != ''
 		''')
 		
 		# Add particular crisis details tables
@@ -122,6 +115,27 @@ def init_db():
 			UNIQUE(registration_code_hash)
 		)
 		''')
+
+		# ---- INDEXING ----
+		# Idempotency guard: relay_hash should uniquely identify an offline tx across all time. We allow empty relay_hash for legacy/system txs
+		conn.execute('''
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_relay_hash_unique
+		ON transactions(relay_hash)
+		WHERE relay_hash IS NOT NULL AND relay_hash != ''
+		''')
+
+		# Speed up lookups by block (essential for syncing)
+		conn.execute('''
+		CREATE INDEX IF NOT EXISTS idx_transactions_block_id 
+		ON transactions(block_id)
+		''')
+
+		# Speed up mining selection (sorting by priority/time)
+		conn.execute('''
+		CREATE INDEX IF NOT EXISTS idx_transactions_mining 
+		ON transactions(priority_level ASC, timestamp_created ASC)
+		''')
+
 		conn.commit()
 		
 if __name__ == "__main__":
