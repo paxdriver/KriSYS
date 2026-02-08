@@ -93,18 +93,35 @@ during future events of crisis requiring deployment of aid and volunteers.
 
 ## Current Status
 
-### Current milestone: Phase 3.7 complete
-Phase 3.7 completed the “station pooled rendezvous” architecture:
+## Quick Start
+1. Clone the repo 
+    - use the latest branch "react-phase-five" at the time of writing this
+    - use the latest commit with "CP" or "CHECKPOINT" prefix to make sure you get the latest working state
+2. Run `docker-compose up` to spin up the blockchain, frontend, and a local station.
+3. Navigate to http://localhost:3000 to create a wallet with a passphrase.
+4. Log in to the wallet and use dev tools for some basic functionality tests
+5. Create a second wallet in another browser (separate local storage) and send messages side by side
+6. Play with the devtools for simulating offline so you can connect 2 wallets in offline mode by copy-pasting connection codes, sync offline messages
+7. Explore localhost:3000/explorer for the blockchain explorer, the way family members abroad can track loved ones and see the alerts practically live during a crisis
+
+### Current milestones: Phase 4 complete
+Phase 4 completed the lifecycle of stations, relays and central HQ mining
+- automatically mines
+- rate limiting transaction queues
+- checking for connectivity
+- thread locks for race condition mitigation
+- prioritizing messages
+- adaptive timing based on volume of transaction and queue sizes
+Phase 3 completed the “station pooled rendezvous” architecture:
 - offline message queuing on clients
 - station-side pooled relay and dedupe
 - station flush to central when connectivity returns
 - mined block confirmation propagation back through stations
 - offline check-in intake and flush via station
 - verified block propagation and confirmation pruning (relay_hash based)
+- Expand pooled rendezvous syncing to work without an authorized station (untrusted pool hosts and “dumb relays”), using the same inventory/sync rules.
 
-Next milestone: Phase 3.8
-- Expand pooled rendezvous syncing to work without an authorized station
-  (untrusted pool hosts and “dumb relays”), using the same inventory/sync rules.
+
 
 ---
 
