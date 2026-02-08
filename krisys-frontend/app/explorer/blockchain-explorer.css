@@ -251,6 +251,23 @@
     color: #b91c1c;
 }
 
+.tx-body.clickable {
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.tx-body.clickable:hover {
+    background-color: #f0f0f0;
+}
+
+.tx-message-data {
+    margin-top: 10px;
+    padding: 10px;
+    background-color: #e9ecef;
+    border-radius: 4px;
+    word-break: break-all;
+}
+
 /* Responsive */
 
 @media (max-width: 768px) {
