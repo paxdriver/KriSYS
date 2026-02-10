@@ -335,7 +335,7 @@ Operational model for safety and privacy:
 
 ## Check-in Stations (Authentication and Offline Behavior)
 
-Stations authenticate check-ins to the central backend via API key:
+### Stations authenticate check-ins to the central backend via API key:
 - Header: X-Station-API-Key
 - Body includes:
 	- address (member address or family_id)
@@ -343,7 +343,7 @@ Stations authenticate check-ins to the central backend via API key:
 	- relay_hash (for offline dedupe/confirmation)
 	- timestamp_created (seconds; preserve offline scan time)
 
-Offline check-ins:
+### Offline check-ins:
 - The station device can accept check-ins locally while offline and queue them.
 - When connectivity returns, the station flushes queued check-ins to central.
 - Confirmations are derived when the relay_hash appears in a verified block.
@@ -353,6 +353,23 @@ Development note:
 	station_identity_<STATION_ID>.json
   in the station’s mounted volume so the station can flush check-ins without
   manual copy/paste in dev.
+
+Stations have their own wallet addresses but become configured by a single first password entry upon activation. HQ provides their metadata, fixed plain text template message for handling check-ins, will later have their GUI launch for camera and station details to display to the public. Activated stations auto-login with api key from local storage after activation and fallback to relay status when offline. Connectivity loop checks for active connection and maintains blockchain and unconfirmed messages can be pushed to HQ from a station that has de-duped messages, verified hashes, and analyzed transaction for limits prescribed by the blockchain's policy when the KriSys blockchain was first set up.
+
+Stations do NOT rotate keys. They are completely reset and provided a new activation code by HQ if a new api key is required. Hard reset only mitigates risk of elevated message priority messages from being tampered with and simplifies revocation of station credentials by HQ when a device is intercepted or otherwise compromised.
+---
+
+## Relay-Only Nodes (Online & Offline Behaviour)
+### Relay devices are:
+- never signed in or provided API keys to function properly.
+- auto-pull blocks from HQ if they contain a valid pinned Crisis ID (set when device drive is flashed)
+- help confirmed block propagation, unconfirmed message propagation, and offline load distribution blindly
+- assist stations with verifying / deduplication of untrusted messages, networking P2P, broadening reach of mesh network
+### Relay devices can NOT:
+- ever become stations
+- ever post transactions to be mined as blocks by central HQ (can't corrupt blockchain)
+- ever be trusted
+- compromise the network thanks to hardening & hash checks
 
 ---
 
