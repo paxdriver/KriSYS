@@ -40,6 +40,8 @@ import hashlib
 import json
 import os
 import sqlite3
+import requests
+import threading
 import time
 from contextlib import contextmanager
 import pgpy
@@ -70,9 +72,24 @@ CORS(app, origins=FRONTEND_ORIGINS)
 
 # Hard cap request size (abuse protection). Tune as needed.
 # Note: inventory is tiny; sync can be larger due to blocks + queued.
-app.config["MAX_CONTENT_LENGTH"] = int(
-	os.environ.get("RELAY_MAX_CONTENT_LENGTH", str(2 * 1024 * 1024))
-)
+app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("RELAY_MAX_CONTENT_LENGTH", str(2 * 1024 * 1024)))
+
+# DEV TODO: "THESE_VALUES_BELOW_IMPORTS" are set by policy in production, hard code more sensible defaults before deployment
+
+# ----------------------------
+# Relay auto-pull (defaults on, env to toggle off)
+# ----------------------------
+RELAY_AUTO_PULL = os.environ.get("RELAY_AUTO_PULL", "1") == "1"
+# DEV NOTE: If CENTRAL_URL is unset, auto‑pull simply won’t run. That’s intentional.
+CENTRAL_URL = os.environ.get("CENTRAL_API_URL")  # optional; auto-pull disabled if missing
+RELAY_PULL_INTERVAL_MS = int(os.environ.get("RELAY_PULL_INTERVAL_MS", "60000"))
+RELAY_RUNTIME = {
+	"central_ok": False,
+	"last_err": None,
+	"next_pull_at_ms": 0,
+}
+RELAY_STOP_EVENT = threading.Event()
+# ----------------------------
 
 # Persistent data for offline relay cache (queued txs + verified blocks)
 DATA_DIR = os.environ.get("RELAY_DATA_DIR", "/app/data")
@@ -98,7 +115,6 @@ RELAY_HASH_CAP = 1000
 TOP_PRIORITY = 1
 BOTTOM_PRIORITY = 5
 
-####### THESE VALUES ARE FOR DEVELOPMENT ONLY, WILL BE SET BY POLICY IN PROD
 # Storage pruning (DEV-TUNED DEFAULTS)
 QUEUED_TTL_MS = 7 * 24 * 60 * 60 * 1000
 QUEUED_HIGH_WATER = 40
@@ -109,8 +125,37 @@ def is_storage_under_pressure(count: int) -> bool:
 
 CONFIRMED_TTL_MS = 2 * 24 * 60 * 60 * 1000
 CONFIRMED_MAX_ROWS = 20
-####### THESE VALUES ARE FOR DEVELOPMENT ONLY, WILL BE SET BY POLICY IN PROD
 
+def relay_can_reach_central(timeout_sec: int = 3) -> tuple[bool, str | None]:
+	if not CENTRAL_URL:
+		return False, "CENTRAL_URL not set"
+	try:
+		resp = requests.get(f"{CENTRAL_URL}/health", timeout=timeout_sec)
+		if resp.status_code == 200:
+			return True, None
+		return False, f"HTTP {resp.status_code}"
+	except Exception as e:
+		return False, str(e)
+	
+def relay_pull_from_central() -> int:
+	"""
+	Pull blocks from HQ and store verified suffix.
+	Returns number of newly stored blocks.
+	"""
+	# Must be pinned before pulling
+	crisis_id = db_get_crisis_id()
+	pub = db_get_block_public_key()
+	if not crisis_id or not pub:
+		return 0
+
+	resp = requests.get(f"{CENTRAL_URL}/blockchain", timeout=15)
+	resp.raise_for_status()
+
+	chain = resp.json()
+	if not isinstance(chain, list) or not chain:
+		return 0
+
+	return process_incoming_blocks(chain[-MAX_BLOCKS_STORED:])
 
 @contextmanager
 def relay_db():
@@ -1230,6 +1275,47 @@ def mesh_sync():
 	payload = export_relay_payload()
 	return jsonify(payload), 200
 
+
+def relay_background_loop():
+	logger.warning("Relay auto-pull loop started (enabled=%s)",RELAY_AUTO_PULL,)
+
+	while not RELAY_STOP_EVENT.is_set():
+		now_ms = _now_ms()
+
+		if not RELAY_AUTO_PULL:
+			time.sleep(1.0)
+			continue
+
+		if now_ms >= int(RELAY_RUNTIME["next_pull_at_ms"] or 0):
+			ok, err = relay_can_reach_central()
+			RELAY_RUNTIME["central_ok"] = bool(ok)
+			RELAY_RUNTIME["last_err"] = err
+
+			if ok:
+				try:
+					stored = relay_pull_from_central()
+					if stored > 0:
+						logger.info("Relay pulled %d new block(s) from HQ", stored)
+				except Exception as e:
+					logger.warning("Relay pull failed: %s", e)
+
+			# Schedule next attempt regardless of outcome
+			RELAY_RUNTIME["next_pull_at_ms"] = now_ms + RELAY_PULL_INTERVAL_MS
+
+		time.sleep(0.25)
+
+_relay_bg_started = False
+
+def start_relay_background_once():
+	global _relay_bg_started
+	if _relay_bg_started:
+		return
+	_relay_bg_started = True
+
+	t = threading.Thread(target=relay_background_loop, daemon=True)
+	t.start()
+
+start_relay_background_once()
 
 if __name__ == "__main__":
 	app.run(host="0.0.0.0", port=5000, debug=True)

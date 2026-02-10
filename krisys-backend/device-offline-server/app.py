@@ -103,6 +103,8 @@ STATION_STATE = {
 	"lastIdentityRejectedAt": None, 
 }
 
+RUNTIME_STATE_LOCK = threading.Lock()
+
 # Abuse / safety limits (keep bounded to protect station)
 MAX_QUEUED_PER_PAYLOAD = 100
 MAX_CONFIRMED_PER_PAYLOAD = 500
@@ -2126,29 +2128,32 @@ def background_loop():
 			continue
 
 		# ---- Central reachability check ----
-		if now_ms >= int(RUNTIME_STATE["next_central_check_at_ms"] or 0):
-			ok, err = can_reach_central()
-			RUNTIME_STATE["central_ok"] = bool(ok)
-			RUNTIME_STATE["central_last_err"] = err
+		with RUNTIME_STATE_LOCK:
+			if now_ms >= int(RUNTIME_STATE["next_central_check_at_ms"] or 0):
+				ok, err = can_reach_central()
+				RUNTIME_STATE["central_ok"] = bool(ok)
+				RUNTIME_STATE["central_last_err"] = err
 
-			if ok:
-				RUNTIME_STATE["central_last_ok_at_ms"] = now_ms
-				RUNTIME_STATE["next_central_check_at_ms"] = (now_ms + CENTRAL_CHECK_INTERVAL_MS)
-			else:
-				# Backoff on connectivity failure
-				next_delay = min(CENTRAL_CHECK_INTERVAL_MS * 2, 30_000)
-				RUNTIME_STATE["next_central_check_at_ms"] = now_ms + next_delay
+				if ok:
+					RUNTIME_STATE["central_last_ok_at_ms"] = now_ms
+					RUNTIME_STATE["next_central_check_at_ms"] = (now_ms + CENTRAL_CHECK_INTERVAL_MS)
+				else:
+					# Backoff on connectivity failure
+					next_delay = min(CENTRAL_CHECK_INTERVAL_MS * 2, 30_000)
+					RUNTIME_STATE["next_central_check_at_ms"] = now_ms + next_delay
 
 		# ---- Adaptive sync ----
-		if RUNTIME_STATE["central_ok"] is True:
-			if now_ms >= int(SYNC_STATE.get("next_sync_at_ms") or 0):
-				did_work = perform_sync_attempt()
+		
+		with RUNTIME_STATE_LOCK:
+			if RUNTIME_STATE["central_ok"] is True:
+				if now_ms >= int(SYNC_STATE.get("next_sync_at_ms") or 0):
+					did_work = perform_sync_attempt()
 
-				# Adjust cadence (busy <-> casual)
-				_sync_note_work(did_work)
+					# Adjust cadence (busy <-> casual)
+					_sync_note_work(did_work)
 
-				# Schedule next attempt
-				SYNC_STATE["next_sync_at_ms"] = (now_ms + _sync_interval_ms())
+					# Schedule next attempt
+					SYNC_STATE["next_sync_at_ms"] = (now_ms + _sync_interval_ms())
 
 		time.sleep(0.25)
 

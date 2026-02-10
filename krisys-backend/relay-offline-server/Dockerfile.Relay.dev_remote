@@ -18,6 +18,9 @@ ENV CENTRAL_API_URL=http://krisys.krisdriver.com:5123
 # Relay data directory
 ENV RELAY_DATA_DIR=/app/data
 
+# Relay will pull data from central when online, 0 means it only gets blocks from peers
+ENV RELAY_AUTO_PULL=1
+
 # Reuse top-level requirements
 COPY ./requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt

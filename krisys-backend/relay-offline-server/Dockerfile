@@ -11,6 +11,9 @@ WORKDIR /app
 COPY ./requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Relay will pull data from central when online, 0 means it only gets blocks from peers
+ENV RELAY_AUTO_PULL=1
+
 # Copy only the relay app
 COPY ./relay-offline-server/ /app
 
