@@ -874,9 +874,8 @@ def verify_block_signature(block: dict, block_public_key: str) -> bool:
 			ensure_ascii=False,
 		)
 
-		msg = pgpy.PGPMessage.new(header)
-		res = pub.verify(msg, sig)
-		return bool(getattr(res, "good", False))
+		res = pub.verify(header.encode("utf-8"), sig)
+		return bool(res)
 	except Exception:
 		return False
 

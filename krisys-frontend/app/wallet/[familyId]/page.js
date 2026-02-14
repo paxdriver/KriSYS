@@ -209,15 +209,8 @@ export default function WalletDashboardPage() {
 		- missing wallet → error
 		- otherwise → dashboard
 	*/
-	if (loading) {
+	if (loading || !walletData || !Array.isArray(transactions)) {
 		return <div className="loading-page">Loading wallet data…</div>
-	}
-	if (!walletData) {
-		return (
-			<div className="error-page">
-				Wallet not found (and no cached data available)
-			</div>
-		)
 	}
 	return (
 		<WalletDashboard

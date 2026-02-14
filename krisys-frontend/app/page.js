@@ -40,7 +40,7 @@ export default function LandingPage() {
     // ------------ DEV NOTE: IMPORTANT --------------
     useEffect(() => {
 		// DEV ONLY: cache blockchain master private key for DevTools
-		if (process.env.NODE_ENV !== 'development') return
+		// if (process.env.NODE_ENV !== 'development') return
 
         let cancelled = false
 
@@ -61,8 +61,6 @@ export default function LandingPage() {
 	}, [])
     // ------------ DEV NOTE: IMPORTANT --------------
     
-
-
     const handleRefresh = () => {
         setRefreshTrigger(prev => prev + 1)
     }

@@ -1,9 +1,17 @@
+# krisys-backend/.dockerignore
 Dockerfile*
 docker-compose*.yml
+blockchain/*
 .git
 .gitignore
 node_modules
-__pycache__
+**/__pycache__
 *.pyc
 .env
 .env.*
+**/*.db
+**/*.asc
+**/*admin_token.*
+**/dev_policy_id.txt
+device-offline-server/station-data/*
+relay-offline-server/relay-data/*

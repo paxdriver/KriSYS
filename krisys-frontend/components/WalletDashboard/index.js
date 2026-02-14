@@ -14,11 +14,12 @@ import UnlockForm from './UnlockForm'
 import '../../styles/wallet_dashboard.css'
 import DevTools from '../DevTools'  // DEV NOTE: DEVELOPMENT ONLY
 
-export default function WalletDashboard({ walletData, transactions, familyId, onRefresh }) {
+export default function WalletDashboard({ walletData, transactions = [], familyId, onRefresh }) {
     const [currentPage, setCurrentPage] = useState('overview')
     const [privateKey, setPrivateKey] = useState(null)
     const [isUnlocked, setIsUnlocked] = useState(false) 
     const searchParams = useSearchParams()
+    const safeTransactions = Array.isArray(transactions) ? transactions : [] // used to prevent runtime error in components receiving transactions as props
 
     const crisisId = disasterStorage.getCrisisMetadata()?.id || null    
 
@@ -102,7 +103,7 @@ export default function WalletDashboard({ walletData, transactions, familyId, on
                         {currentPage === 'overview' && (
                             <Overview 
                                 walletData={walletData}
-                                transactions={transactions}
+                                transactions={safeTransactions}
                                 privateKey={privateKey} // Pass to child components
                             />
                         )}
@@ -110,7 +111,7 @@ export default function WalletDashboard({ walletData, transactions, familyId, on
                         {currentPage === 'members' && (
                             <MembersPage 
                                 walletData={walletData}
-                                transactions={transactions}
+                                transactions={safeTransactions}
                                 privateKey={privateKey}
                             />
                         )}
@@ -118,7 +119,7 @@ export default function WalletDashboard({ walletData, transactions, familyId, on
                         {currentPage === 'messages' && (
                             <MessagingPage 
                                 walletData={walletData}
-                                transactions={transactions}
+                                transactions={safeTransactions}
                                 privateKey={privateKey}
                             />
                         )}
@@ -126,7 +127,7 @@ export default function WalletDashboard({ walletData, transactions, familyId, on
                         {currentPage === 'contacts' && (
                             <ContactsPage 
                                 walletData={walletData}
-                                transactions={transactions}
+                                transactions={safeTransactions}
                                 privateKey={privateKey}
                             />
                         )}

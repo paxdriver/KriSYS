@@ -85,7 +85,7 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 
 	// Canonical, on-chain messages involving this wallet (sent or received)
 	const myMessages = useMemo(() => {
-		if (!transactions || !transactions.length) return []
+		if (!Array.isArray(transactions) || transactions.length === 0) return []
 
 		return transactions.filter((tx) => {
 			if (tx.type_field !== 'message') return false
