@@ -157,6 +157,37 @@ def relay_pull_from_central() -> int:
 
 	return process_incoming_blocks(chain[-MAX_BLOCKS_STORED:])
 
+# ENV var set in dockerfile should use HQ's /crisis endpoint to get the crisis_id and public key
+# if the relay doesn't have one pinned yet (initialization state, basically)
+def relay_try_autopin_from_central(timeout_sec: int = 8) -> tuple[bool, str | None]:
+	if not CENTRAL_URL:
+		return False, "CENTRAL_URL not set"
+
+	# Only pin if currently unpinned (never overwrite)
+	if db_get_crisis_id() and db_get_block_public_key():
+		return True, None
+
+	try:
+		resp = requests.get(f"{CENTRAL_URL}/crisis", timeout=timeout_sec)
+		resp.raise_for_status()
+		obj = resp.json() or {}
+
+		crisis_id = obj.get("id") or obj.get("crisis_id")
+		pub = obj.get("block_public_key") or obj.get("public_key")
+
+		if not isinstance(crisis_id, str) or not crisis_id.strip():
+			return False, "Central /crisis missing id"
+		if not isinstance(pub, str) or not pub.strip():
+			return False, "Central /crisis missing block_public_key"
+
+		db_set_meta("crisisId", crisis_id.strip())
+		db_set_meta("block_public_key", pub)
+
+		logger.warning("Relay auto-pinned from central crisisId=%s", crisis_id)
+		return True, None
+	except Exception as e:
+		return False, str(e)
+
 @contextmanager
 def relay_db():
 	"""
@@ -795,13 +826,16 @@ def ensure_crisis_pin(
 
 	# First-contact pin
 	if not stored_crisis_id or not stored_pubkey:
-		if not incoming_block_public_key or not isinstance(
-			incoming_block_public_key, str
-		):
-			return (
-				False,
-				"Relay is unpinned; provide block_public_key to pin it",
-			)
+		# If caller didn’t provide a key, try to pin from CENTRAL_URL (Phase 5 behavior)
+		if not incoming_block_public_key:
+			ok, err = relay_try_autopin_from_central()
+			if ok:
+				stored_crisis_id = db_get_crisis_id()
+				stored_pubkey = db_get_block_public_key()
+				if stored_crisis_id == incoming_crisis_id and stored_pubkey:
+					return True, ""
+				return False, "Relay pinned to different crisisId than request"
+			return False, f"Relay is unpinned; provide block_public_key to pin it ({err})"
 
 		db_set_meta("crisisId", incoming_crisis_id)
 		db_set_meta("block_public_key", incoming_block_public_key)

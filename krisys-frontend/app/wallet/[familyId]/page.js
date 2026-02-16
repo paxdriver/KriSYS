@@ -59,11 +59,9 @@ export default function WalletDashboardPage() {
 		This is *navigation state*, not storage state.
 	*/
 	const params = useParams()
-	const familyId = typeof params?.familyId === 'string'
-			? params.familyId
-			: Array.isArray(params?.familyId)
-			? params.familyId[0]
-			: null
+	const familyId = typeof params?.familyId === 'string' ? 
+		params.familyId : Array.isArray(params?.familyId) ? 
+		params.familyId[0] : null
 
 	/* crisisId is NOT derived from the URL, nor is it pulled from context provider used for connection persistence after login
 		It is derived from pinned crisis metadata in local storage.
@@ -131,9 +129,7 @@ export default function WalletDashboardPage() {
 			const allBlocks = chainRes?.data || []
 
 			/* 3) Verify blocks locally (signature + linkage) */
-			const canonicalBlocks = blockPublicKey
-				? await filterCanonicalBlocks(allBlocks, blockPublicKey)
-				: []
+			const canonicalBlocks = blockPublicKey ? await filterCanonicalBlocks(allBlocks, blockPublicKey) : []
 
 			// Cache canonical blocks in SHARED domain
 			if (canonicalBlocks.length > 0) {
@@ -144,10 +140,7 @@ export default function WalletDashboardPage() {
 			}
 
 			/* 4) Derive wallet‑visible transactions from canonical blocks */
-			const txs = deriveWalletTransactionsFromBlocks(
-				wallet,
-				canonicalBlocks
-			)
+			const txs = deriveWalletTransactionsFromBlocks(wallet,canonicalBlocks)
 			setTransactions(txs)
 
 			/* 5) Update confirmed relay hashes and prune wallet queue */
@@ -178,13 +171,8 @@ export default function WalletDashboardPage() {
 
 			setWalletData(cachedWallet)
 
-			const cachedBlocks =
-				disasterStorage.getBlockchain({ crisisId }) || []
-
-			const derivedTxs = deriveWalletTransactionsFromBlocks(
-				cachedWallet,
-				cachedBlocks
-			)
+			const cachedBlocks = disasterStorage.getBlockchain({ crisisId }) || []
+			const derivedTxs = deriveWalletTransactionsFromBlocks(cachedWallet,cachedBlocks)
 
 			setTransactions(derivedTxs)
 
@@ -193,7 +181,8 @@ export default function WalletDashboardPage() {
 				familyId,
 				transactions: derivedTxs,
 			})
-		} finally {
+		} 
+		finally {
 			setLoading(false)
 		}
 	}, [crisisId, familyId])
