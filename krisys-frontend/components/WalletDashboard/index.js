@@ -57,16 +57,16 @@ export default function WalletDashboard({ walletData, transactions = [], familyI
         if (!crisisId || !familyId) return
 
         // Remove private key from session storage
-        disasterStorage.deleteCachedPrivateKey({ crisisId, familyId })
+        disasterStorage.clearSession() 
 
+        // Remove sealed private key blob (prevents offline unlock later)
+	    disasterStorage.deleteSealedPrivateKey({ crisisId, familyId })
+        
         // Clear in-memory key from client
         setPrivateKey(null)
-
+        
         // UX feedback
         alert('Wallet locked')
-
-        disasterStorage.clearSession()
-        setPrivateKey(null)
     }
 
     return (<>
