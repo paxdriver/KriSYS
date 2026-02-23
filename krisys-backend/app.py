@@ -455,8 +455,8 @@ if is_dev:
 		location="Sector SE"
 	)
 	provision_dev_station_api_key(crisis_id, "HOSPITAL_SE_001")
-# DEV NOTE: SECOND SIMULATED VERIFIED STATION FOR DEMO (not when testing remotely, only docker-compose)
 if is_dev:
+	# DEV NOTE: SECOND SIMULATED VERIFIED STATION FOR DEMO (not when testing remotely, only docker-compose)
 	ensure_station(
 		crisis_id=crisis_id,
 		station_id="STATION_001",
@@ -465,6 +465,18 @@ if is_dev:
 		location=None
 	)
 	provision_dev_station_api_key(crisis_id, "STATION_001")
+
+
+
+
+
+	# DEV NOTE: This is simulating the station NOT used by devtools like the STATION_001 or HOSPITAL_SE_001, this is the station that acts like a real provisioned station which is already tested working with passphrase activation so this bootstrap automates this for quicker iteration while under development.
+	# Set activation passphrase for dev bootstrap
+# if is_dev and not dev_remote:
+	# RUN BASH SCRIPTS TO AUTOMATICALLY PERFORM FOODTRUCK'S PROVISIONING AND OVERWRITE STALE CRISIS_ID'S (station container will need to be rebooted for new blockchain to take effect)
+
+
+
 
 ########### TESTING IN DEV MODE ###############
 

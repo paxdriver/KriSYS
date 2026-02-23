@@ -442,6 +442,8 @@ Station server:
 ├── device-offline-server (simulating an offline registered station, relaying unconfirmed messages and maintaining latest blocks from anyone who visits and has a newer block that the station can verify and propagate throughout the rest of the network while offline)
 │   ├── station-data  (simulating offline station persistent storage for blockchain and message queues when gathering offline unconfirmed transactions)
 │   │   └── station.db
+│   │   └── station_identity_HOSPITAL-SE-001.json (hardcoded dummy for devtools UI functionality)
+│   │   └── station_identity_STATION-001.json (hardcoded dummy for devtools UI functionality)
 │   │   └── station_identity_*.json (the persistent api keys for authorized stations in lieu of wallet passphrases)
 │   ├── app.py
 │   └── Dockerfile
@@ -516,6 +518,7 @@ Station server:
 │   ├── blockVerifier.js
 │   ├── contactStorage.js
 │   ├── keyManager.js
+│   ├── keySeal.js
 │   ├── localStorage.js
 │   ├── meshSync.js
 │   ├── poolJoinCode.js
@@ -635,7 +638,7 @@ Core ledger + canonical chain rules:
 	- `relay_hash` uniqueness enforced for non-empty values (SQLite partial unique index)
 	- `/transaction` idempotent by `relay_hash` (dedupe success responses)
 
-Key endpoints (central):
+Key endpoints (central aka HQ):
 - `GET /health`
 - `GET /crisis` (returns pinned `block_public_key`)
 - `GET /blockchain`
@@ -673,7 +676,7 @@ Wallet identity + encryption plumbing (no currency):
 		- optional `crisis_id`
 		- armored public key block
 
-Key endpoints (central):
+Key endpoints (app):
 - `POST /wallet` (creates wallet + keys)
 - `GET /wallet/<family_id>` (metadata only; no keys)
 - `GET /wallet/<family_id>/public-key` (for encryption)
@@ -787,7 +790,7 @@ Phase 4b — Station/relay hardening (In progress)
 
 ---
 
-### Phase 5 — System Validation & Field Testing (In-progress)
+### Phase 5 — System Validation & Field Testing (Completed)
 Goal: prove the system survives realistic conditions across devices and networks.
 
 Core validation scenarios:
@@ -820,7 +823,7 @@ Field-test artifacts:
 
 ---
 
-### Phase 6 — UX cleanup & optimization (Planned)
+### Phase 6 — UX cleanup & optimization (In Progress)
 Goal: improve usability without changing the trust model or protocol.
 
 Targets:
