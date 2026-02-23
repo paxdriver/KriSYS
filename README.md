@@ -463,6 +463,9 @@ Station server:
 │   ├── index.html
 │   ├── scanner.html
 │   └── wallet_dashboard.html
+├── dev_seed_stations.sh (automates curl request to create 3 stations using proper endpoints)
+├── dev_proivision_station.sh (automates curl request to activates station called "FOODTRUCK_001" from dev_seed_stations)
+└── dev_station_checkin.sh (automates curl request to perform check-in by providing wallet address as a parameter)
 ./krisys-frontend
 ├── app
 │   ├── explorer
@@ -843,6 +846,84 @@ Targets:
 	- move dev-only tools behind explicit dev gates
 	- unify “Connections” UX for station/relay/P2P
 - Accessibility and mobile-friendly layout improvements
+
+#### Phase 6.1 — Visibility MVP
+Add structured log emitter utility in:
+- backend
+- station
+- relay
+- Add admin telemetry endpoint on HQ.
+
+Add admin UI panel:
+- Recent warnings/errors
+- Station list with:
+- mode
+- online/offline
+- queued count
+- identity state
+- last flush time
+- Relay list (if reachable)
+
+Add simple filters:
+- severity
+- station_id
+- event type
+
+#### Phase 6.2 — Health Model
+Define formal states:
+
+Station:
+- active + online
+- active + offline
+- relay fallback
+- identity rejected
+- storage paused
+
+Relay:
+- pinned
+- uninitialized
+- online
+- offline
+
+HQ:
+- mining active
+- pending count
+- block interval
+- adaptive trigger frequency
+
+These become:
+- UI indicators
+- Not inferred ad-hoc
+
+#### Phase 6.3 — Safe Admin Controls
+Add:
+- Revoke station (set status = revoked)
+- Pause station intake remotely
+- Force pull blocks
+- Rotate crisis policy (new crisis only, not mid-stream)
+
+Every action:
+- Logged to admin logs
+- Does not alter historical blocks
+- Does not break determinism
+
+#### Phase 6.4+ Extra considerations
+Storage & Abuse Monitoring:
+- Storage trend graph (queued growth over time)
+- Repeated identity rejection alerts
+- Excessive relay input detection
+- Abnormal block rejection rates
+
+Execution Order (Strict Recommendation):
+- Structured logs (foundation)
+- Telemetry ingestion endpoint
+- Admin dashboard UI
+- Health state formalization
+- Retention + log pruning
+- Admin controls
+- UX clarity refinements
+
+
 
 ---
 
