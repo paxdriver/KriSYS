@@ -300,6 +300,22 @@ def init_station_db():
 			"""
 		)
 
+		# STATION LOCAL EVENT LOG (Lifecycle + Summary Only for volumes, helps distribute resources on the ground more effectively)
+		# - Minimal
+		# - State-transition only
+		# - Wiped after HQ confirms receipt
+		conn.execute(
+			"""
+			CREATE TABLE IF NOT EXISTS station_events (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				event_type TEXT NOT NULL,        -- lifecycle | summary
+				event_name TEXT NOT NULL,        -- online | offline | mode_changed | flush_summary
+				context_json TEXT,
+				created_at INTEGER NOT NULL
+			)
+			"""
+		)
+
 		conn.commit()
 
 
@@ -517,6 +533,79 @@ def update_station_mode() -> None:
 		if get_identity_verified_at_ms() is not None
 		else "unknown"
 	)
+
+# ----------------------------
+# LOCAL STATION EVENT RECORDING (stores while offline, then dumps after HQ confirms receipt)
+# - summary data only, mode changes, online/offline timestamps, volume summary for aid distribution data
+# ----------------------------
+
+def record_station_event(event_type: str, event_name: str, context: dict | None = None):
+	"""
+	Record a minimal station event locally.
+	Only lifecycle + summary events are allowed.
+	"""
+
+	import json
+	import time
+
+	with station_db() as conn:
+		conn.execute(
+			"""
+			INSERT INTO station_events (event_type, event_name, context_json, created_at)
+			VALUES (?, ?, ?, ?)
+			""",
+			(
+				event_type,
+				event_name,
+				json.dumps(context, separators=(",", ":"), ensure_ascii=False)
+				if context else None,
+				int(time.time()),
+			),
+		)
+		conn.commit()
+def flush_station_events_to_hq():
+	"""
+	Send locally recorded lifecycle/summary events to HQ.
+	Delete only after successful transmission.
+	"""
+
+	with station_db() as conn:
+		rows = conn.execute(
+			"SELECT id, event_type, event_name, context_json, created_at FROM station_events ORDER BY id ASC"
+		).fetchall()
+
+	for r in rows:
+		payload = {
+			"source": "station",
+			"node_id": STATION_ID,
+			"severity": "info",
+			"event_type": "policy",  # lifecycle & summary treated as operational policy
+			"context": {
+				"event_type": r["event_type"],
+				"event_name": r["event_name"],
+				"context": json.loads(r["context_json"]) if r["context_json"] else None,
+				"created_at": r["created_at"],
+			},
+		}
+
+		try:
+			resp = requests.post(
+				f"{CENTRAL_URL}/admin/telemetry",
+				json=payload,
+				timeout=5,
+			)
+
+			if resp.status_code == 201:
+				with station_db() as conn:
+					conn.execute(
+						"DELETE FROM station_events WHERE id = ?",
+						(r["id"],),
+					)
+					conn.commit()
+
+		except Exception:
+			# Leave event in DB for later retry
+			break
 
 # -----------------------
 # Station vs Relay guards
@@ -2025,6 +2114,17 @@ def flush_to_central_internal() -> dict:
 	except Exception as e:
 		pull_error = str(e)
 
+	# Record operational summary and send to HQ for general data to help with aid distribution and station state changes
+	record_station_event(
+		"summary",
+		"flush_summary",
+		{
+			"messages_sent": msg_success,
+			"checkins_sent": checkin_success,
+			"blocks_pulled": pulled_blocks_stored,
+		},
+	)
+
 	return {
 		"ok": True,
 		"central_url": CENTRAL_URL,
@@ -2117,6 +2217,10 @@ def perform_sync_attempt() -> bool:
 def background_loop():
 	logger.warning("Station auto-sync loop started (enabled=%s)", STATION_AUTO_SYNC)
 
+	# For general logging to send to HQ
+	last_online_state = None
+	last_mode_state = None
+
 	while not STOP_EVENT.is_set():
 		now_ms = _now_ms()
 
@@ -2133,16 +2237,55 @@ def background_loop():
 
 				if ok:
 					RUNTIME_STATE["central_last_ok_at_ms"] = now_ms
-					RUNTIME_STATE["next_central_check_at_ms"] = (now_ms + CENTRAL_CHECK_INTERVAL_MS)
+					RUNTIME_STATE["next_central_check_at_ms"] = now_ms + CENTRAL_CHECK_INTERVAL_MS
 				else:
 					# Backoff on connectivity failure
 					next_delay = min(CENTRAL_CHECK_INTERVAL_MS * 2, 30_000)
 					RUNTIME_STATE["next_central_check_at_ms"] = now_ms + next_delay
 
-		# ---- Adaptive sync ----
-		
+		# --------------------------------------------------------------
+		# UPDATE STATION MODE (station | relay | uninitialized)
+		update_station_mode()
+
+		current_online = bool(RUNTIME_STATE.get("central_ok"))
+		current_mode = STATION_STATE.get("mode")
+
+		# ONLINE / OFFLINE TRANSITION DETECTION
+		if last_online_state is None:
+			last_online_state = current_online
+
+		elif current_online != last_online_state:
+			if current_online:
+				record_station_event("lifecycle", "online")
+				logger.info("Station transitioned ONLINE")
+			else:
+				record_station_event("lifecycle", "offline")
+				logger.warning("Station transitioned OFFLINE")
+
+			last_online_state = current_online
+
+		# MODE TRANSITION DETECTION (station ↔ relay)
+		if last_mode_state is None:
+			last_mode_state = current_mode
+
+		elif current_mode != last_mode_state:
+			record_station_event(
+				"lifecycle",
+				"mode_changed",
+				{"from": last_mode_state, "to": current_mode},
+			)
+
+			logger.warning(
+				"Station mode changed from %s to %s",
+				last_mode_state,
+				current_mode,
+			)
+
+			last_mode_state = current_mode
+
+		# ---- Adaptive sync (only when online) ----
 		with RUNTIME_STATE_LOCK:
-			if RUNTIME_STATE["central_ok"] is True:
+			if current_online:
 				if now_ms >= int(SYNC_STATE.get("next_sync_at_ms") or 0):
 					did_work = perform_sync_attempt()
 
@@ -2151,6 +2294,10 @@ def background_loop():
 
 					# Schedule next attempt
 					SYNC_STATE["next_sync_at_ms"] = (now_ms + _sync_interval_ms())
+
+		# Flush station's state logs to HQ, if any (only when online)
+		if current_online:
+			flush_station_events_to_hq()
 
 		time.sleep(0.25)
 

@@ -136,6 +136,66 @@ def init_db():
 		ON transactions(priority_level ASC, timestamp_created ASC)
 		''')
 
+		# ADMIN TELEMETRY TABLE
+		# Stores structured operational events from:
+		# - HQ backend
+		# - Stations
+		# - Relays
+		#
+		# IMPORTANT:
+		# - This table is NOT consensus-critical.
+		# - It does NOT influence blockchain validity.
+		# - It is purely operational/observability.
+		#
+		# Design goals:
+		# - Structured (no free-text logs)
+		# - Filterable (severity, source, event_type)
+		# - Time-ordered
+		# - Bounded via retention policy
+
+		conn.execute('''
+		CREATE TABLE IF NOT EXISTS admin_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+			-- Where event originated
+			source TEXT NOT NULL,            -- backend | station | relay
+
+			-- Node identifier (station_id, deviceId, etc.)
+			node_id TEXT,
+
+			-- Severity classification
+			severity TEXT NOT NULL,          -- info | warning | error | critical
+
+			-- Machine-readable event type
+			event_type TEXT NOT NULL,        -- storage_pressure | identity_rejected | mining_error
+
+			-- Optional structured context (JSON string)
+			context_json TEXT,
+
+			-- Unix timestamp (seconds)
+			created_at INTEGER NOT NULL
+		)
+		''')
+
+		# INDEXES FOR FAST FILTERING
+		# Filter by severity quickly
+		conn.execute('''
+		CREATE INDEX IF NOT EXISTS idx_admin_events_severity
+		ON admin_events(severity)
+		''')
+
+		# Filter by event_type
+		conn.execute('''
+		CREATE INDEX IF NOT EXISTS idx_admin_events_event_type
+		ON admin_events(event_type)
+		''')
+
+		# Filter by time (most common query)
+		conn.execute('''
+		CREATE INDEX IF NOT EXISTS idx_admin_events_created_at
+		ON admin_events(created_at DESC)
+		''')
+
 		conn.commit()
 		
 if __name__ == "__main__":

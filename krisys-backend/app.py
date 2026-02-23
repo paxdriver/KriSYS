@@ -34,6 +34,82 @@ def get_db_size_kb():
 	# Convert to Kilobytes (KB)
 	return size_bytes / 1024.0
 
+# ----------------------------------------------------------------------
+# TELEMETRY CONFIGURATION
+# ----------------------------------------------------------------------
+
+# Retention policy:
+# Keep only the newest N events.
+# This prevents unbounded DB growth.
+ADMIN_EVENT_RETENTION_LIMIT = 20000  # keep last 20k events max
+def emit_telemetry_event(
+	source: str,
+	severity: str,
+	event_type: str,
+	context: dict | None = None,
+	node_id: str | None = None,
+):
+	"""
+	Emit a structured operational event into admin_events table.
+
+	This function:
+	- Inserts structured telemetry into SQLite.
+	- Enforces retention cap.
+	- Does NOT affect blockchain logic.
+	- Never raises fatal errors (telemetry must not break consensus).
+	"""
+		# Basic validation
+	if severity not in ("info", "warning", "error", "critical"):
+		severity = "info"
+
+	try:
+		with db_connection() as conn:
+			conn.execute(
+				'''
+				INSERT INTO admin_events
+				(source, node_id, severity, event_type, context_json, created_at)
+				VALUES (?, ?, ?, ?, ?, ?)
+				''',
+				(
+					source,
+					node_id,
+					severity,
+					event_type,
+					json.dumps(context, separators=(",", ":"), ensure_ascii=False)
+					if context else None,
+					int(time.time()),
+				)
+			)
+
+			# RETENTION ENFORCEMENT
+			# Keep only the newest ADMIN_EVENT_RETENTION_LIMIT rows.
+			conn.execute(
+				# This approach might be more efficient that O(1)?
+				# f'''
+				# DELETE FROM admin_events
+				# WHERE id < (
+				# 	SELECT id FROM admin_events
+				# 	ORDER BY created_at DESC
+				# 	LIMIT 1 ADMIN_EVENT_RETENTION_LIMIT ?
+				# )
+				# '''
+				f'''
+				DELETE FROM admin_events
+				WHERE id NOT IN (
+					SELECT id FROM admin_events
+					ORDER BY created_at DESC
+					LIMIT {ADMIN_EVENT_RETENTION_LIMIT}
+				)
+				'''
+			)
+
+			conn.commit()
+
+	except Exception as e:
+		# Telemetry must never break application flow
+		logger.error(f"Telemetry insert failed: {str(e)}")
+
+
 MAX_MEMBERS = 20     # DEV NOTE: THIS SHOULD BE DEFINED IN THE BLOCKCHAIN ISNTANTIATION POLICY BY ADMIN
 MIN_PASSPHRASE_LENGTH = 1   # set small limit, just for obfuscation not security
 
@@ -80,6 +156,12 @@ def load_or_create_admin_token() -> str:
 		with open(path, "w", encoding="utf-8") as f:
 			f.write(token)
 
+		emit_telemetry_event(
+			source="HQ",
+			severity="critical",
+			event_type="PGP",
+			context={"path": private_key_file}
+		)
 		logger.warning("Created admin_token.txt at %s", path)
 		return token
 
@@ -174,6 +256,12 @@ def dev_local_bootstrap_policy_id_and_cleanup() -> str | None:
 			policy_id = f.read().strip() or None
 
 	if policy_id:
+		emit_telemetry_event(
+			source="HQ",
+			severity="info",
+			event_type="policy",
+			context={"policy_id": policy_id}
+		)
 		logger.info(f"DEV: reusing persisted policy_id={policy_id}")
 		return policy_id
 
@@ -181,9 +269,13 @@ def dev_local_bootstrap_policy_id_and_cleanup() -> str | None:
 	with open(policy_file, "w", encoding="utf-8") as f:
 		f.write(policy_id)
 
-	logger.warning(
-		"DEV: dev_policy_id.txt missing; resetting ALL local state"
+	emit_telemetry_event(
+		source="HQ",
+		severity="warning",
+		event_type="policy",
+		context={"policy_id": policy_id}
 	)
+	logger.warning("DEV: dev_policy_id.txt missing; resetting ALL local state")
 
 	db_path = os.getenv("BLOCKCHAIN_DB_PATH", "blockchain.db")
 
@@ -251,9 +343,7 @@ def dev_remote_bootstrap_policy_id_and_cleanup() -> str | None:
 				logger.warning("DEV-REMOTE: failed reading policy file: %s", e)
 
 		# Missing/empty policy file => operator reset
-		logger.warning(
-			"DEV-REMOTE: dev_policy_id.txt missing/empty; performing HQ reset"
-		)
+		logger.warning("DEV-REMOTE: dev_policy_id.txt missing/empty; performing HQ reset")
 
 		for path in [db_path, pub_path, priv_path]:
 			try:
@@ -319,6 +409,18 @@ blockchain = Blockchain(policy_system)
 def DEV_POLICY_CHECK():
 	# Get current policy information
 	current_policy = blockchain.policy_system.get_policy()
+	emit_telemetry_event(
+		source="HQ",
+		severity="info",
+		event_type="policy",
+		context={
+			"Crisis_Name": current_policy['name'],
+			"policy_id": hurricane_policy_id,
+			"Organization": current_policy['organization'],
+			"Contact": current_policy['contact'],
+			"Description": current_policy['description'],
+			}
+	)
 	logger.info(f"Crisis Name: {current_policy['name']}")
 	logger.info(f"policy_id: {hurricane_policy_id}")
 	logger.info(f"Organization: {current_policy['organization']}")
@@ -327,6 +429,12 @@ def DEV_POLICY_CHECK():
 
 	# Get specific policy setting
 	block_interval = current_policy['policy']['block_interval']
+	emit_telemetry_event(
+		source="HQ",
+		severity="info",
+		event_type="blockchain",
+		context={"Block_Interval": current_policy['policy']['block_interval']}
+	)
 	logger.info(f"block_interval: {block_interval}")
 	
 # Call policy check after the blockchain and policy are instatiated
@@ -348,6 +456,12 @@ def ensure_station(crisis_id: str, station_id: str, name: str, stype: str, locat
 		).fetchone()
 
 		if row:
+			emit_telemetry_event(
+				source="HQ",
+				severity="info",
+				event_type="DB",
+				context={"station_exists": station_id}
+			)
 			logger.info(f"Station {station_id} already exists for crisis {crisis_id}")
 			return
 
@@ -359,6 +473,12 @@ def ensure_station(crisis_id: str, station_id: str, name: str, stype: str, locat
 			(crisis_id, station_id, name, stype, location),
 		)
 		conn.commit()
+		emit_telemetry_event(
+			source="HQ",
+			severity="info",
+			event_type="DB",
+			context={"station_created": station_id}
+		)
 		logger.info(f"Created station {station_id} ({name}) for crisis {crisis_id}")
 
 
@@ -487,6 +607,12 @@ ADMIN_TOKEN = ""
 
 private_key_file = os.path.join('blockchain', 'master_private_key.asc')
 if not os.path.exists(private_key_file):
+	emit_telemetry_event(
+		source="HQ",
+		severity="critical",
+		event_type="PGP",
+		context={"message": "Master private key file not found! Shutting down."}
+	)
 	logger.critical("MASTER PRIVATE KEY FILE NOT FOUND. SHUTTING DOWN.")
 	import sys
 	sys.exit(1)
@@ -508,6 +634,12 @@ def admin_required(f):
 			if decoded_token != ADMIN_TOKEN:
 				return jsonify({"error": "UNAUTHORIZED: INVALID ADMIN TOKEN"}), 401
 		except Exception as e:
+			emit_telemetry_event(
+				source="HQ",
+				severity="critical",
+				event_type="PGP",
+				context={"error": str(e)}
+			)
 			logger.error(f"Token decoding error: {str(e)}")
 			return jsonify({"error": "UNAUTHORIZED: INVALID TOKEN FORMAT"}), 401    
 		return f(*args, **kwargs)
@@ -669,6 +801,12 @@ def add_transaction():
 	except KeyError as e:
 		return jsonify({"error": f"Missing field: {str(e)}"}), 400
 	except Exception as e:
+		emit_telemetry_event(
+			source="HQ",
+			severity="critical",
+			event_type="blockchain",
+			context={ "transaction_error": {str(e)} }
+		)
 		logger.error(f"Transaction error: {str(e)}")
 		return jsonify({"error": "Internal server error"}), 500
 	
@@ -686,6 +824,99 @@ def get_address_transactions(address):
 				txs.append(tx.to_dict())
 	return jsonify(txs), 200
 
+
+# HQ Telemetry ingestion endpoint
+@app.route("/admin/telemetry", methods=["POST"])
+@admin_required
+def admin_receive_telemetry():
+	"""
+	Receive structured telemetry events from stations/relays.
+
+	Request JSON:
+	{
+		"source": "station",
+		"node_id": "HOSPITAL_SE_001",
+		"severity": "warning",			# conventional options: critical, info, warning
+		"event_type": "network", 		# conventional options: PGP, DB, network, policy, blockchain
+		"context": {...}				# any object that provides useful message and information related
+	}
+	"""
+
+	data = request.get_json(force=True, silent=True) or {}
+
+	source = data.get("source")
+	severity = data.get("severity")
+	event_type = data.get("event_type")
+	context = data.get("context")
+	node_id = data.get("node_id")
+
+	if not isinstance(source, str) or not isinstance(event_type, str):
+		return jsonify({"error": "Invalid telemetry payload"}), 400
+
+	emit_telemetry_event(
+		source=source,
+		severity=severity or "info",
+		event_type=event_type,
+		context=context if isinstance(context, dict) else {},
+		node_id=node_id if isinstance(node_id, str) else "",
+	)
+	return jsonify({"status": "ok"}), 201
+
+
+# ADMIN EVENTS QUERY ENDPOINT
+@app.route("/admin/events", methods=["GET"])
+@admin_required
+def get_admin_events():
+	"""
+	Query structured telemetry events.
+
+	Query params:
+	- severity (optional: critical, info, warning)
+	- event_type (optional: PGP, DB, network, policy, blockchain)
+	- limit (default 100)
+	"""
+
+	severity = request.args.get("severity")
+	event_type = request.args.get("event_type")
+	limit = request.args.get("limit", 100)
+
+	try:
+		limit = int(limit)
+	except Exception:
+		limit = 100
+
+	query = "SELECT * FROM admin_events WHERE 1=1"
+	params = []
+
+	if severity:
+		query += " AND severity = ?"
+		params.append(severity)
+
+	if event_type:
+		query += " AND event_type = ?"
+		params.append(event_type)
+
+	query += " ORDER BY created_at DESC LIMIT ?"
+	params.append(limit)
+
+	with db_connection() as conn:
+		rows = conn.execute(query, tuple(params)).fetchall()
+
+	results = []
+	for r in rows:
+		results.append({
+			"id": r["id"],
+			"source": r["source"],
+			"node_id": r["node_id"],
+			"severity": r["severity"],
+			"event_type": r["event_type"],
+			"context": r["context_json"],
+			"created_at": r["created_at"],
+		})
+
+	return jsonify(results), 200
+
+
 # Admin endpoint for manual mining
 @app.route('/admin/mine', methods=['POST'])
 def mine_block():
@@ -694,7 +925,12 @@ def mine_block():
 			return jsonify({"error": "No transactions to mine"}), 400
 		block = blockchain.mine_block()
 		blockchain.save_block(block)
-
+		emit_telemetry_event(
+			source="HQ",
+			severity="info",
+			event_type="DB",
+			context={"DB_size": f"{get_db_size_kb()}kb" }
+		)
 		logger.info(f'DB SIZE: {get_db_size_kb()}kb')
 
 		return jsonify({
@@ -702,6 +938,12 @@ def mine_block():
 			"hash": block.hash
 		}), 200
 	except Exception as e:
+		emit_telemetry_event(
+			source="HQ",
+			severity="critical",
+			event_type="blockchain",
+			context={"mining_error": str(e)}
+		)
 		logger.error(f"Mining error: {str(e)}")
 		return jsonify({"error": "Mining failed"}), 500
 
@@ -732,6 +974,12 @@ def create_wallet():
 		return jsonify(wallet.to_dict()), 201
 
 	except Exception as e:
+		emit_telemetry_event(
+			source="HQ",
+			severity="critical",
+			event_type="DB",
+			context={"wallet_creation_error": str(e)}
+		)
 		logger.error(f"Wallet creation error: {str(e)}")
 		return jsonify({"error": "Wallet creation failed"}), 500
 
@@ -759,6 +1007,12 @@ def admin_alert():
 		return jsonify({"error": f"Missing field: {str(e)}"}), 400
 	
 	except Exception as e:
+		emit_telemetry_event(
+			source="HQ",
+			severity="critical",
+			event_type="DB",
+			context={"admin_alert_error": str(e)}
+		)
 		logger.error(f"Admin alert error: {str(e)}")
 		return jsonify({"error": "Internal server error"}), 500
 
@@ -777,6 +1031,12 @@ def get_address_qr(family_id: str, address: str):
 		})
 		
 	except Exception as e:
+		emit_telemetry_event(
+			source="HQ",
+			severity="critical",
+			event_type="network",
+			context={"qr_code_generation_error": str(e)}
+		)
 		logger.error(f"QR generation error: {str(e)}")
 		return jsonify({"error": "QR generation failed"}), 500
 
@@ -861,22 +1121,34 @@ def check_in():
 			).fetchone()
 
 		if not row:
-			logger.warning(
-				f"Check-in attempt from unknown station_id={station_id} "
-				f"for crisis={crisis_id}"
+			emit_telemetry_event(
+				source="HQ",
+				severity="warning",
+				event_type="network",
+				context={"station_error": f"Check-in attempt from unknown station_id: {station_id} for crisis_id: {crisis_id}"}
 			)
+			logger.warning(f"Check-in attempt from unknown station_id={station_id} for crisis={crisis_id}")
 			return jsonify({"error": "Unknown station_id"}), 400
 
 		if row['status'] != 'active' or not row['api_key_hash']:
-			logger.warning(
-				f"Check-in attempt from inactive station_id={station_id} "
-				f"for crisis={crisis_id}, status={row['status']}"
+			emit_telemetry_event(
+				source="HQ",
+				severity="warning",
+				event_type="network",
+				context={"station_error": f"Check-in attempt from inactive station_id: {station_id} for crisis_id: {crisis_id}"}
 			)
+			logger.warning(f"Check-in attempt from inactive station_id={station_id} for crisis={crisis_id}, status={row['status']}")
 			return jsonify({"error": "Station not active"}), 403
 
 		# Verify API key
 		provided_hash = hashlib.sha256(api_key.encode('utf-8')).hexdigest()
 		if not hmac.compare_digest(provided_hash, row['api_key_hash']):
+			emit_telemetry_event(
+				source="HQ",
+				severity="warning",
+				event_type="network",
+				context={"api_key_error": f"Invalid API key attempted from station_id: {station_id} for crisis_id: {crisis_id}"}
+			)
 			logger.warning(f"Invalid API key for station_id={station_id} crisis={crisis_id}")
 			return jsonify({"error": "Invalid station API key"}), 401
 
@@ -903,6 +1175,12 @@ def check_in():
 		), 201
 
 	except Exception as e:
+		emit_telemetry_event(
+			source="HQ",
+			severity="critical",
+			event_type="network",
+			context={"check-in_error": str(e)}
+		)
 		logger.error(f"Check-in error: {str(e)}")
 		return jsonify({"error": str(e)}), 400
 	
@@ -1207,6 +1485,12 @@ def unlock_wallet_endpoint():
 			return jsonify({"error": "Invalid passphrase"}), 401
 			
 	except Exception as e:
+		emit_telemetry_event(
+			source="HQ",
+			severity="warning",
+			event_type="network",
+			context={"wallet_unlock_error": f"Wallet unlock failed: {str(e)}"}
+		)
 		logger.error(f"Unlock error: {str(e)}")
 		return jsonify({"error": "Internal server error"}), 500
 
@@ -1351,6 +1635,12 @@ def get_wallet_public_key(family_id):
 		else:
 			return jsonify({"error": "Public key not found"}), 404
 	except Exception as e:
+		emit_telemetry_event(
+			source="HQ",
+			severity="critical",
+			event_type="DB",
+			context={"wallet_pub_key_error": f"get_wallet_public_key failed: {str(e)}"}
+		)
 		logger.error(f"Error getting public key: {str(e)}")
 		return jsonify({"error": "Internal server error"}), 500
 
