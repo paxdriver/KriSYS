@@ -891,9 +891,7 @@ HQ:
 - block interval
 - adaptive trigger frequency
 
-These become:
-- UI indicators
-- Not inferred ad-hoc
+These become UI indicators not inferred ad-hoc
 
 #### Phase 6.3 — Safe Admin Controls
 Add:
