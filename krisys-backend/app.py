@@ -1,7 +1,7 @@
 # krisys-backend/app.py
 import hashlib
 import uuid
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 from blockchain import Blockchain, Transaction, PolicySystem
 import time
@@ -824,6 +824,53 @@ def get_address_transactions(address):
 				txs.append(tx.to_dict())
 	return jsonify(txs), 200
 
+# Wallet management endpoints - with passphrase encryption
+@app.route('/wallet', methods=['POST'])
+def create_wallet():
+	"""Create a new family wallet with keys stored separately"""
+	try: 
+		data = request.json
+		num_members = int(data.get('num_members', 1))
+		passphrase = data.get('passphrase', '')  # Get passphrase from request
+		
+		if not passphrase or len(passphrase) < MIN_PASSPHRASE_LENGTH:
+			return jsonify({"error": f"Passphrase must be at least {MIN_PASSPHRASE_LENGTH} characters"}), 400
+
+		if num_members < 1 or num_members > MAX_MEMBERS:
+			return jsonify({"error": "Number of members must be between 1-20"}), 400
+
+		members = [{"name": f"Member {i+1}"} for i in range(num_members)]
+		
+		wallet = blockchain.wallets.create_wallet(
+			family_id=hashlib.sha256(secrets.token_bytes(32)).hexdigest()[:24],
+			members=members,
+			crisis_id=blockchain.crisis_metadata['id'],
+			passphrase=passphrase   # Passphrase deciphers private_key stored by blockchain host in wallet_keys, which is encrypted value by blockchain host's public/private keys to never store user's private key, but to allow simple passphrase for user to retrieve their private_key by memory
+		)
+		
+		return jsonify(wallet.to_dict()), 201
+
+	except Exception as e:
+		emit_telemetry_event(
+			source="HQ",
+			severity="critical",
+			event_type="DB",
+			context={"wallet_creation_error": str(e)}
+		)
+		logger.error(f"Wallet creation error: {str(e)}")
+		return jsonify({"error": "Wallet creation failed"}), 500
+
+
+# DEV NOTE: MUST COMPLETELY CHANGE THIS FOR PROPER ADMIN AUTH, NEVER PASS ADMIN_TOKEN TO BROWSER
+# TODO: create proper frontend panel with proper auth using JWT
+@app.route("/admin", methods=["GET"])
+def admin_panel():
+    return render_template("admin.html",
+        admin_token_b64=base64.b64encode(
+			ADMIN_TOKEN.encode("utf-8")
+		).decode("utf-8")
+    )
+
 
 # HQ Telemetry ingestion endpoint
 @app.route("/admin/telemetry", methods=["POST"])
@@ -861,6 +908,157 @@ def admin_receive_telemetry():
 		node_id=node_id if isinstance(node_id, str) else "",
 	)
 	return jsonify({"status": "ok"}), 201
+
+def _safe_parse_context_json(raw: str | None) -> dict | None:
+	# Safely parse context_json without throwing.
+	if not isinstance(raw, str) or not raw.strip():
+		# Reject non-string or empty inputs.
+		return None
+	try:
+		# Attempt JSON parsing.
+		obj = json.loads(raw)
+	except Exception:
+		# Reject malformed JSON.
+		return None
+	return obj if isinstance(obj, dict) else None  # Only accept dict payloads.
+
+
+@app.route("/admin/stations/status", methods=["GET"])
+@admin_required
+def admin_station_status():
+	"""
+	Aggregate station operational state for the HQ panel.
+
+	Output:
+	{
+	  "stations": [ ... ],
+	  "count": <number>
+	}
+
+	Combines:
+	- authoritative station rows from `stations` table (includes pending/active metadata)
+	- recent lifecycle/summary telemetry from `admin_events` (no new data collection)
+	"""
+	limit = request.args.get("limit", 1000)
+	try:
+		limit = int(limit)
+	except Exception:
+		limit = 1000  # fallback if limit query param is invalid
+	limit = max(1, min(limit, 5000))  # clamp to a safe maximum
+
+	crisis_id = blockchain.crisis_metadata["id"]
+
+	with db_connection() as conn:
+		# Fetch all configured stations for the current crisis (active, pending, etc.)
+		station_rows = conn.execute(
+			"""
+			SELECT station_id, name, type, location, status
+			FROM stations
+			WHERE crisis_id = ?
+			ORDER BY station_id ASC
+			""",
+			(crisis_id,),
+		).fetchall()
+
+		# Fetch recent station-scoped telemetry events (lifecycle + summaries).
+		event_rows = conn.execute(
+			"""
+			SELECT node_id, context_json, created_at
+			FROM admin_events
+			WHERE source = ? AND node_id IS NOT NULL AND node_id != ''
+			ORDER BY created_at DESC
+			LIMIT ?
+			""",
+			("station", limit),
+		).fetchall()
+
+	stations: dict[str, dict] = {}
+
+	# Seed output with canonical station metadata.
+	for row in station_rows:
+		stations[row["station_id"]] = {
+			"station_id": row["station_id"],
+			"name": row["name"],
+			"type": row["type"],
+			"location": row["location"],
+			"status": row["status"],
+			"last_seen_at": None,
+			"last_event_at": None,
+			"lifecycle": {
+				"connectivity": None,
+				"mode": None,
+				"last_lifecycle_event": None,
+				"last_lifecycle_at": None,
+			},
+			"summary": None,
+		}
+
+	# Merge telemetry context into the canonical list.
+	for event in event_rows:
+		station_id = event["node_id"]
+		if not station_id:
+			continue  # defensive guard
+
+		entry = stations.get(station_id)
+		if not entry:
+			# Include stations known only from telemetry (defensive path).
+			entry = {
+				"station_id": station_id,
+				"name": None,
+				"type": None,
+				"location": None,
+				"status": "unknown",
+				"last_seen_at": None,
+				"last_event_at": None,
+				"lifecycle": {
+					"connectivity": None,
+					"mode": None,
+					"last_lifecycle_event": None,
+					"last_lifecycle_at": None,
+				},
+				"summary": None,
+			}
+			stations[station_id] = entry
+
+		if entry["last_seen_at"] is None:
+			entry["last_seen_at"] = event["created_at"]
+
+		ctx = _safe_parse_context_json(event["context_json"])
+		if not ctx:
+			continue
+
+		event_type = ctx.get("event_type")
+		event_name = ctx.get("event_name")
+		event_context = ctx.get("context") if isinstance(ctx.get("context"), dict) else {}
+		event_timestamp = ctx.get("created_at") or event["created_at"]
+
+		if entry["last_event_at"] is None:
+			entry["last_event_at"] = event_timestamp
+
+		if event_type == "lifecycle":
+			if entry["lifecycle"]["last_lifecycle_event"] is None:
+				entry["lifecycle"]["last_lifecycle_event"] = event_name
+				entry["lifecycle"]["last_lifecycle_at"] = event_timestamp
+
+			if event_name in ("online", "offline") and entry["lifecycle"]["connectivity"] is None:
+				entry["lifecycle"]["connectivity"] = event_name
+
+			if event_name == "mode_changed" and entry["lifecycle"]["mode"] is None:
+				to_mode = event_context.get("to")
+				entry["lifecycle"]["mode"] = to_mode if isinstance(to_mode, str) else None
+
+		if event_type == "summary" and event_name == "flush_summary" and entry["summary"] is None:
+			entry["summary"] = {
+				"messages_sent": event_context.get("messages_sent"),
+				"checkins_sent": event_context.get("checkins_sent"),
+				"blocks_pulled": event_context.get("blocks_pulled"),
+				"summary_at": event_timestamp,
+			}
+
+	out = sorted(stations.values(), key=lambda item: item["station_id"])
+	return jsonify({"stations": out, "count": len(out)}), 200
+# -------------------
+
 
 
 # ADMIN EVENTS QUERY ENDPOINT
@@ -946,42 +1144,6 @@ def mine_block():
 		)
 		logger.error(f"Mining error: {str(e)}")
 		return jsonify({"error": "Mining failed"}), 500
-
-# Wallet management endpoints - with passphrase encryption
-@app.route('/wallet', methods=['POST'])
-def create_wallet():
-	"""Create a new family wallet with keys stored separately"""
-	try: 
-		data = request.json
-		num_members = int(data.get('num_members', 1))
-		passphrase = data.get('passphrase', '')  # Get passphrase from request
-		
-		if not passphrase or len(passphrase) < MIN_PASSPHRASE_LENGTH:
-			return jsonify({"error": f"Passphrase must be at least {MIN_PASSPHRASE_LENGTH} characters"}), 400
-
-		if num_members < 1 or num_members > MAX_MEMBERS:
-			return jsonify({"error": "Number of members must be between 1-20"}), 400
-
-		members = [{"name": f"Member {i+1}"} for i in range(num_members)]
-		
-		wallet = blockchain.wallets.create_wallet(
-			family_id=hashlib.sha256(secrets.token_bytes(32)).hexdigest()[:24],
-			members=members,
-			crisis_id=blockchain.crisis_metadata['id'],
-			passphrase=passphrase   # Passphrase deciphers private_key stored by blockchain host in wallet_keys, which is encrypted value by blockchain host's public/private keys to never store user's private key, but to allow simple passphrase for user to retrieve their private_key by memory
-		)
-		
-		return jsonify(wallet.to_dict()), 201
-
-	except Exception as e:
-		emit_telemetry_event(
-			source="HQ",
-			severity="critical",
-			event_type="DB",
-			context={"wallet_creation_error": str(e)}
-		)
-		logger.error(f"Wallet creation error: {str(e)}")
-		return jsonify({"error": "Wallet creation failed"}), 500
 
 
 @app.route('/admin/alert', methods=['POST'])

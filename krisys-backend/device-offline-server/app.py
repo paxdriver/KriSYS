@@ -144,6 +144,8 @@ def is_storage_under_pressure(count: int) -> bool:
 
 CONFIRMED_TTL_MS = 2 * 24 * 60 * 60 * 1000
 CONFIRMED_MAX_ROWS = 20
+
+FLUSH_INTERVAL_SECONDS = 15  	# event loop for station to check every 15s if it is online and has messages to flush to HQ
 ####### THESE VALUES ARE FOR DEVELOPMENT ONLY, WILL BE SET BY POLICY IN PROD
 
 
@@ -2295,11 +2297,27 @@ def background_loop():
 					# Schedule next attempt
 					SYNC_STATE["next_sync_at_ms"] = (now_ms + _sync_interval_ms())
 
-		# Flush station's state logs to HQ, if any (only when online)
+		time.sleep(0.25)
+
+def event_flush_loop():
+	"""
+	Separate loop dedicated to flushing lifecycle/summary
+	events to HQ at a slower, deterministic cadence.
+
+	This keeps telemetry logic isolated from sync logic and checks less frequently.
+	"""
+	# logger.info("Station event flush loop started")
+	while not STOP_EVENT.is_set():
+
+		# Only flush if station is currently online
+		current_online = bool(RUNTIME_STATE.get("central_ok"))
+
 		if current_online:
 			flush_station_events_to_hq()
 
-		time.sleep(0.25)
+		# Sleep deterministically
+		time.sleep(FLUSH_INTERVAL_SECONDS)
+
 
 _background_started = False
 
@@ -2312,8 +2330,12 @@ def start_background_loop_once():
 	t = threading.Thread(target=background_loop, daemon=True)
 	t.start()
 
+	flush_thread = threading.Thread(target=event_flush_loop, daemon=True)
+	flush_thread.start()
+
 start_background_loop_once()
 # BACKGROUND LOOP ^^^^^
+
 
 if __name__ == "__main__":
 	app.run(host="0.0.0.0", port=5000, debug=True)
