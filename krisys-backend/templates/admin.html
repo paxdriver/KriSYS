@@ -74,6 +74,28 @@
 					</tbody>
 				</table>
 			</div>
+
+			<!-- Telemetry section -->
+			<div class="card">
+				<div class="card-title">Telemetry (Most Recent)</div>
+				<div id="telemetry-error" class="small"></div>
+
+				<table>
+					<thead>
+						<tr>
+							<th>Time</th>
+							<th>Source</th>
+							<th>Node</th>
+							<th>Severity</th>
+							<th>Type</th>
+							<th>Context</th>
+						</tr>
+					</thead>
+					<tbody id="telemetry-table-body"></tbody>
+				</table>
+
+				<button onclick="loadMoreTelemetry()">Load More</button>
+			</div>
 		</div>
 	</div>
 
@@ -194,13 +216,59 @@
 				const input = document.getElementById('admin-token-input')
 				if (input) input.value = token
 				setTokenStatus('Token loaded from server', false)
+				
 				await loadStations()
+				await loadTelemetry()
+
 			} catch (error) {
 				setTokenStatus(error.message, true)
 			}
 		}
 
 		document.addEventListener('DOMContentLoaded', initializeStationTable)
+
+		let telemetryLimit = 20
+
+		async function loadTelemetry() {
+			const token = getAdminToken()
+			const errorEl = document.getElementById('telemetry-error')
+
+			if (!token) {
+				errorEl.textContent = 'Missing admin token'
+				return
+			}
+
+			const res = await fetch(`/admin/events?limit=${telemetryLimit}`, {
+				headers: { 'X-Admin-Token': token }
+			})
+
+			if (!res.ok) {
+				errorEl.textContent = `Failed to load telemetry (${res.status})`
+				return
+			}
+
+			const events = await res.json()
+			const tbody = document.getElementById('telemetry-table-body')
+			tbody.innerHTML = ''
+
+			for (const e of events) {
+				const tr = document.createElement('tr')
+				tr.innerHTML = `
+					<td>${formatTime(e.created_at)}</td>
+					<td>${escapeHtml(e.source)}</td>
+					<td>${escapeHtml(e.node_id || '-')}</td>
+					<td>${escapeHtml(e.severity)}</td>
+					<td>${escapeHtml(e.event_type)}</td>
+					<td>${escapeHtml(e.context || '-')}</td>
+				`
+				tbody.appendChild(tr)
+			}
+		}
+
+		function loadMoreTelemetry() {
+			telemetryLimit += 20
+			loadTelemetry()
+		}
 	</script>
 	
 </body>
