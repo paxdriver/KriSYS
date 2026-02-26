@@ -871,23 +871,38 @@ def admin_panel():
 		).decode("utf-8")
     )
 
+@app.route("/debug/stations")
+def debug_stations():
+    with db_connection() as conn:
+        rows = conn.execute("SELECT * FROM stations").fetchall()
+        return jsonify([dict(r) for r in rows])
 
 # HQ Telemetry ingestion endpoint
 @app.route("/admin/telemetry", methods=["POST"])
-@admin_required
 def admin_receive_telemetry():
 	"""
 	Receive structured telemetry events from stations/relays.
-
-	Request JSON:
-	{
-		"source": "station",
-		"node_id": "HOSPITAL_SE_001",
-		"severity": "warning",			# conventional options: critical, info, warning
-		"event_type": "network", 		# conventional options: PGP, DB, network, policy, blockchain
-		"context": {...}				# any object that provides useful message and information related
-	}
+	Authenticated via X-Station-API-Key.
 	"""
+
+	api_key = request.headers.get("X-Station-API-Key")
+	if not api_key:
+		return jsonify({"error": "Missing station API key"}), 401
+
+	provided_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+	with db_connection() as conn:
+		row = conn.execute(
+			"""
+			SELECT station_id, crisis_id
+			FROM stations
+			WHERE api_key_hash = ? AND status = 'active'
+			""",
+			(provided_hash,),
+		).fetchone()
+
+	if not row:
+		return jsonify({"error": "Invalid station API key"}), 401
 
 	data = request.get_json(force=True, silent=True) or {}
 
@@ -905,8 +920,9 @@ def admin_receive_telemetry():
 		severity=severity or "info",
 		event_type=event_type,
 		context=context if isinstance(context, dict) else {},
-		node_id=node_id if isinstance(node_id, str) else "",
+		node_id=node_id if isinstance(node_id, str) else row["station_id"],
 	)
+
 	return jsonify({"status": "ok"}), 201
 
 def _safe_parse_context_json(raw: str | None) -> dict | None:
@@ -963,7 +979,7 @@ def admin_station_status():
 		# Fetch recent station-scoped telemetry events (lifecycle + summaries).
 		event_rows = conn.execute(
 			"""
-			SELECT node_id, context_json, created_at
+			SELECT node_id, event_type, context_json, created_at
 			FROM admin_events
 			WHERE source = ? AND node_id IS NOT NULL AND node_id != ''
 			ORDER BY created_at DESC
@@ -989,6 +1005,11 @@ def admin_station_status():
 				"mode": None,
 				"last_lifecycle_event": None,
 				"last_lifecycle_at": None,
+			},
+			"identity": {
+				"verified_at": None,
+				"rejected_at": None,
+				"state": "unknown"
 			},
 			"summary": None,
 		}
@@ -1016,6 +1037,11 @@ def admin_station_status():
 					"last_lifecycle_event": None,
 					"last_lifecycle_at": None,
 				},
+				"identity": {
+					"verified_at": None,
+					"rejected_at": None,
+					"state": "unknown"
+				},
 				"summary": None,
 			}
 			stations[station_id] = entry
@@ -1024,13 +1050,12 @@ def admin_station_status():
 			entry["last_seen_at"] = event["created_at"]
 
 		ctx = _safe_parse_context_json(event["context_json"])
-		if not ctx:
-			continue
 
-		event_type = ctx.get("event_type")
+		event_type = event["event_type"]  # ← from DB column
 		event_name = ctx.get("event_name")
 		event_context = ctx.get("context") if isinstance(ctx.get("context"), dict) else {}
 		event_timestamp = ctx.get("created_at") or event["created_at"]
+
 
 		if entry["last_event_at"] is None:
 			entry["last_event_at"] = event_timestamp
@@ -1054,6 +1079,15 @@ def admin_station_status():
 				"blocks_pulled": event_context.get("blocks_pulled"),
 				"summary_at": event_timestamp,
 			}
+		
+		# Identity state inference for telemetric observability (active status check)
+		if event_type == "lifecycle":
+			if event_name == "online" and entry["identity"]["state"] == "unknown":
+				entry["identity"]["state"] = "verified"
+				entry["identity"]["verified_at"] = event_timestamp
+			if event_name == "identity_rejected":
+				entry["identity"]["state"] = "rejected"
+				entry["identity"]["rejected_at"] = event_timestamp
 
 	out = sorted(stations.values(), key=lambda item: item["station_id"])
 	return jsonify({"stations": out, "count": len(out)}), 200

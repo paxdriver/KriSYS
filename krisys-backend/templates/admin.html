@@ -174,26 +174,79 @@
 			}
 
 			const data = await res.json()
+			console.log(data)
 			const rows = Array.isArray(data.stations) ? data.stations : []
+			console.log("Stations in loadStations():", rows)
+			
 			const tbody = document.getElementById('station-table-body')
 			tbody.innerHTML = ''
 
+			// -------------------------------
+			// STATUS BADGE (expanded logic)
+			// -------------------------------
+			
+			let statusBadge
+			
 			for (const s of rows) {
-				const statusBadge = s.status === 'active'
-					? badge('active', 'green')
-					: s.status === 'pending'
-						? badge('pending', 'yellow')
-						: badge(s.status || 'unknown', '')
+			// Log which station is being processed
+			//console.log("Processing station:", s.station_id, "with status:", s.status)
 
-				const connBadge = s.lifecycle?.connectivity === 'online'
-					? badge('online', 'green')
-					: s.lifecycle?.connectivity === 'offline'
-						? badge('offline', 'red')
-						: badge('-', '')
+			// If station status is exactly 'active'
+			if (s.status === 'active') {
+				statusBadge = badge('active', 'green')
+			}
+			// If station status is exactly 'pending'
+			else if (s.status === 'pending') {
+				statusBadge = badge('pending', 'yellow')
+			}
+			// Any other status (including null/undefined)
+			else {
+				statusBadge = badge(s.status || 'unknown', '')
+			}
 
-				const summary = s.summary
-					? `msg=${summarySafe(summary.messages_sent)}, chk=${summarySafe(summary.checkins_sent)}, blk=${summarySafe(summary.blocks_pulled)}`
-					: '-'
+			// -------------------------------
+			// CONNECTIVITY BADGE (expanded logic)
+			// -------------------------------
+
+			let connBadge
+			// Extract connectivity safely
+			const connectivity = s.lifecycle?.connectivity
+
+			// If connectivity is 'online'
+			if (connectivity === 'online') {
+				connBadge = badge('online', 'green')
+			}
+			// If connectivity is 'offline'
+			else if (connectivity === 'offline') {
+				connBadge = badge('offline', 'red')
+			}
+			// Any other state (null / undefined)
+			else {
+				connBadge = badge('-', '')
+			}
+
+			// -------------------------------
+			// SUMMARY FIELD (expanded logic)
+			// -------------------------------
+
+			let summary
+
+			// Check if summary object exists and is truthy
+			if (s.summary) {
+				console.log("→ Summary branch: HAS SUMMARY", s.summary)
+
+				// Build summary string explicitly
+				const msgCount = summarySafe(s.summary.messages_sent)
+				const chkCount = summarySafe(s.summary.checkins_sent)
+				const blkCount = summarySafe(s.summary.blocks_pulled)
+
+				summary = `msg=${msgCount}, chk=${chkCount}, blk=${blkCount}`
+			}
+			// No summary object
+			else {
+				console.log("→ Summary branch: NO SUMMARY")
+				summary = '-'
+			}
 
 				const tr = document.createElement('tr')
 				tr.innerHTML = `

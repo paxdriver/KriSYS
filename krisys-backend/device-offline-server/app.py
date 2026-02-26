@@ -133,6 +133,9 @@ DATA_DIR = os.environ.get("STATION_DATA_DIR", "/app/data")
 STATION_DB_PATH = os.path.join(DATA_DIR, "station.db")
 STATION_IDENTITY_FILE = os.path.join(DATA_DIR, "krisys_station_identity.json")
 
+# HEARTBEAT reporting prevents: silent failures, frozen stations appearing healthy, blind spots in monitoring
+HEARTBEAT_INTERVAL_MS = 60_000  # 1 minute	DEV NOTE: probably can set this to hourly, choosing short interval for dev
+
 ####### THESE VALUES ARE FOR DEVELOPMENT ONLY, WILL BE SET BY POLICY IN PROD
 # Storage pruning (DEV-TUNED DEFAULTS)
 QUEUED_TTL_MS = 7 * 24 * 60 * 60 * 1000
@@ -438,6 +441,41 @@ def is_identity_rejected_recently(now_ms: int) -> bool:
 		return False
 	return (now_ms - rej) < int(IDENTITY_REJECT_BACKOFF_MS)
 
+# ----------------------------
+# Lifecycle meta persistence
+# ----------------------------
+
+def get_last_online_state() -> str | None:
+	"""
+	Return last persisted online state: "online" | "offline" | None
+	"""
+	val = db_get_meta("last_online_state")
+	if val in ("online", "offline"):
+		return val
+	return None
+
+def set_last_online_state(state: str) -> None:
+	"""
+	Persist online state for reboot continuity.
+	"""
+	if state in ("online", "offline"):
+		db_set_meta("last_online_state", state)
+
+def get_last_mode_state() -> str | None:
+	"""
+	Return last persisted mode: "station" | "relay" | "uninitialized"
+	"""
+	val = db_get_meta("last_mode_state")
+	if val in ("station", "relay", "uninitialized"):
+		return val
+	return None
+
+def set_last_mode_state(mode: str) -> None:
+	"""
+	Persist mode state across reboot.
+	"""
+	if mode in ("station", "relay", "uninitialized"):
+		db_set_meta("last_mode_state", mode)
 
 # ----------------------------
 # DB helpers (blocks)
@@ -571,9 +609,14 @@ def flush_station_events_to_hq():
 	Delete only after successful transmission.
 	"""
 
+	api_key = get_station_api_key()
+	if not api_key:
+		return  # cannot authenticate to HQ
+
 	with station_db() as conn:
 		rows = conn.execute(
-			"SELECT id, event_type, event_name, context_json, created_at FROM station_events ORDER BY id ASC"
+			"SELECT id, event_type, event_name, context_json, created_at "
+			"FROM station_events ORDER BY id ASC"
 		).fetchall()
 
 	for r in rows:
@@ -581,9 +624,8 @@ def flush_station_events_to_hq():
 			"source": "station",
 			"node_id": STATION_ID,
 			"severity": "info",
-			"event_type": "policy",  # lifecycle & summary treated as operational policy
+			"event_type": r["event_type"],  # lifecycle | summary
 			"context": {
-				"event_type": r["event_type"],
 				"event_name": r["event_name"],
 				"context": json.loads(r["context_json"]) if r["context_json"] else None,
 				"created_at": r["created_at"],
@@ -594,6 +636,9 @@ def flush_station_events_to_hq():
 			resp = requests.post(
 				f"{CENTRAL_URL}/admin/telemetry",
 				json=payload,
+				headers={
+					"X-Station-API-Key": api_key
+				},
 				timeout=5,
 			)
 
@@ -606,8 +651,7 @@ def flush_station_events_to_hq():
 					conn.commit()
 
 		except Exception:
-			# Leave event in DB for later retry
-			break
+			break  # retry later
 
 # -----------------------
 # Station vs Relay guards
@@ -642,8 +686,6 @@ def require_usable_relay() -> tuple[bool, str]:
 		return False, "Relay unavailable (no verified blockchain)"
 
 	return True, ""
-
-
 
 
 # ----------------------------
@@ -2220,8 +2262,8 @@ def background_loop():
 	logger.warning("Station auto-sync loop started (enabled=%s)", STATION_AUTO_SYNC)
 
 	# For general logging to send to HQ
-	last_online_state = None
-	last_mode_state = None
+	last_online_state = get_last_online_state()		# Persisted metadata
+	last_mode_state = get_last_mode_state()			# Persisted metadata
 
 	while not STOP_EVENT.is_set():
 		now_ms = _now_ms()
@@ -2254,14 +2296,25 @@ def background_loop():
 
 		# ONLINE / OFFLINE TRANSITION DETECTION
 		if last_online_state is None:
+			if current_online:
+				record_station_event("lifecycle", "online")
+				set_last_online_state("online")
+				logger.info("Station booted ONLINE")
+			else:
+				record_station_event("lifecycle", "offline")
+				set_last_online_state("offline")
+				logger.warning("Station booted OFFLINE")
+
 			last_online_state = current_online
 
 		elif current_online != last_online_state:
 			if current_online:
 				record_station_event("lifecycle", "online")
+				set_last_online_state("online")
 				logger.info("Station transitioned ONLINE")
 			else:
 				record_station_event("lifecycle", "offline")
+				set_last_online_state("offline")
 				logger.warning("Station transitioned OFFLINE")
 
 			last_online_state = current_online
@@ -2269,6 +2322,7 @@ def background_loop():
 		# MODE TRANSITION DETECTION (station ↔ relay)
 		if last_mode_state is None:
 			last_mode_state = current_mode
+			if current_mode: set_last_mode_state(current_mode)
 
 		elif current_mode != last_mode_state:
 			record_station_event(
@@ -2276,6 +2330,7 @@ def background_loop():
 				"mode_changed",
 				{"from": last_mode_state, "to": current_mode},
 			)
+			if current_mode: set_last_mode_state(current_mode)
 
 			logger.warning(
 				"Station mode changed from %s to %s",
@@ -2284,6 +2339,20 @@ def background_loop():
 			)
 
 			last_mode_state = current_mode
+
+		# --- Heartbeat telemetry ---
+		if current_online and (now_ms - last_heartbeat_at) >= HEARTBEAT_INTERVAL_MS:
+			record_station_event(
+				"lifecycle",
+				"heartbeat",
+				{
+					"mode": current_mode,
+					"central_ok": current_online,
+					"queued_count": len(db_list_queued(limit=1000)),
+					"blocks_cached": len(db_list_blocks(limit=1000)),
+				},
+			)
+			last_heartbeat_at = now_ms
 
 		# ---- Adaptive sync (only when online) ----
 		with RUNTIME_STATE_LOCK:
@@ -2296,7 +2365,8 @@ def background_loop():
 
 					# Schedule next attempt
 					SYNC_STATE["next_sync_at_ms"] = (now_ms + _sync_interval_ms())
-
+		
+		last_heartbeat_at = 0
 		time.sleep(0.25)
 
 def event_flush_loop():
