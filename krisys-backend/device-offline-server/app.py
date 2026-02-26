@@ -585,9 +585,6 @@ def record_station_event(event_type: str, event_name: str, context: dict | None 
 	Only lifecycle + summary events are allowed.
 	"""
 
-	import json
-	import time
-
 	with station_db() as conn:
 		conn.execute(
 			"""
@@ -597,8 +594,7 @@ def record_station_event(event_type: str, event_name: str, context: dict | None 
 			(
 				event_type,
 				event_name,
-				json.dumps(context, separators=(",", ":"), ensure_ascii=False)
-				if context else None,
+				json.dumps(context, separators=(",", ":"), ensure_ascii=False) if context else None,
 				int(time.time()),
 			),
 		)
@@ -2258,7 +2254,9 @@ def perform_sync_attempt() -> bool:
 	return bool(did_work)
 
 # The actual loop to check for stuff to sync and adjust refresh timer based on load
+last_heartbeat_at = 0
 def background_loop():
+	global last_heartbeat_at
 	logger.warning("Station auto-sync loop started (enabled=%s)", STATION_AUTO_SYNC)
 
 	# For general logging to send to HQ
@@ -2319,10 +2317,16 @@ def background_loop():
 
 			last_online_state = current_online
 
+
 		# MODE TRANSITION DETECTION (station ↔ relay)
-		if last_mode_state is None:
+		if last_mode_state is None and current_mode:
+			record_station_event(
+				"lifecycle",
+				"mode_changed",
+				{"from": None, "to": current_mode}
+			)
+			set_last_mode_state(current_mode)	# WHAT IF MODE IS NOT YET SET???
 			last_mode_state = current_mode
-			if current_mode: set_last_mode_state(current_mode)
 
 		elif current_mode != last_mode_state:
 			record_station_event(
@@ -2340,7 +2344,7 @@ def background_loop():
 
 			last_mode_state = current_mode
 
-		# --- Heartbeat telemetry ---
+		# ---- HEARTBEAT ----
 		if current_online and (now_ms - last_heartbeat_at) >= HEARTBEAT_INTERVAL_MS:
 			record_station_event(
 				"lifecycle",
@@ -2354,20 +2358,16 @@ def background_loop():
 			)
 			last_heartbeat_at = now_ms
 
-		# ---- Adaptive sync (only when online) ----
+		# ---- SYNC ----
 		with RUNTIME_STATE_LOCK:
 			if current_online:
 				if now_ms >= int(SYNC_STATE.get("next_sync_at_ms") or 0):
 					did_work = perform_sync_attempt()
-
-					# Adjust cadence (busy <-> casual)
 					_sync_note_work(did_work)
-
-					# Schedule next attempt
-					SYNC_STATE["next_sync_at_ms"] = (now_ms + _sync_interval_ms())
+					SYNC_STATE["next_sync_at_ms"] = now_ms + _sync_interval_ms()
 		
-		last_heartbeat_at = 0
 		time.sleep(0.25)
+
 
 def event_flush_loop():
 	"""
@@ -2387,7 +2387,6 @@ def event_flush_loop():
 
 		# Sleep deterministically
 		time.sleep(FLUSH_INTERVAL_SECONDS)
-
 
 _background_started = False
 

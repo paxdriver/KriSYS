@@ -98,17 +98,18 @@ def init_db():
 			location TEXT,
 
 			-- One-time activation (pending state)
-			registration_code_hash TEXT,   -- hash of activation passphrase
+			registration_code_hash TEXT,	-- hash of activation passphrase
 
 			-- Long-term identity (active state)
-			api_key_hash TEXT,             -- hash of station API key
+			api_key_hash TEXT,				-- hash of station API key
 
 			-- Lifecycle
 			status TEXT DEFAULT 'pending', -- pending | active | revoked (future)
 
 			-- Audit / metadata
-			activated_device_id TEXT,      -- device UUID that activated this station
-			activated_at INTEGER,          -- unix seconds when activated
+			activated_device_id TEXT,		-- device UUID that activated this station
+			activated_at INTEGER,			-- unix seconds when activated
+			last_seen_at INTEGER,			-- heartbeat liveness tracking for telemetry of stations in service
 			created_at INTEGER DEFAULT (CAST(strftime('%s','now') AS INTEGER)),
 
 			UNIQUE(crisis_id, station_id),

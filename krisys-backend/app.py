@@ -38,6 +38,8 @@ def get_db_size_kb():
 # TELEMETRY CONFIGURATION
 # ----------------------------------------------------------------------
 
+TIME_TIL_STATION_DEEMED_STALE = 120 	# Stations ping hq with status update every 60s, so 120s without a ping the station is stale
+
 # Retention policy:
 # Keep only the newest N events.
 # This prevents unbounded DB growth.
@@ -914,7 +916,24 @@ def admin_receive_telemetry():
 
 	if not isinstance(source, str) or not isinstance(event_type, str):
 		return jsonify({"error": "Invalid telemetry payload"}), 400
+	
+	# HEARTBEAT: update last_seen only, do NOT persist
+	if event_type == "lifecycle" and isinstance(context, dict):
+		if context.get("event_name") == "heartbeat":
+			with db_connection() as conn:
+				conn.execute(
+					"""
+					UPDATE stations
+					SET last_seen_at = ?
+					WHERE station_id = ?
+					""",
+					(int(time.time()), node_id),
+				)
+				conn.commit()
 
+			return jsonify({"status": "ok"}), 201
+
+	# NON-HEARTBEAT events still persist
 	emit_telemetry_event(
 		source=source,
 		severity=severity or "info",
@@ -922,6 +941,19 @@ def admin_receive_telemetry():
 		context=context if isinstance(context, dict) else {},
 		node_id=node_id if isinstance(node_id, str) else row["station_id"],
 	)
+
+	# Also update last_seen for real lifecycle events
+	with db_connection() as conn:
+		# DEV NOTE: TODO - perform these updates in batches on HQ so that many stations update at same time
+		conn.execute(
+			"""
+			UPDATE stations
+			SET last_seen_at = ?
+			WHERE station_id = ?
+			""",
+			(int(time.time()), node_id),
+		)
+		conn.commit()
 
 	return jsonify({"status": "ok"}), 201
 
@@ -998,7 +1030,7 @@ def admin_station_status():
 			"type": row["type"],
 			"location": row["location"],
 			"status": row["status"],
-			"last_seen_at": None,
+			"last_seen_at": row["last_seen_at"],
 			"last_event_at": None,
 			"lifecycle": {
 				"connectivity": None,
@@ -1044,34 +1076,35 @@ def admin_station_status():
 				},
 				"summary": None,
 			}
-			stations[station_id] = entry
-
 		if entry["last_seen_at"] is None:
 			entry["last_seen_at"] = event["created_at"]
 
+		stations[station_id] = entry
+
 		ctx = _safe_parse_context_json(event["context_json"])
+		if not ctx:
+			logger.warning('_safe_parse_context_json function call failed in HQ!!!!')
+			continue
 
 		event_type = event["event_type"]  # ← from DB column
 		event_name = ctx.get("event_name")
 		event_context = ctx.get("context") if isinstance(ctx.get("context"), dict) else {}
 		event_timestamp = ctx.get("created_at") or event["created_at"]
-
-
-		if entry["last_event_at"] is None:
-			entry["last_event_at"] = event_timestamp
-
+		
+		# Lifecycle aggregation
 		if event_type == "lifecycle":
 			if entry["lifecycle"]["last_lifecycle_event"] is None:
 				entry["lifecycle"]["last_lifecycle_event"] = event_name
 				entry["lifecycle"]["last_lifecycle_at"] = event_timestamp
 
-			if event_name in ("online", "offline") and entry["lifecycle"]["connectivity"] is None:
+			if event_name in ("online", "offline"):
 				entry["lifecycle"]["connectivity"] = event_name
 
-			if event_name == "mode_changed" and entry["lifecycle"]["mode"] is None:
+			if event_name == "mode_changed":
 				to_mode = event_context.get("to")
 				entry["lifecycle"]["mode"] = to_mode if isinstance(to_mode, str) else None
 
+		
 		if event_type == "summary" and event_name == "flush_summary" and entry["summary"] is None:
 			entry["summary"] = {
 				"messages_sent": event_context.get("messages_sent"),
@@ -1079,7 +1112,6 @@ def admin_station_status():
 				"blocks_pulled": event_context.get("blocks_pulled"),
 				"summary_at": event_timestamp,
 			}
-		
 		# Identity state inference for telemetric observability (active status check)
 		if event_type == "lifecycle":
 			if event_name == "online" and entry["identity"]["state"] == "unknown":
@@ -1088,12 +1120,58 @@ def admin_station_status():
 			if event_name == "identity_rejected":
 				entry["identity"]["state"] = "rejected"
 				entry["identity"]["rejected_at"] = event_timestamp
+	
+	# STALE DETECTION INFERENCE
+	NOW = int(time.time())
+	OFFLINE_TIMEOUT = TIME_TIL_STATION_DEEMED_STALE   # Seconds til stale, set at top of script
+	for entry in stations.values():
+		last_seen = entry["last_seen_at"]
+		station_id = entry["station_id"]
+		previous_connectivity = entry["lifecycle"]["connectivity"]
+
+		# --- HQ STALE DETECTION ---
+		if last_seen and (NOW - last_seen) > OFFLINE_TIMEOUT:
+			if previous_connectivity != "offline":
+				entry["lifecycle"]["connectivity"] = "offline"
+
+				# Persist HQ-derived offline transition
+				emit_telemetry_event(
+					source="HQ",  		# Derived by HQ
+					severity="info",
+					event_type="network",
+					context={
+						"event": "station_stale_timeout",
+						"station_id": station_id,
+						"last_seen_at": last_seen,
+					},
+					node_id=station_id,
+				)
+
+				logger.info(f"lost track of station: {station_id}")
+		
+		# --- HQ RECONNECT DETECTION ---
+		elif last_seen and previous_connectivity == "offline":
+			entry["lifecycle"]["connectivity"] = "online"
+
+			# Persist HQ-derived reconnect transition
+			emit_telemetry_event(
+				source="HQ",		# Derived by HQ
+				severity="info",
+				event_type="network",
+				context={
+					"event": "station_reconnected",
+					"station_id": station_id,
+					"last_seen_at": last_seen,
+				},
+				node_id=station_id,
+			)
+
+			logger.info(f"station reconnected: {station_id}")
+
 
 	out = sorted(stations.values(), key=lambda item: item["station_id"])
 	return jsonify({"stations": out, "count": len(out)}), 200
 # -------------------
-
-
 
 # ADMIN EVENTS QUERY ENDPOINT
 @app.route("/admin/events", methods=["GET"])
