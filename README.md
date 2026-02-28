@@ -358,6 +358,43 @@ Stations have their own wallet addresses but become configured by a single first
 
 Stations do NOT rotate keys. They are completely reset and provided a new activation code by HQ if a new api key is required. Hard reset only mitigates risk of elevated message priority messages from being tampered with and simplifies revocation of station credentials by HQ when a device is intercepted or otherwise compromised.
 ---
+---
+
+### Summary of Communication Flow
+```
+Station boots
+    ↓
+Detect HQ reachability
+    ↓
+Emit lifecycle event (stored locally)
+    ↓
+Flush loop sends telemetry to HQ
+    ↓
+HQ stores event in admin_events
+    ↓
+Admin endpoint aggregates
+    ↓
+Derived lifecycle & connectivity shown
+```
+---
+
+#### If Station dies:
+```
+No telemetry
+    ↓
+HQ stale detection triggers offline
+```
+---
+
+#### if HQ dies:
+```
+Station records offline locally
+    ↓
+HQ returns
+    ↓
+Station flushes historical lifecycle
+```
+---
 
 ## Relay-Only Nodes (Online & Offline Behaviour)
 ### Relay devices are:
@@ -370,6 +407,27 @@ Stations do NOT rotate keys. They are completely reset and provided a new activa
 - ever post transactions to be mined as blocks by central HQ (can't corrupt blockchain)
 - ever be trusted
 - compromise the network thanks to hardening & hash checks
+
+---
+
+## Conceptual Overview of STATION vs RELAY:
+### There are two separate responsibilities:
+Station Responsibilities
+- Detect connectivity to HQ
+- Determine operational mode (station / relay / uninitialized)
+- Record lifecycle transitions locally
+- Persist telemetry events even when offline
+- Flush stored events to HQ when online
+- Emit periodic heartbeat while online
+
+HQ Responsibilities
+- Receive authenticated telemetry from stations
+- Store structured events in admin_events
+- Aggregate latest lifecycle + summary state
+- Infer offline state when telemetry becomes stale
+- Render current state to admin UI
+
+### <b>*HQ never polls stations. Stations always push telemetry.*</b>
 
 ---
 
@@ -414,8 +472,13 @@ Phase 3.8 testing goal:
 ## API Overview (Selected)
 
 Central backend:
+- GET /health
 - GET /crisis
 - GET /blockchain
+- GET /admin/* (auth placeholder)
+- GET /admin/events
+- GET /admin/stations/status
+- POST /admin/telemetry
 - POST /transaction (messages)
 - POST /checkin (station-authenticated check-ins)
 - POST /admin/mine
@@ -424,6 +487,7 @@ Central backend:
 - POST /wallet
 
 Station server:
+- GET /health
 - POST /mesh/inventory
 - POST /mesh/sync
 - POST /station/checkin (offline intake)
@@ -605,7 +669,7 @@ identifying credentials.
 
 ---
 
-## Roadmap (*ROADMAP*)
+# *ROADMAP*
 ### Phase 1 — Core chain and persistence (Completed)
 Core ledger + canonical chain rules:
 - Single canonical chain (no forks; conflicts ignored)
@@ -760,7 +824,7 @@ Dev reset behavior (dev-only):
 ### Phase 4 — Operational hardening (Completed)
 Goal: align dev prototype with real-world operation before multi-device field tests.
 
-Phase 4a — Client hardening (In progress)
+Phase 4a — Client hardening
 - LocalStorage namespacing:
 	- prevent cross-wallet and cross-crisis cache bleed
 	- namespace at least by `crisisId` and `family_id`
@@ -774,7 +838,7 @@ Phase 4a — Client hardening (In progress)
 	- P2P connection context scoped to `app/wallet/[familyId]/layout.js`
 	- connection survives internal navigation; tears down on wallet exit
 
-Phase 4b — Station/relay hardening (In progress)
+Phase 4b — Station/relay hardening
 - Station identity handling:
 	- load station identity (station_id/api_key/central_url/policy) from local file/volume
 	- explicit boot behavior when identity missing (dev: fail or show provisioning stub)
@@ -831,101 +895,128 @@ Goal: improve usability without changing the trust model or protocol.
 
 Targets:
 - Clearer status surfaces:
-	- central connectivity vs mesh-only
-	- station/relay reachable indicators
-	- P2P connected/active status
+	- [x] central connectivity vs mesh-only
+	- [x] station/relay reachable indicators
+	- [ ] P2P connected/active status
+	- [ ] Facilitate visibility of P2P pools
 - Better error messaging:
-	- offline/online transitions
-	- missing keys / missing crisis metadata
-	- invalid blocks / signature failures
+	- [x] offline/online transitions
+	- [x] missing keys / missing crisis metadata
+	- [ ] invalid blocks / signature failures
 - Storage/bandwidth optimizations:
-	- pruning strategy UX
-	- user-visible limits and defaults
-	- block/queue bandwidth negotiation (optional)
+	- [ ] pruning strategy UX
+	- [ ] user-visible limits and defaults
+	- [ ] block/queue bandwidth negotiation
 - UI declutter:
-	- move dev-only tools behind explicit dev gates
-	- unify “Connections” UX for station/relay/P2P
-- Accessibility and mobile-friendly layout improvements
+	- [ ] move dev-only tools behind explicit dev gates
+	- [ ] unify “Connections” UX for station/relay/P2P
+- [ ] Accessibility and mobile-friendly layout improvements
 
 #### Phase 6.1 — Visibility MVP
 Add structured log emitter utility in:
-- backend
-- station
-- relay
-- Add admin telemetry endpoint on HQ.
+- [x] backend
+- [x] station
+- [ ] relay
+- [x] Add admin telemetry endpoint on HQ
 
 Add admin UI panel:
-- Recent warnings/errors
-- Station list with:
-- mode
-- online/offline
-- queued count
-- identity state
-- last flush time
-- Relay list (if reachable)
+- [ ] Recent warnings/errors
+- [ ] Replace with proper JWT/session-based auth
+- [ ] Remove token injection from template
+- [x] Station list with:
+	- [x] mode
+	- [x] online/offline
+	- [x] identity state
 
 Add simple filters:
-- severity
-- station_id
-- event type
+- [ ] station_id (search/lookup)
+- [ ] connection status
+- [ ] activation status
+- [ ] event severity
+- [ ] event type
+
 
 #### Phase 6.2 — Health Model
-Define formal states:
+Define & display formal station states:
+- [x] active + online
+- [x] active + offline
+- [x] relay fallback
+- [x] identity rejected
+- [ ] storage paused
 
-Station:
-- active + online
-- active + offline
-- relay fallback
-- identity rejected
-- storage paused
-
-Relay:
-- pinned
-- uninitialized
-- online
-- offline
+Establish simplified relay flow:<br>
+(*Uncertain best approach for this, perhaps provide url via qr with simple json containing pertinent info for application to consume when manually setting device to relay mode?*)
+- [ ] pinning device to crisis_id
 
 HQ:
-- mining active
-- pending count
-- block interval
-- adaptive trigger frequency
+- [ ] mining active
+- [ ] pending count
+- [ ] block interval
+- [ ] adaptive trigger frequency
 
-These become UI indicators not inferred ad-hoc
+#### Phase 6.3 — Coordination of Public Pools (UNRESOLVED)
+Iron out rules and flow of coordinating P2P:
+- [ ] Bulletin boards hosted by stations to publish join codes(?)
+- [ ] Establish public gathering to facilitate offline pools / exchanges
+- [ ] Automate propagation between pools (pool-2-pool sharing)
+- [ ] Aggregate propagated unconfirmed queues to stations
 
-#### Phase 6.3 — Safe Admin Controls
-Add:
-- Revoke station (set status = revoked)
-- Pause station intake remotely
-- Force pull blocks
-- Rotate crisis policy (new crisis only, not mid-stream)
+#### Phase 6.4 — Safe Admin Controls
+Add admin controls:
+- [ ] Admin auth lock and session state management
+- [ ] Revoke station (set status = revoked)
+- [ ] Provision new station / passphrase
+- [ ] Pause station intake remotely
+- [ ] Force pull blocks
 
-Every action:
-- Logged to admin logs
-- Does not alter historical blocks
-- Does not break determinism
+On state change actions:
+- [x] Logged to admin logs
+- [x] Does not alter historical blocks
+- [x] Does not break determinism
 
-#### Phase 6.4+ Extra considerations
+#### Phase 6.5+ Extra considerations
 Storage & Abuse Monitoring:
-- Storage trend graph (queued growth over time)
-- Repeated identity rejection alerts
-- Excessive relay input detection
-- Abnormal block rejection rates
+- [ ] Storage trend graph (queued growth over time)
+- [ ] Repeated identity rejection alerts
+- [ ] Excessive relay input detection
+- [ ] Abnormal block rejection rates
+- [ ] Admin controls to replace DevTools UI
 
-Execution Order (Strict Recommendation):
-- Structured logs (foundation)
-- Telemetry ingestion endpoint
-- Admin dashboard UI
-- Health state formalization
-- Retention + log pruning
-- Admin controls
-- UX clarity refinements
-
-
+Execution Order:
+- [x] Structured logs (foundation)
+- [x] Telemetry ingestion endpoint
+- [x] Health state formalization
+- [x] Retention + log pruning
+- [ ] Pool finding rules
+- [ ] Admin dashboard UI
+- [ ] UX clarity refinements
 
 ---
 
-### Phase 7 — React Native migration (Planned)
+### Phase 7 — Wizards, tutorials, documentation, demos (Planned)
+Goal: make the system adoptable by providers and understandable by users.
+
+Deliverables:
+- Crisis/policy creation wizard (provider)
+- Station provisioning flow (provider + field operator)
+- Station UI:
+	- QR scan
+	- QR display
+	- metadata display
+	- connection status
+- User onboarding:
+	- join code usage
+	- offline key exchange
+	- safe usage reminders (manual sync cadence)
+- Operational documentation:
+	- deployment guides (central/station/relay)
+	- security boundaries and threat model
+	- troubleshooting playbooks
+- Presentations/slides/demo scripts for stakeholders
+
+---
+
+### Phase 8 — React Native migration (Planned)
 Goal: mobile-first deployment with device radios and cameras.
 
 Targets:
@@ -943,25 +1034,6 @@ Targets:
 	- no silent background syncing by default
 
 ---
-
-### Phase 8 — Wizards, tutorials, documentation, demos (Planned)
-Goal: make the system adoptable by providers and understandable by users.
-
-Deliverables:
-- Crisis/policy creation wizard (provider)
-- Station provisioning flow (provider + field operator)
-- User onboarding:
-	- join code usage
-	- offline key exchange
-	- safe usage reminders (manual sync cadence)
-- Operational documentation:
-	- deployment guides (central/station/relay)
-	- security boundaries and threat model
-	- troubleshooting playbooks
-- Presentations/slides/demo scripts for stakeholders
-
----
-
 ---
 
 # Offline Data Propagation Diagrams
@@ -1038,3 +1110,106 @@ flowchart LR
 	P2 <--> P3
 
 ---
+
+## Station Runtime Acrhitecture
+The station runs two background threads. 
+```
+background_loop()
+event_flush_loop()
+```
+
+### A) background_loop()
+This loop runs frequently (~250ms sleep).
+
+It handles:
+- Central reachability checks (/health)
+- Mode detection
+- Lifecycle transition detection
+- Heartbeat scheduling
+- Adaptive sync cadence
+- Flush trigger scheduling
+- It does NOT directly push telemetry to HQ.
+
+It only records events locally.
+
+### B) event_flush_loop()
+This loop runs slower (e.g. every 15 seconds).
+- Checks if HQ is reachable
+- If online → flushes locally stored telemetry events
+- Deletes events only after HQ confirms receipt
+
+This separation prevents telemetry logic blocking sync logic, long network timeouts stalling station behavior, and race conditions between connectivity and telemetry.
+
+---
+
+## Station Event Model (minimal operational telemetry, NOT recorded on the blockchain)
+Stations store events locally in station_events trable (SQLite)
+
+```
+event_type   → lifecycle | summary
+event_name   → online | offline | mode_changed | heartbeat | flush_summary
+context_json → structured JSON
+created_at   → unix seconds
+```
+
+Stations never emit redundant events, only mode changes (station fallsback to relay failing to auth its api key, for eg), or connection changes (fails to reach remote HQ's /health).
+
+Oh heartbeat, station emits:
+```
+event_type: lifecycle
+event_name: heartbeat
+context:
+    mode
+    central_ok
+    queued_count
+    blocks_cached
+```
+
+It's for HQ's observability, allowing it to infer lost station connection by checking updating "last_seen_at". This is not functionally applicable to the blockchain, it's just so that HQ knows the station is alive and authenticated. 
+
+```
+last_online_state
+last_mode_state
+```
+#### Architecture is "Push-based telemetry with derived liveness inference."
+
+---
+
+## Station Flush Summary Event
+```
+event_type: summary
+event_name: flush_summary
+context:
+    messages_sent
+    checkins_sent
+    blocks_pulled
+```
+Exists solely to help report volumes, not specific details. Knowing the traffic load of a station or technical issues, and it may help coordinate the deployment of aid most effectively.
+
+---
+
+## Station Meta Table
+Station stores persistent state in meta:
+- crisisId
+- block_public_key
+- last_online_state
+- last_mode_state
+- deviceId
+- intake_paused
+
+This allows:
+- Clean reboot recovery
+- No repeated boot events
+- Proper lifecycle continuity
+---
+
+# Scaling Considerations
+Current design scales well because: 
+- stations push telemetry (HQ never polls)
+- aggregation complexity is O(stations + recent_events) ['Big O Notation']
+- Stale detection is O(stations) ['Big O Notation']
+- No persistent lifecycle state stored in DB
+- No heavy per-station computation
+
+### Even with 1,000 stations, 1,000 stale checks per request is trivial CPU cost. Logs are sparse summaries prepared by station nodes in advance, and HQ can selectively batch updates in larger deployments as needed. This is push-based telemetry with derived liveness inference.
+
