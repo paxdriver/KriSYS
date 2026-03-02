@@ -304,6 +304,18 @@ def init_station_db():
 			)
 			"""
 		)
+		# Known peer stations (from HQ)
+		conn.execute(
+			"""
+			CREATE TABLE IF NOT EXISTS station_peers (
+				station_id TEXT PRIMARY KEY,
+				name TEXT,
+				type TEXT,
+				location TEXT,
+				last_seen_at INTEGER
+			)
+			"""
+		)
 
 		# STATION LOCAL EVENT LOG (Lifecycle + Summary Only for volumes, helps distribute resources on the ground more effectively)
 		# - Minimal
@@ -1313,6 +1325,7 @@ RUNTIME_STATE = {
 	"next_central_check_at_ms": 0,
 	"next_pull_at_ms": 0,
 	"next_flush_at_ms": 0,
+	"next_peer_refresh_at_ms": 0,
 }
 
 # ----------------------------
@@ -1629,6 +1642,14 @@ except Exception as e:
 @app.route("/health", methods=["GET"])
 def health():
 	update_station_mode()
+
+	# DEV TEST ----
+	refresh_peer_stations_from_hq() 
+	with station_db() as conn:
+		rows = conn.execute("SELECT station_id FROM station_peers").fetchall()
+		peer_ids = [r["station_id"] for r in rows]
+	# -------------
+
 	return jsonify({
 		"role": "station",
 		"status": "ok",
@@ -1640,6 +1661,7 @@ def health():
 		"identity_rejected_at_ms": get_identity_rejected_at_ms(),
 		"station_id": STATION_ID,
 		"crisisId": db_get_meta("crisisId"),
+		"peers": peer_ids,	# DEV TESTING PEER LIST
 	}), 200
 
 
@@ -2185,6 +2207,62 @@ def flush_to_central_internal() -> dict:
 		"pull_error": pull_error,
 	}
 
+# Peer station lists to assist in coordinating station to station syncs
+def refresh_peer_stations_from_hq() -> bool:
+	"""
+	Pull active station list from HQ and update local station_peers table.
+	Returns True if successful, False otherwise.
+	"""
+
+	api_key = get_station_api_key()
+	if not api_key:
+		logger.warning("Cannot refresh peers: missing station API key")
+		return False
+
+	try:
+		resp = requests.get(
+			f"{CENTRAL_URL}/crisis/stations",
+			headers={"X-Station-API-Key": api_key},
+			timeout=10,
+		)
+
+		if resp.status_code != 200:
+			logger.warning(f"Peer refresh failed: HTTP {resp.status_code}")
+			return False
+
+		data = resp.json()
+		stations = data.get("stations", [])
+
+		with station_db() as conn:
+			# Clear existing peer list
+			conn.execute("DELETE FROM station_peers")
+
+			# Insert fresh list
+			for s in stations:
+				conn.execute(
+					"""
+					INSERT INTO station_peers
+					(station_id, name, type, location, last_seen_at)
+					VALUES (?, ?, ?, ?, ?)
+					""",
+					(
+						s.get("station_id"),
+						s.get("name"),
+						s.get("type"),
+						s.get("location"),
+						None,
+					),
+				)
+
+			conn.commit()
+
+		logger.info(f"Refreshed {len(stations)} peer stations from HQ")
+		return True
+
+	except Exception as e:
+		logger.warning(f"Peer refresh exception: {e}")
+		return False
+
 # When accumulating messages, flush pushes them to central HQ to be mined in a block
 @app.route("/station/flush", methods=["POST"])
 def station_flush():
@@ -2278,8 +2356,15 @@ def background_loop():
 				RUNTIME_STATE["central_last_err"] = err
 
 				if ok:
+					# Connection check for mode inference
 					RUNTIME_STATE["central_last_ok_at_ms"] = now_ms
 					RUNTIME_STATE["next_central_check_at_ms"] = now_ms + CENTRAL_CHECK_INTERVAL_MS
+					
+					# Peer refresh (only when online)
+					if now_ms >= int(RUNTIME_STATE.get("next_peer_refresh_at_ms") or 0):
+						refresh_peer_stations_from_hq()
+						# refresh every 5 minutes
+						RUNTIME_STATE["next_peer_refresh_at_ms"] = now_ms + (5 * 60 * 1000)
 				else:
 					# Backoff on connectivity failure
 					next_delay = min(CENTRAL_CHECK_INTERVAL_MS * 2, 30_000)
@@ -2325,7 +2410,7 @@ def background_loop():
 				"mode_changed",
 				{"from": None, "to": current_mode}
 			)
-			set_last_mode_state(current_mode)	# WHAT IF MODE IS NOT YET SET???
+			set_last_mode_state(current_mode)
 			last_mode_state = current_mode
 
 		elif current_mode != last_mode_state:
