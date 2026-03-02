@@ -1332,6 +1332,66 @@ def set_policy():
 	return jsonify({"error": "Invalid Policy ID provided"}), 400
 
 
+# HQ → Station Peer List Endpoint
+@app.route("/crisis/stations", methods=["GET"])
+def get_crisis_stations():
+	"""
+	Return list of active stations for this crisis.
+	Authenticated via X-Station-API-Key.
+	- Only active stations with api keys can call this endpoint for info about other active stations
+	- This way stations can sync with one another and limit network attempts on LAN to known stations
+	- Does NOT include pending or revoked stations
+	"""
+
+	api_key = request.headers.get("X-Station-API-Key")
+	if not api_key:
+		return jsonify({"error": "Missing station API key"}), 401
+
+	provided_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+	with db_connection() as conn:
+		# Validate calling station
+		row = conn.execute(
+			"""
+			SELECT station_id, crisis_id
+			FROM stations
+			WHERE api_key_hash = ? AND status = 'active'
+			""",
+			(provided_hash,),
+		).fetchone()
+
+		if not row:
+			return jsonify({"error": "Invalid station API key"}), 401
+
+		crisis_id = row["crisis_id"]
+
+		# Return all active stations for this crisis
+		station_rows = conn.execute(
+			"""
+			SELECT station_id, name, type, location
+			FROM stations
+			WHERE crisis_id = ? AND status = 'active'
+			ORDER BY station_id ASC
+			""",
+			(crisis_id,),
+		).fetchall()
+
+	stations = []
+	for s in station_rows:
+		stations.append({
+			"station_id": s["station_id"],
+			"name": s["name"],
+			"type": s["type"],
+			"location": s["location"],
+		})
+
+	return jsonify({
+		"crisis_id": crisis_id,
+		"stations": stations,
+		"generated_at": int(time.time()),
+	}), 200
+
+
 # Verified check-in stations like camp office, food truck, hospital, etc.
 # DEV NOTE:
 #   -If X-Station-API-Key is missing → 401.

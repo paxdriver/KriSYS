@@ -314,12 +314,9 @@ Those are station lifecycle concerns.
 This protocol does **NOT** include:
 
 - Beacon/distress mode
-- Automatic LAN discovery
 - Multi-peer gossip graph
-- Conflict resolution for forks
 - Global station coordination
 - Storage pressure negotiation
-- Dynamic peer ranking
 - QoS scheduling beyond fairness
 
 These are future enhancements.
