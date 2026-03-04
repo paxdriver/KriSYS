@@ -59,3 +59,19 @@ services:
       - ./krisys-backend/relay-offline-server/relay-data:/app/data
     depends_on:
       - backend
+  station_camp:
+    build: 
+      context: ./krisys-backend
+      dockerfile: ./device-offline-server/Dockerfile
+    container_name: krisys_station_camp
+    ports:
+      - "6003:5000"
+    environment:
+      - FLASK_ENV=development
+      - CENTRAL_API_URL=http://backend:5000
+      - STATION_AUTO_SYNC=1
+      - STATION_ID=CAMP_CENTRAL
+    volumes:
+      - ./krisys-backend/camp_central:/app/data
+    depends_on:
+      - backend

@@ -553,6 +553,27 @@ def db_get_block_public_key() -> str | None:
 	return db_get_meta("block_public_key")
 
 
+# ----------------------------
+# STATION helpers
+# ----------------------------
+# def get_peer_base_url(station_id: str) -> str:
+# 	"""
+# 	Resolve peer station base URL.
+# 	For now assume Docker hostname or LAN hostname equals station_id.
+# 	This will later be replaced by QR-provided LAN URL.
+# 	"""
+# 	return f"http://{station_id}:5000"
+def get_peer_base_url(station_id: str) -> str:
+	"""
+	Resolve peer station base URL (Docker dev mapping).
+	"""
+	if station_id == "FOODTRUCK_001":
+		return "http://station:5000"
+	if station_id == "CAMP_CENTRAL":
+		return "http://station_camp:5000"
+	return ""
+
+
 # derived from: identity file, SQLite meta, blockchain DB, cached RUNTIME_STATE["central_ok"]
 def update_station_mode() -> None:
 	global STATION_STATE
@@ -2475,7 +2496,28 @@ def background_loop():
 					idx = PEER_SYNC_STATE["peer_index"] % len(peers)
 					target_station_id = peers[idx]
 
-					logger.info(f"Peer sync scheduled: {target_station_id}")
+					logger.info(f"Attempting peer inventory sync with: {target_station_id}")
+					try:
+						base_url = get_peer_base_url(target_station_id)
+						payload = {
+							"crisisId": db_get_meta("crisisId"),
+							"relay_hashes": list(get_known_relay_hashes())[:RELAY_HASH_CAP],
+						}
+
+						resp = requests.post(
+							f"{base_url}/mesh/inventory",
+							json=payload,
+							timeout=5,
+						)
+
+						if resp.status_code == 200:
+							data = resp.json()
+							logger.info(f"Peer {target_station_id} responded to inventory")
+						else:
+							logger.warning(f"Peer {target_station_id} inventory failed: HTTP {resp.status_code}")
+
+					except Exception as e:
+						logger.warning(f"Peer {target_station_id} unreachable: {e}")
 
 					# Advance rotation
 					PEER_SYNC_STATE["peer_index"] += 1

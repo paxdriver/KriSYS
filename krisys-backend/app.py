@@ -1000,7 +1000,7 @@ def admin_station_status():
 		# Fetch all configured stations for the current crisis (active, pending, etc.)
 		station_rows = conn.execute(
 			"""
-			SELECT station_id, name, type, location, status
+			SELECT station_id, name, type, location, status, last_seen_at
 			FROM stations
 			WHERE crisis_id = ?
 			ORDER BY station_id ASC

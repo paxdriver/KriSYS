@@ -513,6 +513,10 @@ Station server:
 │   └── Dockerfile
 ├── blockchain.db
 ├── blockchain.py
+├── camp_central
+│   ├── station-data  (simulating independent station for station-station peer exchange)
+│   │   ├── station.db
+│   │   └── station_identity_CAMP_CENTRAL.json
 ├── database.py
 ├── Dockerfile
 ├── relay-offline-server 
@@ -604,8 +608,9 @@ Station server:
 LOCAL PORTS (DEV)
 - backend: http://localhost:5000
 - frontend: http://localhost:3000
-- station: http://localhost:6001
-
+- station: http://localhost:6001	(foodtruck*, hospital, station_001)
+- station: http://localhost:6003	(camp_central*)
+*fake stations for devtools actions, NOT provisioned or conventional, dev only dummies
 ---
 
 ## Security and Privacy (What KriSYS tries to guarantee)
