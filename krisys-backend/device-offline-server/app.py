@@ -1293,6 +1293,7 @@ AUTO_SYNC_DEFAULT = "1" if dev_remote else "0"
 # DEV NOTE: set AUTO_SYNC_DEFAULT in blockchain policy setup wizard, and intervals as well
 STATION_AUTO_SYNC = os.environ.get("STATION_AUTO_SYNC", AUTO_SYNC_DEFAULT) == "1"
 CENTRAL_CHECK_INTERVAL_MS = 20_000
+CENTRAL_MAX_BACKOFF_MS = 30_000
 
 # Adaptive sync cadence (for flushing messages to the server, NOT the block mining cadence)
 # Default tiers: busy -> casual
@@ -1301,13 +1302,19 @@ CENTRAL_CHECK_INTERVAL_MS = 20_000
 # 	180_000,	# medium
 # 	600_000,	# casual max
 # ]
-SYNC_TIERS_MS = [10_000, 30_000, 60_000] # DEV NOTE: faster timings used for development iteration
-
+SYNC_TIERS_MS = [10_000, 30_000, 60_000] # DEV NOTE: faster timings are being used for development iteration
 NO_WORK_ESCALATE_AFTER = 3
+
+# Sync between HQ
 SYNC_STATE = {
 	"tier_idx": 0,
 	"no_work_streak": 0,
 	"next_sync_at_ms": 0,
+}
+# Sync between peer stations
+PEER_SYNC_STATE = {
+	"peer_index": 0,
+	"next_peer_sync_at_ms": 0,
 }
 
 # If HQ rejects our station API key, do not hammer it
@@ -2341,6 +2348,8 @@ def background_loop():
 	last_online_state = get_last_online_state()		# Persisted metadata
 	last_mode_state = get_last_mode_state()			# Persisted metadata
 
+	logger.info(STOP_EVENT)
+
 	while not STOP_EVENT.is_set():
 		now_ms = _now_ms()
 
@@ -2367,11 +2376,9 @@ def background_loop():
 						RUNTIME_STATE["next_peer_refresh_at_ms"] = now_ms + (5 * 60 * 1000)
 				else:
 					# Backoff on connectivity failure
-					next_delay = min(CENTRAL_CHECK_INTERVAL_MS * 2, 30_000)
+					next_delay = min(CENTRAL_CHECK_INTERVAL_MS * 2, CENTRAL_MAX_BACKOFF_MS)
 					RUNTIME_STATE["next_central_check_at_ms"] = now_ms + next_delay
 
-		# --------------------------------------------------------------
-		# UPDATE STATION MODE (station | relay | uninitialized)
 		update_station_mode()
 
 		current_online = bool(RUNTIME_STATE.get("central_ok"))
@@ -2451,6 +2458,31 @@ def background_loop():
 					_sync_note_work(did_work)
 					SYNC_STATE["next_sync_at_ms"] = now_ms + _sync_interval_ms()
 		
+		# ---- Peer Station Cooperation Loop ----
+		if current_online and current_mode == "station":
+
+			if now_ms >= int(PEER_SYNC_STATE.get("next_peer_sync_at_ms") or 0):
+
+				with station_db() as conn:
+					rows = conn.execute(
+						"SELECT station_id FROM station_peers ORDER BY station_id ASC"
+					).fetchall()
+								
+				peers = [r["station_id"] for r in rows if r["station_id"] != STATION_ID]
+
+				if peers:
+					# Rotate through peers
+					idx = PEER_SYNC_STATE["peer_index"] % len(peers)
+					target_station_id = peers[idx]
+
+					logger.info(f"Peer sync scheduled: {target_station_id}")
+
+					# Advance rotation
+					PEER_SYNC_STATE["peer_index"] += 1
+
+				# Schedule next peer sync attempt (e.g., every 60 seconds)
+				PEER_SYNC_STATE["next_peer_sync_at_ms"] = now_ms + 60_000
+
 		time.sleep(0.25)
 
 
