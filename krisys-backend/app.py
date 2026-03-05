@@ -1485,7 +1485,24 @@ def check_in():
 			)
 			logger.warning(f"Invalid API key for station_id={station_id} crisis={crisis_id}")
 			return jsonify({"error": "Invalid station API key"}), 401
-
+		
+		# If Station A products check-in while offline, share with peer station and peer can post it for Station A if that peer is online. Simply emit event for this, maybe be useful to tracing station functionality.
+		posting_station_id = station_id  # from request body
+		auth_station_id = row["station_id"]  # from API key lookup
+		
+		# log forwarding if id of station submitting the check-in differs from station_id on the transaction just for record-keeping purposes.
+		if posting_station_id != auth_station_id: 
+			emit_telemetry_event(
+				source="HQ",
+				severity="info",
+				event_type="checkin_forwarded",
+				context={
+					"original_station_id": posting_station_id,
+					"submitting_station_id": auth_station_id,
+				},
+				node_id=auth_station_id,
+			)
+		
 		# Create check-in transaction
 		tx = Transaction(
 			timestamp_created = timestamp_created,

@@ -1809,12 +1809,14 @@ def station_checkin_offline():
 	if len(relay_hash) > 128:
 		return jsonify({"error": "relay_hash too long"}), 400
 
-	# Dedupe: if we already confirmed it via blocks, reject as already known
+	# Dedupe: if we already confirmed mined in a block, reject as already known
 	if db_is_confirmed(relay_hash):
+		# If already confirmed in canonical chain, ignore
 		return jsonify({"status": "ok", "relay_hash": relay_hash, "deduped": True}), 200
 
 	# Dedupe: if already queued, return ok
 	if db_is_checkin_queued(relay_hash):
+		# If already queued locally, ignore
 		return jsonify({"status": "ok", "relay_hash": relay_hash, "deduped": True}), 200
 
 	checkin = {
@@ -1995,11 +1997,37 @@ def mesh_inventory():
 
 	confirmed = db_get_confirmed_many(relay_hashes)
 
+	# Include check-in relay inventory as well as unconfirmed gossip
+	with station_db() as conn:
+		rows = conn.execute("SELECT relay_hash FROM checkins_queued").fetchall()
+
+	local_checkin_hashes = [r["relay_hash"] for r in rows]
+
+	incoming_checkin_hashes = incoming.get("checkin_hashes") or []
+	if not isinstance(incoming_checkin_hashes, list):
+		incoming_checkin_hashes = []
+
+	missing_checkin_hashes = [
+		rh for rh in incoming_checkin_hashes
+		if rh not in local_checkin_hashes
+	]
+	
+	blocks = db_list_blocks(limit=1)
+	_chain_tip = blocks[-1] if blocks else None
+	chain_tip = None
+	if _chain_tip: 
+		chain_tip =  {
+			"block_index": _chain_tip["block_index"],
+			"hash": _chain_tip["hash"],
+		}
+
 	return jsonify(
 		{
 			"crisisId": STATION_STATE.get("crisisId"),
 			"missing_relay_hashes": missing_relay_hashes,
+			"missing_checking_hashes": missing_checkin_hashes,
 			"confirmed": confirmed,
+			"chain_tip": chain_tip,
 		}
 	), 200
 
@@ -2042,6 +2070,7 @@ def mesh_sync():
 
 	incoming_queued, _ignored_confirmed = sanitize_sync_payload_server(incoming)
 
+	# Incoming gossip
 	for msg in incoming_queued:
 		rh = msg.get("relay_hash")
 		if not rh:
@@ -2053,6 +2082,21 @@ def mesh_sync():
 	incoming_blocks = incoming.get("blocks") or []
 	if isinstance(incoming_blocks, list):
 		process_incoming_blocks(incoming_blocks)
+
+	# Incoming check-in replication 
+	incoming_checkins = incoming.get("checkins") or []
+	for chk in incoming_checkins:
+		if not isinstance(chk, dict):
+			continue
+
+		relay_hash = chk.get("relay_hash")
+		if not isinstance(relay_hash, str) or not relay_hash:
+			continue
+
+		if db_is_checkin_queued(relay_hash):
+			continue
+
+		db_put_checkin_queued(chk)
 
 	payload = export_station_payload()
 	return jsonify(payload), 200
@@ -2480,14 +2524,12 @@ def background_loop():
 					SYNC_STATE["next_sync_at_ms"] = now_ms + _sync_interval_ms()
 		
 		# ---- Peer Station Cooperation Loop ----
-		if current_online and current_mode == "station":
+		if current_mode == "station":
 
 			if now_ms >= int(PEER_SYNC_STATE.get("next_peer_sync_at_ms") or 0):
 
 				with station_db() as conn:
-					rows = conn.execute(
-						"SELECT station_id FROM station_peers ORDER BY station_id ASC"
-					).fetchall()
+					rows = conn.execute("SELECT station_id FROM station_peers ORDER BY station_id ASC").fetchall()
 								
 				peers = [r["station_id"] for r in rows if r["station_id"] != STATION_ID]
 
@@ -2499,22 +2541,108 @@ def background_loop():
 					logger.info(f"Attempting peer inventory sync with: {target_station_id}")
 					try:
 						base_url = get_peer_base_url(target_station_id)
-						payload = {
-							"crisisId": db_get_meta("crisisId"),
-							"relay_hashes": list(get_known_relay_hashes())[:RELAY_HASH_CAP],
-						}
-
-						resp = requests.post(
-							f"{base_url}/mesh/inventory",
-							json=payload,
-							timeout=5,
-						)
-
-						if resp.status_code == 200:
-							data = resp.json()
-							logger.info(f"Peer {target_station_id} responded to inventory")
+						if not base_url:
+							logger.warning(f"No base URL for {target_station_id}, skipping")
 						else:
-							logger.warning(f"Peer {target_station_id} inventory failed: HTTP {resp.status_code}")
+							payload = {
+								"crisisId": db_get_meta("crisisId"),
+								"relay_hashes": list(get_known_relay_hashes())[:RELAY_HASH_CAP],
+							}
+
+							resp = requests.post(
+								f"{base_url}/mesh/inventory",
+								json=payload,
+								timeout=5,
+							)
+
+							if resp.status_code == 200:
+								data = resp.json()
+								logger.info(f"Peer {target_station_id} responded to inventory")
+
+								# Canonical block catch up
+								peer_tip = data.get("chain_tip")
+								if peer_tip:
+									local_blocks = db_list_blocks(limit=1)
+									local_tip = local_blocks[-1] if local_blocks else None
+
+									if local_tip:
+										local_index = local_tip.get("block_index")
+										peer_index = peer_tip.get("block_index")
+
+										if isinstance(peer_index, int) and peer_index > local_index:
+											logger.info(f"Peer {target_station_id} is ahead (local={local_index}, peer={peer_index})")
+
+											# Ask peer for recent blocks
+											block_resp = requests.post(
+												f"{base_url}/mesh/sync",
+												json={
+													"crisisId": db_get_meta("crisisId"),
+													"queued": [],
+													"blocks": [],
+												},
+												timeout=5,
+											)
+
+											if block_resp.status_code == 200:
+												block_data = block_resp.json()
+												incoming_blocks = block_data.get("blocks", [])
+												stored = process_incoming_blocks(incoming_blocks)
+												logger.info(f"Stored {stored} blocks from {target_station_id}")
+
+								# Check-in replication
+								missing_checkins = data.get("missing_checkin_hashes", [])
+								if missing_checkins:
+									logger.info(f"Sending {len(missing_checkins)} check-ins to {target_station_id}")
+
+									with station_db() as conn:
+										# Only query when missing_checkins is not empty to avoid sql returning invalid type and posting emptiness every loop
+										rows = []
+										if missing_checkins:
+											# Only fetch payloads for relay hashes the peer is missing
+											rows = conn.execute(
+												"SELECT json FROM checkins_queued WHERE relay_hash IN (%s)" %
+												(",".join(["?"] * len(missing_checkins))),
+												missing_checkins,
+											).fetchall()
+
+									checkin_payloads = [json.loads(r["json"]) for r in rows]
+
+									if checkin_payloads:
+										requests.post(
+											f"{base_url}/mesh/sync",
+											json={
+												"crisisId": db_get_meta("crisisId"),
+												"queued": [],
+												"blocks": [],
+												"checkins": checkin_payloads,
+											},
+											timeout=5,
+										)
+
+								# Pull missing relay hashes
+								missing = data.get("missing_relay_hashes", [])
+								if missing:
+									logger.info(f"Requesting {len(missing)} relay payloads from {target_station_id}")
+
+									# Get full queued payloads locally
+									local_queue = db_list_queued(limit=RELAY_HASH_CAP)
+									payload_map = {m["relay_hash"]: m for m in local_queue if m.get("relay_hash")}
+
+									to_send = [payload_map[rh] for rh in missing if rh in payload_map]
+
+									if to_send:
+										requests.post(
+											f"{base_url}/mesh/sync",
+											json={
+												"crisisId": db_get_meta("crisisId"),
+												"queued": to_send,
+												"blocks": [],
+											},
+											timeout=5,
+										)
+										logger.info(f"Sent {len(to_send)} relay payloads to {target_station_id}")
+							else:
+								logger.warning(f"Peer {target_station_id} inventory failed: HTTP {resp.status_code}")
 
 					except Exception as e:
 						logger.warning(f"Peer {target_station_id} unreachable: {e}")
