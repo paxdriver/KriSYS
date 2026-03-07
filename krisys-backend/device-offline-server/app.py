@@ -63,6 +63,7 @@ import os
 import time
 import sqlite3
 import json
+import base64
 import uuid
 import hashlib
 from contextlib import contextmanager
@@ -2601,6 +2602,50 @@ def perform_sync_attempt() -> bool:
 		did_work = False
 
 	return bool(did_work)
+
+
+# Station QR code generator (krisys:station:v1)
+@app.route("/station/qr", methods=["GET"])
+def station_qr():
+	"""
+	Generate station QR payload string.	This does NOT return an image. 
+	Format:	krisys:station:v1:<base64url(json)>
+	
+	DESC: It returns the encoded text string that can be:
+		- Embedded into QR image
+		- Copied manually
+		- Displayed in station's UI (if available or printed and displayed next to check-in scanner)
+	"""
+
+	update_station_mode()
+
+	identity = get_station_device_identity()
+	if not identity:
+		return jsonify({"error": "Station identity unavailable"}), 500
+
+	base_url = request.host_url.rstrip("/")
+
+	payload = {
+		"v": 1,
+		"type": "station",
+		"station_id": identity["station_id"],
+		"crisis_id": identity["crisis_id"],
+		"base_url": base_url,
+		"station_public_key": identity["station_public_key"],
+		"fingerprint": identity["fingerprint"],
+	}
+
+	json_bytes = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+	# URL-safe base64 (no padding)
+	b64 = base64.urlsafe_b64encode(json_bytes).decode("utf-8").rstrip("=")
+
+	qr_string = f"krisys:station:v1:{b64}"
+
+	return jsonify({
+		"qr_string": qr_string,
+		"payload": payload,  # DEV NOTE: helpful for debugging
+	}), 200
 
 # The actual loop to check for stuff to sync and adjust refresh timer based on load
 last_heartbeat_at = 0

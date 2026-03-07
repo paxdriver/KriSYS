@@ -1,4 +1,4 @@
-// /krissys-frontend/services/webrtcRoomCode.js
+// /krisys-frontend/services/webrtcRoomCode.js
 
 function base64UrlEncode(bytes) {
 	let binary = ''

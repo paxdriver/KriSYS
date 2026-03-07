@@ -594,6 +594,7 @@ Station server:
 │   ├── meshSync.js
 │   ├── poolJoinCode.js
 │   ├── stationHandshake.js
+│   ├── stationQr.js
 │   ├── storageMeter.js
 │   ├── walletPublicKeyShare.js
 │   ├── webrtcChunking.js

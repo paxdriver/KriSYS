@@ -7,6 +7,7 @@ import { createJoinCode, parseJoinCode } from '@/services/poolJoinCode'
 import { createPublicKeyShareCode, parsePublicKeyShareCode } from '@/services/walletPublicKeyShare'
 import { showTextQr } from '@/utils/qr'
 import QRScanner from '../Scanner/QRScanner'
+import { parseStationQr } from '@/services/stationQr'
 import { performStationHandshake } from '@/services/stationHandshake'
 import P2PRoom from './P2PRoom'
 
@@ -342,8 +343,17 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 		}
 		
 		if (scannerMode === 'station') {
-			setStationJsonInput(text)
-			alert('Scanned station profile. Click "Add Station" to trust it.')
+			try {
+				const parsed = parseStationQr(text)
+				disasterStorage.saveStation({ crisisId, station: parsed, })
+				setTrustedStations(disasterStorage.getStations({ crisisId }))
+				
+				// does NOT run in background, users must actively connect to it to avoid draining batteries and broadcasting device credentials constantly.
+				alert(`Station ${parsed.station_id} can be trusted! Saved to device so you can now connect to it even when the internet is down, check-ins and messages can still be shared while offline through this station when ever you like.`) 
+			} 
+			catch (e) {
+				setError(e?.message || String(e))
+			}
 			return
 		}
 
@@ -609,8 +619,7 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 								const isActive = station.station_id === selectedStationId
 
 								return (
-									<div
-										key={station.station_id}
+									<div key={station.station_id} 
 										className="contact-item"
 										style={{
 											borderLeft: isActive ? '4px solid var(--primary)' : '4px solid transparent',
@@ -625,9 +634,7 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 										</div>
 
 										<div style={{ display: 'flex', gap: '0.5rem' }}>
-											<button
-												className="btn-icon save"
-												type="button"
+											<button className="btn-icon save" type="button"
 												onClick={() => {
 													setSelectedStationId(station.station_id)
 													setHostUrl(DEFAULT_STATION_URL)
@@ -637,13 +644,26 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 												{isActive ? 'Selected' : 'Select'}
 											</button>
 
-											<button
-												className="btn"
-												type="button"
+											<button className="btn" type="button"
 												onClick={() => removeStation(station.station_id)}
 												style={{ background: 'var(--danger)' }}
 											>
 												Remove
+											</button>
+
+											<button className="btn" type="button"
+												onClick={async () => {
+													const res = await fetch(`${hostUrl}/station/qr`)
+													const data = await res.json()
+													await showTextQr({
+														text: data.qr_string,
+														displayName: 'Station QR',
+														title: 'Station QR Code',
+														heading: 'Scan to Trust Station',
+													})
+												}}
+											>
+												Show Station QR
 											</button>
 										</div>
 									</div>
