@@ -71,7 +71,13 @@ import pgpy
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import threading
-
+# --- Station device identity (self-signed keypair)
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.backends import default_backend
+import base64
+# ---
 import logging
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -335,8 +341,94 @@ def init_station_db():
 
 		conn.commit()
 
+# ----------------------------------------------------------------------
+# STATION DEVICE IDENTITY (SELF-SIGNED KEYPAIR)
+# ----------------------------------------------------------------------
 
-# ----------------------------
+def _compute_fingerprint(public_key_bytes: bytes) -> str:
+	"""
+	Compute SHA-256 fingerprint of station public key.
+	Returned as hex string for human comparison.
+
+	This fingerprint is what users visually compare
+	when verifying station identity.
+	"""
+	digest = hashes.Hash(hashes.SHA256(), backend=default_backend())
+	digest.update(public_key_bytes)
+	return digest.finalize().hex()
+
+
+def ensure_station_device_identity():
+	"""
+	Ensure this station device has a persistent signing keypair.
+
+	If missing:
+		- Generate new Ed25519 keypair
+		- Store private + public key in SQLite meta table
+		- Compute fingerprint
+		- Persist fingerprint
+
+	This identity:
+		- Is NOT related to API key
+		- Is NOT related to HQ
+		- Exists purely for user → station identity verification
+	"""
+
+	init_station_db()
+
+	private_key_pem = db_get_meta("station_private_key")
+	public_key_pem = db_get_meta("station_public_key")
+
+	# If both keys already exist, do nothing
+	if private_key_pem and public_key_pem:
+		return
+
+	# Generate new Ed25519 keypair (fast, modern, small)
+	private_key = Ed25519PrivateKey.generate()
+	public_key = private_key.public_key()
+
+	# Serialize private key (PEM, no encryption since device-local only)
+	private_bytes = private_key.private_bytes(
+		encoding=serialization.Encoding.PEM,
+		format=serialization.PrivateFormat.PKCS8,
+		encryption_algorithm=serialization.NoEncryption(),
+	)
+
+	# Serialize public key (PEM)
+	public_bytes = public_key.public_bytes(
+		encoding=serialization.Encoding.PEM,
+		format=serialization.PublicFormat.SubjectPublicKeyInfo,
+	)
+
+	# Compute fingerprint (SHA-256 of raw public key bytes)
+	fingerprint = _compute_fingerprint(public_bytes)
+
+	# Store everything in station meta table
+	db_set_meta("station_private_key", private_bytes.decode("utf-8"))
+	db_set_meta("station_public_key", public_bytes.decode("utf-8"))
+	db_set_meta("station_fingerprint", fingerprint)
+
+	logger.warning("Generated new station device identity")
+	logger.warning(f"Station fingerprint: {fingerprint}")
+
+
+# Return current station identity info for profile endpoint
+def get_station_device_identity() -> dict | None:
+	public_key_pem = db_get_meta("station_public_key")
+	fingerprint = db_get_meta("station_fingerprint")
+	crisis_id = db_get_meta("crisisId")
+
+	if not public_key_pem or not fingerprint:
+		return None
+
+	return {
+		"station_id": STATION_ID,
+		"crisis_id": crisis_id,
+		"station_public_key": public_key_pem,
+		"fingerprint": fingerprint,
+	}
+
+
 # DEV NOTE: Sorting messages, consider refactor later to share this with relay-offline-server
 def _sort_queued_for_export(queued: list[dict]) -> list[dict]:
 	"""
@@ -353,7 +445,7 @@ def _sort_queued_for_export(queued: list[dict]) -> list[dict]:
 		)
 
 	return sorted(queued, key=key_fn)
-# ----------------------------
+
 
 # ----------------------------
 # DB helpers (meta)
@@ -1197,7 +1289,6 @@ def bootstrap_station_or_die() -> None:
 	Assumption:
 		This runs only during station provisioning with trusted connectivity.
 	"""
-	init_station_db()
 
 	# If we already have the trust anchor pinned, we are bootstrapped.
 	stored_crisis_id = db_get_meta("crisisId")
@@ -1658,13 +1749,16 @@ def export_station_payload() -> dict:
 		"warnings": warnings,
 	}
 
+# Ensure station device identity exists (independent of crisis bootstrap)
+ensure_station_device_identity()
 
-# Initialize DB and bootstrap trust anchor (genesis + public key + crisisId).
-init_station_db()
 try:
+	# Initialize DB and bootstrap trust anchor (genesis + public key + crisisId)
+	init_station_db()
+	# Ensure crisis trust anchor + genesis exist
 	bootstrap_station_or_die()
 except Exception as e:
-	logger.warning(f"Station bootstrap failed; continuing unbootstrapped: {e}")
+	logger.warning(f"Station bootstrap failed; continuing unbootstrapped (relay or dud): {e}")
 
 
 @app.route("/health", methods=["GET"])
@@ -1741,6 +1835,111 @@ def dev_station_identity():
 		return jsonify({"error": "api_key missing in identity file"}), 500
 
 	return jsonify({"station_id": station_id, "api_key": api_key}), 200
+
+
+@app.route("/station/profile", methods=["GET"])
+def station_profile():
+	"""
+	Public station identity endpoint.
+
+	Used by:
+		- Wallet app after QR scan
+		- Identity verification handshake
+		- Fingerprint comparison
+
+	IMPORTANT:
+		This endpoint exposes ONLY public information.
+		No secrets.
+	"""
+
+	update_station_mode()
+
+	identity = get_station_device_identity()
+	if not identity:
+		return jsonify({"error": "Station identity unavailable"}), 500
+
+	return jsonify({
+		"station_id": identity["station_id"],
+		"crisis_id": identity["crisis_id"],
+		"station_public_key": identity["station_public_key"],
+		"fingerprint": identity["fingerprint"],
+		"mode": STATION_STATE.get("mode"),
+	}), 200
+
+
+# Station signed endpoint, so users can verify fingerprint of approved station before P2P connections
+@app.route("/station/handshake", methods=["POST"])
+def station_handshake():
+	"""
+	Signed challenge-response handshake to prove that this station possesses the private key corresponding to the public key previously scanned by the user (via QR code)
+
+	Flow:
+		1. Client sends a random client_nonce
+		2. Station generates its own station_nonce
+		3. Station signs: station_id || crisis_id || client_nonce || station_nonce
+		4. Client verifies signature using stored public key
+
+	Security Properties:
+		- Prevents imposters from spoofing stations (client_nonce required)
+		- Does NOT expose private key
+	"""
+
+	update_station_mode()
+
+	# --- Parse incoming payload ---
+	data = request.get_json(force=True, silent=True) or {}
+	client_nonce = data.get("client_nonce")
+
+	if not isinstance(client_nonce, str) or not client_nonce.strip():
+		return jsonify({"error": "Missing client_nonce"}), 400
+
+	# --- Load station identity ---
+	private_key_pem = db_get_meta("station_private_key")
+	public_key_pem = db_get_meta("station_public_key")
+	fingerprint = db_get_meta("station_fingerprint")
+	crisis_id = db_get_meta("crisisId")
+
+	if not private_key_pem or not public_key_pem:
+		return jsonify({"error": "Station identity unavailable"}), 500
+
+	# --- Load private key object ---
+	try:
+		private_key = serialization.load_pem_private_key(
+			private_key_pem.encode("utf-8"),
+			password=None,
+		)
+	except Exception as e:
+		logger.error(f"Failed to load station private key: {e}")
+		return jsonify({"error": "Invalid station private key"}), 500
+
+	# --- Generate fresh station nonce (prevents replay) ---
+	station_nonce_bytes = os.urandom(32)
+	station_nonce = base64.b64encode(station_nonce_bytes).decode("utf-8")
+
+	# --- Build message to sign ---
+	# Important: exact ordering must be consistent for verification
+	message = (
+		f"{STATION_ID}|{crisis_id}|{client_nonce}|{station_nonce}"
+	).encode("utf-8")
+
+	# --- Sign message ---
+	try:
+		signature_bytes = private_key.sign(message)
+		signature = base64.b64encode(signature_bytes).decode("utf-8")
+	except Exception as e:
+		logger.error(f"Failed to sign handshake message: {e}")
+		return jsonify({"error": "Signing failed"}), 500
+
+	# --- Return handshake response ---
+	return jsonify({
+		"station_id": STATION_ID,
+		"crisis_id": crisis_id,
+		"station_public_key": public_key_pem,
+		"fingerprint": fingerprint,
+		"client_nonce": client_nonce,
+		"station_nonce": station_nonce,
+		"signature": signature,
+	}), 200
 
 
 # Check-ins by scanner, not gossip from mesh network but station-direct scans
