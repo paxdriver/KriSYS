@@ -6,10 +6,11 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'
 // Create axios instance with interceptor for dev overrides
 const apiClient = axios.create({ baseURL: API_BASE })
 
-// blockchain's private_key
+// DEV NOTE: blockchain's private_key
 const ADMIN_TOKEN = process.env.NEXT_PUBLIC_ADMIN_TOKEN // this should be taken from blockchain/master_private_key.asc
 
 // TODO - remove simulated offline before production
+
 // Block all Axios requests when in offline-dev mode
 apiClient.interceptors.request.use(config => {
   if (typeof window !== 'undefined' && window.KRISYS_OFFLINE_MODE) {
@@ -18,7 +19,7 @@ apiClient.interceptors.request.use(config => {
   }
   return config
 })
-// SIMULATED OFFLINE MODE FOR DEVELOPMENT ONLINE
+// DEV NOTE: SIMULATED OFFLINE MODE FOR DEVELOPMENT ONLINE
 
 // Add request interceptor to include dev headers (used in production with verified stations)
 apiClient.interceptors.request.use((config) => {
@@ -28,7 +29,7 @@ apiClient.interceptors.request.use((config) => {
     }
     // Add admin token for admin endpoints
     if (config.url?.startsWith('/admin/')) {
-        // For development, we'll read the master private key from a known location
+        // DEV NOTE: For development, we'll read the master private key from a known location
         // In production, this would be handled more securely
         config.headers['X-Admin-Token'] = ADMIN_TOKEN
     }
@@ -55,7 +56,6 @@ export const api = {
     getCurrentPolicy: () => apiClient.get('/policy'),
   
     // Wallet endpoints
-    // createWallet: (numMembers) => axios.post(`${API_BASE}/wallet`, { num_members: numMembers }),
     createWallet: (numMembers, passphrase) => 
         axios.post(`${API_BASE}/wallet`, { 
             num_members: numMembers,
