@@ -33,7 +33,7 @@ function randomNonceBase64() {
 async function hexSha256FromPem(pem) {
 	const enc = new TextEncoder()
 	const data = enc.encode(pem)
-	const result = await crypto.subtle.digest('SHA-256', data).then((buf) => {
+	const result = crypto.subtle.digest('SHA-256', data).then((buf) => {
 		const bytes = new Uint8Array(buf)
 		return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('')
 	})

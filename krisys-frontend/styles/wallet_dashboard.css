@@ -1,4 +1,4 @@
-/* wallet_dashboard.css - CLEANED VERSION */
+/* wallet_dashboard.css */
 :root {
     --primary: #2563eb;
     --secondary: #3b82f6;
@@ -772,7 +772,6 @@ body {
     margin-bottom: 1rem;
 }
 
-/* Add to wallet_dashboard.css */
 .wallet-created {
     text-align: center;
 }

@@ -7,9 +7,10 @@ import { createJoinCode, parseJoinCode } from '@/services/poolJoinCode'
 import { createPublicKeyShareCode, parsePublicKeyShareCode } from '@/services/walletPublicKeyShare'
 import { showTextQr } from '@/utils/qr'
 import QRScanner from '../Scanner/QRScanner'
+import { performStationHandshake } from '@/services/stationHandshake'
 import P2PRoom from './P2PRoom'
 
-const DEFAULT_STATION_URL =	process.env.NEXT_PUBLIC_STATION_URL || 'http://localhost:6001'
+const DEFAULT_STATION_URL = process.env.NEXT_PUBLIC_STATION_URL || 'http://localhost:6001'
 const DEFAULT_RELAY_URL = process.env.NEXT_PUBLIC_RELAY_URL || 'http://localhost:6002'
 const STORAGE_LAST_HOST_URL = 'krisys_mesh_last_host_url'
 const STORAGE_LAST_HOST_LABEL = 'krisys_mesh_last_host_label'
@@ -29,9 +30,9 @@ function getLocalCounts({ crisisId, familyId }) {
 
 	return {
 		blockCount: Array.isArray(blocks) ? blocks.length : 0,
-		queuedPendingCount: Array.isArray(queue) ? 
+		queuedPendingCount: Array.isArray(queue) ?
 			queue.filter((m) => (m?.status || 'pending') === 'pending').length : 0,
-		confirmedCount: confirmed && typeof confirmed === 'object' ? 
+		confirmedCount: confirmed && typeof confirmed === 'object' ?
 			Object.keys(confirmed).length : 0,
 	}
 }
@@ -40,8 +41,8 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 	const [hostUrl, setHostUrl] = useState(() => {
 		try {
 			return localStorage.getItem(STORAGE_LAST_HOST_URL) || DEFAULT_RELAY_URL
-		} 
-        catch {
+		}
+		catch {
 			return DEFAULT_RELAY_URL
 		}
 	})
@@ -49,25 +50,29 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 	const [hostLabel, setHostLabel] = useState(() => {
 		try {
 			return localStorage.getItem(STORAGE_LAST_HOST_LABEL) || ''
-		} 
-        catch {
+		}
+		catch {
 			return ''
 		}
 	})
 
 	const [joinCodeInput, setJoinCodeInput] = useState('')
-    const [keyCodeInput, setKeyCodeInput] = useState('')
-    const [scannerMode, setScannerMode] = useState(null)      // join, key, or null
+	const [keyCodeInput, setKeyCodeInput] = useState('')
+	const [scannerMode, setScannerMode] = useState(null)      // join, key, or null
 	const [scannerOpen, setScannerOpen] = useState(false)
 	const [syncing, setSyncing] = useState(false)
 	const [lastResult, setLastResult] = useState(null)
 	const [error, setError] = useState(null)
 
+	const [stationJsonInput, setStationJsonInput] = useState('')
+	const [trustedStations, setTrustedStations] = useState({})	// DEV NOTE: Move this to disasterStorage.saveStation() and disasterStorage.getStation()
+	const [selectedStationId, setSelectedStationId] = useState(null)
+
 	const crisis = useMemo(() => disasterStorage.getCrisisMetadata(), [])
 	const crisisId = crisis?.id || null
 	const familyId = walletData?.family_id || null
 
-	const localCounts = useMemo(() => getLocalCounts({crisisId, familyId}), [lastResult, crisisId, familyId])
+	const localCounts = useMemo(() => getLocalCounts({ crisisId, familyId }), [lastResult, crisisId, familyId])
 
 	const setPreset = (url, label) => {
 		const nextUrl = typeof url === 'string' ? url.trim() : ''
@@ -81,11 +86,50 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 		try {
 			localStorage.setItem(STORAGE_LAST_HOST_URL, nextUrl)
 			localStorage.setItem(STORAGE_LAST_HOST_LABEL, nextLabel)
-		} 
-        catch {
+		}
+		catch {
 			// ignore
 		}
 	}
+
+	// ------------------------------
+	// DEV NOTE: Button for convenience will change to "scan station qr code"
+	const fetchStationProfile = async () => {
+		const res = await fetch('http://localhost:6001/station/profile')
+		if (!res.ok) throw new Error("Failed to fetch station profile")
+		const profile = await res.json()
+
+		return profile
+	}
+	// DEV NOTE: helper functions for now
+	const addStationFromJson = () => {
+		try {
+			const parsed = JSON.parse(stationJsonInput)
+			
+			if (!parsed.station_id || !parsed.station_public_key || !parsed.fingerprint) {
+				throw new Error('Invalid station JSON')
+			}
+			
+			setTrustedStations((prev) => ({
+				...prev,
+				[parsed.station_id]: parsed,
+			}))
+			
+			setStationJsonInput('')
+			alert(`Station ${parsed.station_id} added`)
+		} catch (e) {
+			setError(e?.message || String(e))
+		}
+	}
+	const removeStation = (stationId) => {
+		setTrustedStations((prev) => {
+			const copy = { ...prev }
+			delete copy[stationId]
+			return copy
+		})
+	}
+	// END HELPER FUNCS
+	// ------------------------------
 
 	const runSync = async () => {
 		setSyncing(true)
@@ -102,22 +146,40 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 		try {
 			try {
 				localStorage.setItem(STORAGE_LAST_HOST_URL, trimmedUrl)
-				localStorage.setItem( STORAGE_LAST_HOST_LABEL, (hostLabel || '').trim() )
-			} 
-            catch {
+				localStorage.setItem(STORAGE_LAST_HOST_LABEL, (hostLabel || '').trim())
+			}
+			catch {
 				// ignore
 			}
 
 			// Label is just UI sugar (helps logs + results read nicer)
 			const label = (hostLabel || '').trim() || (
-                trimmedUrl === DEFAULT_STATION_URL ? 
-                    'Station' : trimmedUrl === DEFAULT_RELAY_URL ?
-                    'Relay' : 'Host')
+				trimmedUrl === DEFAULT_STATION_URL ? 'Station' : 
+					trimmedUrl === DEFAULT_RELAY_URL ? 'Relay' : 'Host')
+			console.log(label)
+			console.log(`trimmedUrl in connectionspage: ${trimmedUrl}`)
 
-            console.warn(`trimmedUrl in connectionspage: ${trimmedUrl}`)
+			// const selectedStation = trustedStations[Object.keys(trustedStations)[0]]
+			// if (!selectedStation) {
+			// 	setError('No trusted station selected')
+			// 	setSyncing(false)
+			// 	return
+			// }
+			if (!selectedStationId) {
+				setError('No trusted station selected')
+				setSyncing(false)
+				return
+			}
+
+			const selectedStation = trustedStations[selectedStationId]
+
+
+			await performStationHandshake({
+				baseUrl: trimmedUrl,
+				storedStation: selectedStation,
+			})
 
 			const result = await syncWithMeshHost({ baseUrl: trimmedUrl, label, familyId })
-
 			setLastResult({
 				...result,
 				at: Date.now(),
@@ -126,11 +188,11 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 			})
 
 			if (onRefresh) onRefresh()
-		} 
-        catch (e) {
+		}
+		catch (e) {
 			setError(e?.message || String(e))
-		} 
-        finally {
+		}
+		finally {
 			setSyncing(false)
 		}
 	}
@@ -162,12 +224,12 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 			// Convenience: try clipboard, but popup already shows text.
 			try {
 				await navigator.clipboard.writeText(code)
-			} 
-            catch {
+			}
+			catch {
 				// ignore
 			}
-		} 
-        catch (e) {
+		}
+		catch (e) {
 			setError(e?.message || String(e))
 		}
 	}
@@ -181,8 +243,8 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 			// Sanity check only (not trust). Helps avoid joining the wrong crisis.
 			const localCrisis = disasterStorage.getCrisisMetadata()
 			if (parsed.crisisId && localCrisis?.id && parsed.crisisId !== localCrisis.id) {
-				const ok = confirm( `Join code crisisId mismatch.\n` + `Local: ${localCrisis.id}\n` + 
-                    `Code: ${parsed.crisisId}\n\n` + `Continue anyway?`)
+				const ok = confirm(`Join code crisisId mismatch.\n` + `Local: ${localCrisis.id}\n` +
+					`Code: ${parsed.crisisId}\n\n` + `Continue anyway?`)
 				if (!ok) return
 			}
 
@@ -192,14 +254,14 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 			try {
 				localStorage.setItem(STORAGE_LAST_HOST_URL, parsed.url)
 				localStorage.setItem(STORAGE_LAST_HOST_LABEL, parsed.label || '')
-			} 
-            catch {
+			}
+			catch {
 				// ignore
 			}
 
 			alert('Join code applied. You can now click Sync Now.')
-		} 
-        catch (e) {
+		}
+		catch (e) {
 			setError(e?.message || String(e))
 		}
 	}
@@ -212,11 +274,11 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 			if (!familyId) throw new Error('Missing wallet family_id')
 
 			// public keys are domain shared scope, not wallet scoped
-			const publicKeys = disasterStorage.getCachedPublicKeys({ crisisId }) || {} 
+			const publicKeys = disasterStorage.getCachedPublicKeys({ crisisId }) || {}
 			const myKey = publicKeys[familyId]?.publicKey
 
 			if (!myKey) {
-				throw new Error('Your public key is not cached on this device yet. ' + 
+				throw new Error('Your public key is not cached on this device yet. ' +
 					'Go online once (or unlock/validate key) so it can be cached.')
 			}
 
@@ -241,8 +303,8 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 					scale: 6,
 				},
 			})
-		} 
-        catch (e) {
+		}
+		catch (e) {
 			setError(e?.message || String(e))
 		}
 	}
@@ -254,11 +316,11 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 			const parsed = parsePublicKeyShareCode(keyCodeInput)
 
 			// Store in cache so KeyManager.getPublicKey() works offline.
-			disasterStorage.saveCachedPublicKey({crisisId, targetFamilyId: parsed.familyId, publicKey: parsed.publicKeyArmored})
+			disasterStorage.saveCachedPublicKey({ crisisId, targetFamilyId: parsed.familyId, publicKey: parsed.publicKeyArmored })
 
 			alert(`Saved public key for family: ${parsed.familyId}`)
-		} 
-        catch (e) {
+		}
+		catch (e) {
 			setError(e?.message || String(e))
 		}
 	}
@@ -281,6 +343,12 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 		if (scannerMode === 'key') {
 			setKeyCodeInput(text)
 			alert('Scanned public key code. Click "Import Public Key" to save it.')
+			return
+		}
+		
+		if (scannerMode === 'station') {
+			setStationJsonInput(text)
+			alert('Scanned station profile. Click "Add Station" to trust it.')
 			return
 		}
 
@@ -479,6 +547,114 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 						<div className="privacy-notice" style={{ marginTop: '0.75rem' }}>
 							This enables offline encryption when the server is unreachable.
 						</div>
+					</div>
+				</div>
+
+				{/* STATION HANDSHAKE */}
+				<div className="card">
+					<div className="card-header">
+						<h3 className="card-title">Trusted Stations</h3>
+					</div>
+					<div className="card-body">
+
+						{/* Dev helper: Fetch profile */}
+						<div style={{ marginBottom: '1rem' }}>
+							<button
+								className="btn"
+								type="button"
+								onClick={async () => {
+									try {
+										const profile = await fetchStationProfile()
+										setStationJsonInput(JSON.stringify(profile, null, 2))
+									} catch (e) {
+										setError(e?.message || String(e))
+									}
+								}}
+							>
+								Fetch Station Profile
+							</button>
+						</div>
+
+						{/* Paste / Scan station JSON */}
+						<div className="form-group">
+							<label>Paste station profile JSON</label>
+							<textarea
+								className="form-input"
+								rows="6"
+								value={stationJsonInput}
+								onChange={(e) => setStationJsonInput(e.target.value)}
+								placeholder='{"station_id": "..."}'
+							/>
+						</div>
+
+						<div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+							<button
+								className="btn"
+								type="button"
+								onClick={addStationFromJson}
+								disabled={!stationJsonInput.trim()}
+							>
+								Add Station
+							</button>
+
+							<button
+								className="btn"
+								type="button"
+								onClick={() => openScanner('station')}
+							>
+								Scan Station QR
+							</button>
+						</div>
+
+						{/* Station List */}
+						{Object.keys(trustedStations).length === 0 ? (
+							<div className="privacy-notice">No trusted stations yet.</div>
+						) : (
+							Object.values(trustedStations).map((station) => {
+								const isActive = station.station_id === selectedStationId
+
+								return (
+									<div
+										key={station.station_id}
+										className="contact-item"
+										style={{
+											borderLeft: isActive ? '4px solid var(--primary)' : '4px solid transparent',
+											paddingLeft: '0.5rem',
+										}}
+									>
+										<div>
+											<strong>{station.station_id}</strong>
+											<div className="contact-address">
+												{station.fingerprint?.slice(0, 16)}...
+											</div>
+										</div>
+
+										<div style={{ display: 'flex', gap: '0.5rem' }}>
+											<button
+												className="btn-icon save"
+												type="button"
+												onClick={() => {
+													setSelectedStationId(station.station_id)
+													setHostUrl(DEFAULT_STATION_URL)
+													setHostLabel(station.station_id)
+												}}
+											>
+												{isActive ? 'Selected' : 'Select'}
+											</button>
+
+											<button
+												className="btn"
+												type="button"
+												onClick={() => removeStation(station.station_id)}
+												style={{ background: 'var(--danger)' }}
+											>
+												Remove
+											</button>
+										</div>
+									</div>
+								)
+							})
+						)}
 					</div>
 				</div>
 
