@@ -625,6 +625,45 @@ class DisasterStorage {
 		}
 		return deviceId
 	}
+	
+	// TRUSTED STATIONS (Crisis-Scoped, Device-Shared)
+	saveStation({ crisisId, station }) {
+		if (!crisisId) throw new Error('saveStation: missing crisisId')
+		if (!station?.station_id) throw new Error('saveStation: missing station_id')
+
+		const key = this._sharedKey({ crisisId, bucket: 'stations' })
+		const stations = this._getJson(key, {})
+
+		stations[station.station_id] = {
+			station_id: station.station_id,
+			crisis_id: station.crisis_id,
+			station_public_key: station.station_public_key,
+			fingerprint: station.fingerprint,
+			base_url: station.base_url || null,
+			addedAt: Date.now(),
+		}
+
+		this._setJson(key, stations)
+	}
+	getStations({ crisisId }) {
+		if (!crisisId) return {}
+		const key = this._sharedKey({ crisisId, bucket: 'stations' })
+		return this._getJson(key, {})
+	}
+	getStation({ crisisId, stationId }) {
+		if (!crisisId || !stationId) return null
+		const stations = this.getStations({ crisisId })
+		return stations[stationId] || null
+	}
+	removeStation({ crisisId, stationId }) {
+		if (!crisisId || !stationId) return
+
+		const key = this._sharedKey({ crisisId, bucket: 'stations' })
+		const stations = this._getJson(key, {})
+
+		delete stations[stationId]
+		this._setJson(key, stations)
+	}
 
 	// CONFIRMED MESSAGES (by relay_hash) -----------------------------
 	getConfirmedRelays({ crisisId }) {

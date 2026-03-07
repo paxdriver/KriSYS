@@ -64,13 +64,13 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 	const [lastResult, setLastResult] = useState(null)
 	const [error, setError] = useState(null)
 
-	const [stationJsonInput, setStationJsonInput] = useState('')
-	const [trustedStations, setTrustedStations] = useState({})	// DEV NOTE: Move this to disasterStorage.saveStation() and disasterStorage.getStation()
-	const [selectedStationId, setSelectedStationId] = useState(null)
-
 	const crisis = useMemo(() => disasterStorage.getCrisisMetadata(), [])
 	const crisisId = crisis?.id || null
 	const familyId = walletData?.family_id || null
+
+	const [stationJsonInput, setStationJsonInput] = useState('')
+	const [trustedStations, setTrustedStations] = useState(() => crisisId ? disasterStorage.getStations({ crisisId }) : {})
+	const [selectedStationId, setSelectedStationId] = useState(null)
 
 	const localCounts = useMemo(() => getLocalCounts({ crisisId, familyId }), [lastResult, crisisId, familyId])
 
@@ -110,10 +110,8 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 				throw new Error('Invalid station JSON')
 			}
 			
-			setTrustedStations((prev) => ({
-				...prev,
-				[parsed.station_id]: parsed,
-			}))
+			disasterStorage.saveStation({ crisisId,station: parsed, })
+			setTrustedStations(disasterStorage.getStations({ crisisId }))
 			
 			setStationJsonInput('')
 			alert(`Station ${parsed.station_id} added`)
@@ -121,12 +119,9 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 			setError(e?.message || String(e))
 		}
 	}
-	const removeStation = (stationId) => {
-		setTrustedStations((prev) => {
-			const copy = { ...prev }
-			delete copy[stationId]
-			return copy
-		})
+	const removeStation = stationId => {
+		disasterStorage.removeStation({ crisisId, stationId })
+		setTrustedStations(disasterStorage.getStations({ crisisId }))
 	}
 	// END HELPER FUNCS
 	// ------------------------------
