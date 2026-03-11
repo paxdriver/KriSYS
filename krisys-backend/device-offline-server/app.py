@@ -158,6 +158,12 @@ CONFIRMED_MAX_ROWS = 20
 FLUSH_INTERVAL_SECONDS = 15  	# event loop for station to check every 15s if it is online and has messages to flush to HQ
 ####### THESE VALUES ARE FOR DEVELOPMENT ONLY, WILL BE SET BY POLICY IN PROD
 
+# --------------------
+# POOL LISTING LIMITS
+# --------------------
+POOL_DEFAULT_TTL_SECONDS = 300      # 5 minutes
+POOL_MAX_ENTRIES = 50               # hard cap
+
 
 #               IMPORTANT                   #
 STATION_ID = os.environ.get("STATION_ID")  # can be None
@@ -323,6 +329,18 @@ def init_station_db():
 			)
 			"""
 		)
+		# STATION POOLS - Bulletin Board for WebRTC Rooms
+		conn.execute(
+			"""
+			CREATE TABLE IF NOT EXISTS station_pools (
+				pool_id TEXT PRIMARY KEY,
+				host_device_id TEXT NOT NULL,
+				label TEXT,
+				created_at INTEGER NOT NULL,
+				expires_at INTEGER NOT NULL
+			)
+			"""
+		)
 
 		# STATION LOCAL EVENT LOG (Lifecycle + Summary Only for volumes, helps distribute resources on the ground more effectively)
 		# - Minimal
@@ -342,10 +360,9 @@ def init_station_db():
 
 		conn.commit()
 
-# ----------------------------------------------------------------------
+# ---------------------
 # STATION DEVICE IDENTITY (SELF-SIGNED KEYPAIR)
-# ----------------------------------------------------------------------
-
+# ---------------------
 def _compute_fingerprint(public_key_bytes: bytes) -> str:
 	"""
 	Compute SHA-256 fingerprint of station public key.
@@ -646,6 +663,39 @@ def db_get_block_public_key() -> str | None:
 	return db_get_meta("block_public_key")
 
 
+# STATION POOL MANAGEMENT
+def prune_station_pools():
+	"""
+	Remove expired pools and enforce max cap.
+	Called before returning pool list or after insert.
+	"""
+
+	now_s = int(time.time())
+
+	with station_db() as conn:
+		# Remove expired entries
+		conn.execute(
+			"DELETE FROM station_pools WHERE expires_at <= ?",
+			(now_s,),
+		)
+
+		# Enforce max entries (oldest first eviction)
+		rows = conn.execute(
+			"SELECT pool_id FROM station_pools ORDER BY created_at ASC"
+		).fetchall()
+
+		if len(rows) > POOL_MAX_ENTRIES:
+			excess = len(rows) - POOL_MAX_ENTRIES
+			to_delete = rows[:excess]
+			for r in to_delete:
+				conn.execute(
+					"DELETE FROM station_pools WHERE pool_id = ?",
+					(r["pool_id"],),
+				)
+
+		conn.commit()
+
+
 # ----------------------------
 # STATION helpers
 # ----------------------------
@@ -667,7 +717,7 @@ def get_peer_base_url(station_id: str) -> str:
 	return ""
 
 
-# derived from: identity file, SQLite meta, blockchain DB, cached RUNTIME_STATE["central_ok"]
+# Derived from: identity file, SQLite meta, blockchain DB, cached RUNTIME_STATE["central_ok"]
 def update_station_mode() -> None:
 	global STATION_STATE
 
@@ -2899,6 +2949,130 @@ def background_loop():
 
 		time.sleep(0.25)
 
+
+# -----------------------
+# Active pools aka rooms listings (for P2P)
+# -----------------------
+@app.route("/station/pools", methods=["GET"])
+def list_station_pools():
+	"""
+	Return active pool listings.
+
+	Response:
+	{
+		"pools": [
+			{
+				"pool_id": "...",
+				"host_device_id": "...",
+				"label": "...",
+				"created_at": ...,
+				"expires_at": ...
+			}
+		]
+	}
+	"""
+
+	prune_station_pools()
+
+	with station_db() as conn:
+		rows = conn.execute(
+			"""
+			SELECT pool_id, host_device_id, label, created_at, expires_at
+			FROM station_pools
+			ORDER BY created_at DESC
+			"""
+		).fetchall()
+
+	pools = [
+		{
+			"pool_id": r["pool_id"],
+			"host_device_id": r["host_device_id"],
+			"label": r["label"],
+			"created_at": r["created_at"],
+			"expires_at": r["expires_at"],
+		}
+		for r in rows
+	]
+
+	return jsonify({"pools": pools}), 200
+# Register or refresh a pool listing
+@app.route("/station/pools", methods=["POST"])
+def register_station_pool():
+	"""
+	Register a WebRTC pool listing with this station.
+
+	Request JSON:
+	{
+		"pool_id": "uuid",
+		"host_device_id": "device_x",
+		"label": "Family Sync",
+		"ttl_seconds": 300   # optional
+	}
+
+	Station:
+		- Applies TTL
+		- Upserts listing
+		- Prunes expired / overflow
+	"""
+
+	data = request.get_json(force=True, silent=True) or {}
+
+	pool_id = data.get("pool_id")
+	host_device_id = data.get("host_device_id")
+	label = data.get("label")
+	ttl_seconds = data.get("ttl_seconds")
+
+	if not isinstance(pool_id, str) or not pool_id.strip():
+		return jsonify({"error": "Missing pool_id"}), 400
+
+	if not isinstance(host_device_id, str) or not host_device_id.strip():
+		return jsonify({"error": "Missing host_device_id"}), 400
+
+	now_s = int(time.time())
+
+	try:
+		ttl_seconds = int(ttl_seconds)
+	except Exception:
+		ttl_seconds = POOL_DEFAULT_TTL_SECONDS
+
+	if ttl_seconds <= 0:
+		ttl_seconds = POOL_DEFAULT_TTL_SECONDS
+
+	expires_at = now_s + ttl_seconds
+
+	with station_db() as conn:
+		conn.execute(
+			"""
+			INSERT INTO station_pools (
+				pool_id,
+				host_device_id,
+				label,
+				created_at,
+				expires_at
+			)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(pool_id) DO UPDATE SET
+				host_device_id=excluded.host_device_id,
+				label=excluded.label,
+				expires_at=excluded.expires_at
+			""",
+			(
+				pool_id.strip(),
+				host_device_id.strip(),
+				label.strip() if isinstance(label, str) else None,
+				now_s,
+				expires_at,
+			),
+		)
+		conn.commit()
+
+	prune_station_pools()
+
+	return jsonify({
+		"status": "registered",
+		"pool_id": pool_id,
+		"expires_at": expires_at,
+	}), 200
 
 def event_flush_loop():
 	"""

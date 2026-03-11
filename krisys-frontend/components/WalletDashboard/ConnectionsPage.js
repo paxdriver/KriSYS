@@ -38,6 +38,7 @@ function getLocalCounts({ crisisId, familyId }) {
 	}
 }
 
+// CONNECTIONSPAGE COMPONENT
 export default function ConnectionsPage({ onRefresh, walletData }) {
 	const [hostUrl, setHostUrl] = useState(() => {
 		try {
@@ -72,6 +73,9 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 	const [stationJsonInput, setStationJsonInput] = useState('')
 	const [trustedStations, setTrustedStations] = useState(() => crisisId ? disasterStorage.getStations({ crisisId }) : {})
 	const [selectedStationId, setSelectedStationId] = useState(null)
+
+	const [stationPools, setStationPools] = useState([])
+	const [loadingPools, setLoadingPools] = useState(false)
 
 	const localCounts = useMemo(() => getLocalCounts({ crisisId, familyId }), [lastResult, crisisId, familyId])
 
@@ -123,6 +127,30 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 	const removeStation = stationId => {
 		disasterStorage.removeStation({ crisisId, stationId })
 		setTrustedStations(disasterStorage.getStations({ crisisId }))
+	}
+
+	const fetchStationPools = async () => {
+		if (!selectedStationId) {
+			setError('Select a trusted station first')
+			return
+		}
+
+		setLoadingPools(true)
+		setError(null)
+
+		try {
+			const station = trustedStations[selectedStationId]
+			const res = await fetch(`${hostUrl}/station/pools`)
+			if (!res.ok) throw new Error('Failed to fetch pools')
+			const data = await res.json()
+			setStationPools(data.pools || [])
+		} 
+		catch (e) {
+			setError(e?.message || String(e))
+		} 
+		finally {
+			setLoadingPools(false)
+		}
 	}
 	// END HELPER FUNCS
 	// ------------------------------
@@ -670,6 +698,68 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 								)
 							})
 						)}
+						
+						{/* AVAILABLE POOLS */}
+						<hr style={{ margin: '12px 0', opacity: 0.2 }} />
+
+						<div>
+							<div style={{ fontWeight: 700, marginBottom: '6px' }}>
+								Available Pools
+							</div>
+
+							<button
+								className="btn"
+								type="button"
+								onClick={fetchStationPools}
+								disabled={!selectedStationId || loadingPools}
+								style={{ marginBottom: '10px' }}
+							>
+								{loadingPools ? 'Loading...' : 'Refresh Pools'}
+							</button>
+
+							{stationPools.length === 0 ? (
+								<div className="privacy-notice">
+									No active pools.
+								</div>
+							) : (
+								stationPools.map((pool) => {
+									const expiresIn = Math.max(
+										0,
+										pool.expires_at - Math.floor(Date.now() / 1000)
+									)
+
+									return (
+										<div key={pool.pool_id} className="contact-item">
+											<div>
+												<strong>{pool.label || 'Unnamed Pool'}</strong>
+												<div className="contact-address">
+													Host: {pool.host_device_id}
+												</div>
+												<div className="privacy-notice">
+													Expires in: {expiresIn}s
+												</div>
+											</div>
+
+											<div>
+												<button
+													className="btn"
+													type="button"
+													onClick={() => {
+														alert(
+															`Pool selected:\n` +
+															`Host device: ${pool.host_device_id}\n\n` +
+															`Now exchange WebRTC offer with host.`
+														)
+													}}
+												>
+													Connect
+												</button>
+											</div>
+										</div>
+									)
+								})
+							)}
+						</div>
 					</div>
 				</div>
 
