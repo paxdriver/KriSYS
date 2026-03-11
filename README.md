@@ -470,8 +470,7 @@ Phase 3.8 testing goal:
 ---
 
 ## API Overview (Selected)
-
-Central backend:
+### Central backend:
 - GET /health
 - GET /crisis
 - GET /blockchain
@@ -486,13 +485,18 @@ Central backend:
 - POST /auth/unlock
 - POST /wallet
 
-Station server:
+### Station server:
 - GET /health
 - POST /mesh/inventory
 - POST /mesh/sync
 - POST /station/checkin (offline intake)
 - POST /station/flush (flush + pull blocks + derive confirmations)
+- GET /station/pools
+- POST /station/pools
 
+### UI's:
+- krisys-frontend → User wallet UI
+- device-offline-server/station-frontend → Station kiosk/operational UI
 ---
 
 ## File Structure (comprehensive)
@@ -504,8 +508,23 @@ Station server:
 │   ├── master_private_key.asc
 │   └── dev_policy_id.txt	(delete this in dev to kill master keys, db's, and start fresh automatically)
 ├── device-offline-server (simulating an offline registered station, relaying unconfirmed messages and maintaining latest blocks from anyone who visits and has a newer block that the station can verify and propagate throughout the rest of the network while offline)
+│   ├── station-frontend
+│   │   ├── app
+│   │   │	├── layout.js
+│   │   │	└── page.js
+│   │   ├── components
+│   │   │	├── StationIdentity.js
+│   │   │	└── StationPool.js
+│   │   ├── services
+│   │   │	├── stationQr.js
+│   │   │	├── stationHandshake.js
+│   │   │	├── webrtcRoomCode.js
+│   │   │	├── webrtcChunking.js
+│   │   │	└── stationApi.js
+│   │   ├── package.json
+│   │   └── next.config.js
 │   ├── station-data  (simulating offline station persistent storage for blockchain and message queues when gathering offline unconfirmed transactions)
-│   │   └── station.db
+│   │   ├── station.db
 │   │   └── station_identity_HOSPITAL-SE-001.json (hardcoded dummy for devtools UI functionality)
 │   │   └── station_identity_STATION-001.json (hardcoded dummy for devtools UI functionality)
 │   │   └── station_identity_*.json (the persistent api keys for authorized stations in lieu of wallet passphrases)
@@ -593,8 +612,8 @@ Station server:
 │   ├── localStorage.js
 │   ├── meshSync.js
 │   ├── poolJoinCode.js
-│   ├── stationHandshake.js
 │   ├── stationQr.js
+│   ├── stationHandshake.js
 │   ├── storageMeter.js
 │   ├── walletPublicKeyShare.js
 │   ├── webrtcChunking.js
@@ -961,12 +980,22 @@ HQ:
 - [ ] block interval
 - [ ] adaptive trigger frequency
 
-#### Phase 6.3 — Coordination of Public Pools (UNRESOLVED)
+#### Phase 6.3 — Coordination of Public Pools (In Progress)
 Iron out rules and flow of coordinating P2P:
-- [ ] Bulletin boards hosted by stations to publish join codes(?)
+- [x] Bulletin board hosted by stations to publish join codes
 - [ ] Establish public gathering to facilitate offline pools / exchanges
 - [ ] Automate propagation between pools (pool-2-pool sharing)
 - [ ] Aggregate propagated unconfirmed queues to stations
+
+Key endpoints (central aka HQ):
+Station server:
+- GET /health
+- POST /mesh/inventory
+- POST /mesh/sync
+- POST /station/checkin (offline intake)
+- POST /station/flush (flush + pull blocks + derive confirmations)
+- GET /station/pools
+- POST /station/pools
 
 #### Phase 6.4 — Safe Admin Controls
 Add admin controls:
