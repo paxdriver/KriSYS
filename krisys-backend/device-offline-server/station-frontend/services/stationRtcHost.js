@@ -231,8 +231,8 @@ export class StationRTCHost {
 		if (!peer) return
 
 		try {
-			peer.dc.close()
-			peer.pc.close()
+			peer.dc?.close()
+			peer.pc?.close()
 		} 
 		catch {
 			console.warn("stationRtcHost produced an error during _cleanupPeer")
