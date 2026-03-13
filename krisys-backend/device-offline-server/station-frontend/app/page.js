@@ -6,115 +6,175 @@ import { StationRTCHost } from '../services/stationRtcHost'
 import { createWebRTCRoomCode } from '../services/webrtcRoomCode'
 
 export default function StationPage() {
-    const [profile, setProfile] = useState(null)
-    const [offerCode, setOfferCode] = useState('')
-    const [poolId, setPoolId] = useState(null)
+	const [profile, setProfile] = useState(null)
+	const [offerCode, setOfferCode] = useState('')
+	const [poolId, setPoolId] = useState(null)
+	const [answerInput, setAnswerInput] = useState('')
+	const [currentPeerId, setCurrentPeerId] = useState(null)
 
-    const hostRef = useRef(null)
+	const hostRef = useRef(null)
 
-    // Fetch station identity profile
-    useEffect(() => {
-        async function loadProfile() {
-            const res = await fetch('/station/profile')
-            const data = await res.json()
-            setProfile(data)
-        }
+	// Fetch station identity profile
+	useEffect(() => {
+		async function loadProfile() {
+			const res = await fetch(`${process.env.NEXT_PUBLIC_STATION_API}/station/profile`)
+			const data = await res.json()
+			setProfile(data)
+		}
 
-        loadProfile()
-    }, [])
+		loadProfile()
+	}, [])
 
-    // Initialize WebRTC host once profile is loaded
-    useEffect(() => {
-        if (!profile) return
+	// Initialize WebRTC host once profile is loaded
+	useEffect(() => {
+		if (!profile) return
 
-        const host = new StationRTCHost({
-            crisisId: profile.crisis_id,
-        })
+		const host = new StationRTCHost({
+			crisisId: profile.crisis_id,
+		})
 
-        hostRef.current = host
+		// DEV NOTE: Pin a ping response handler for testing connection established
+		host.onJsonMessage = async (peerId, obj) => {
+			if (obj?.t === 'krisys_p2p_ping') {
+				console.log('Received ping from', peerId)
 
-        createPersistentOffer(host)
+				host.sendJson(peerId, {
+					t: 'krisys_p2p_pong',
+					at: Date.now(),
+				})
+			}
+			if (obj?.t === 'krisys_p2p_pong') {
+				console.log('Received pong from', peerId)
+			}
+		}
 
-    }, [profile])
+		hostRef.current = host
 
-    async function createPersistentOffer(host) {
-        const pc = new RTCPeerConnection({ iceServers: [] })
+		createPersistentOffer(host)
 
-        const dc = pc.createDataChannel('krisys', { ordered: true })
+	}, [profile])
 
-        host._attachDataChannel('persistent-host', pc, dc)
+	async function createPersistentOffer(host) {
+		const pc = new RTCPeerConnection({ iceServers: [] })
 
-        const offer = await pc.createOffer()
-        await pc.setLocalDescription(offer)
+		const dc = pc.createDataChannel('krisys', { ordered: true })
 
-        await waitForIce(pc)
+		const peerId = 'persistent-host'
 
-        const local = pc.localDescription
+		host.peers.set(peerId, {
+			pc,
+			dc: null,
+			sender: null,
+			receiver: null,
+			handshakeVerified: false,
+		})
 
-        const code = createWebRTCRoomCode({
-            kind: 'offer',
-            crisisId: profile.crisis_id,
-            sdp: {
-                type: local.type,
-                sdp: local.sdp,
-            },
-        })
+		host._attachDataChannel(peerId, pc, dc)
 
-        setOfferCode(code)
+		setCurrentPeerId(peerId)
 
-        const id = crypto.randomUUID()
-        setPoolId(id)
+		const offer = await pc.createOffer()
+		await pc.setLocalDescription(offer)
 
-        registerPool(id)
-        startPoolKeepAlive(id)
-    }
+		await waitForIce(pc)
 
-    function waitForIce(pc) {
-        return new Promise((resolve) => {
-            if (pc.iceGatheringState === 'complete') return resolve()
-            pc.addEventListener('icegatheringstatechange', () => {
-                if (pc.iceGatheringState === 'complete') resolve()
-            })
-        })
-    }
+		const local = pc.localDescription
 
-    async function registerPool(id) {
-        await fetch('/station/pools', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                pool_id: id,
-                host_device_id: 'station',
-                label: 'Station Pool',
-                ttl_seconds: 300,
-            }),
-        })
-    }
+		const code = createWebRTCRoomCode({
+			kind: 'offer',
+			crisisId: profile.crisis_id,
+			sdp: {
+				type: local.type,
+				sdp: local.sdp,
+			},
+		})
 
-    function startPoolKeepAlive(id) {
-        setInterval(() => {
-            registerPool(id)
-        }, 240000) // refresh every 4 minutes
-    }
+		setOfferCode(code)
 
-    if (!profile) return <div>Loading station...</div>
+		const id = crypto.randomUUID()
+		setPoolId(id)
 
-    return (
-        <div style={{ padding: 40 }}>
-            <h1>Station Host</h1>
+		registerPool(id)
+		startPoolKeepAlive(id)
+	}
 
-            <h3>Station ID</h3>
-            <p>{profile.station_id}</p>
+	function waitForIce(pc) {
+		return new Promise((resolve) => {
+			if (pc.iceGatheringState === 'complete') return resolve()
+			pc.addEventListener('icegatheringstatechange', () => {
+				if (pc.iceGatheringState === 'complete') resolve()
+			})
+		})
+	}
 
-            <h3>Fingerprint</h3>
-            <p>{profile.fingerprint}</p>
+	async function registerPool(id) {
+		await fetch(`${process.env.NEXT_PUBLIC_STATION_API}/station/pools`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				pool_id: id,
+				host_device_id: 'station',
+				label: 'Station Pool',
+				ttl_seconds: 300,
+			}),
+		})
+	}
 
-            <h3>WebRTC Offer Code</h3>
-            <textarea
-                value={offerCode}
-                readOnly
-                style={{ width: '100%', height: 200 }}
-            />
-        </div>
-    )
+	function startPoolKeepAlive(id) {
+		setInterval(() => {
+			registerPool(id)
+		}, 240000) // refresh every 4 minutes
+	}
+
+	if (!profile) return <div>Loading station...</div>
+
+	return (
+		<div style={{ padding: 40 }}>
+			<h1>Station Host</h1>
+
+			<h3>Station ID</h3>
+			<p>{profile.station_id}</p>
+
+			<h3>Fingerprint</h3>
+			<p>{profile.fingerprint}</p>
+
+			<h3>WebRTC Offer Code</h3>
+			<textarea
+				value={offerCode}
+				readOnly
+				style={{ width: '100%', height: 200 }}
+			/>
+			<br />
+			<br />
+
+			<h3>Paste Wallet Answer</h3>
+			<textarea
+				value={answerInput}
+				onChange={(e) => setAnswerInput(e.target.value)}
+				style={{ width: '100%', height: 200 }}
+			/>
+
+			<button
+				onClick={async () => {
+					try {
+						if (!currentPeerId) {
+							alert('No peer connection ready')
+							return
+						}
+
+						await hostRef.current.applyAnswerFromPeer(
+							currentPeerId,
+							answerInput
+						)
+
+						alert('Answer applied. Connection should establish.')
+					} catch (e) {
+						alert(e.message)
+					}
+				}}
+			>
+				Apply Answer
+			</button>
+		</div>
+	)
 }

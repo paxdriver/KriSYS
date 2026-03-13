@@ -246,4 +246,22 @@ export class StationRTCHost {
 
 		console.log('Peer cleaned up:', peerId)
 	}
+
+	// applyAnswerFromPeer: applies remote answer SDP to an existing peer connection
+	async applyAnswerFromPeer(peerId, answerCode) {
+		const peer = this.peers.get(peerId)
+		if (!peer) {
+			throw new Error('Peer not found')
+		}
+
+		const parsed = parseWebRTCRoomCode(answerCode)
+
+		if (parsed.kind !== 'answer') {
+			throw new Error('Expected answer code')
+		}
+
+		await peer.pc.setRemoteDescription(parsed.sdp)
+
+		console.log('Answer applied for peer:', peerId)
+	}
 }

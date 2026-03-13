@@ -329,6 +329,27 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			dc.onopen = () => {
 				log('dc.open')
 				setStatus('connected')
+
+				// Send mandatory handshake immediately after connection opens
+				try {
+					const stations = disasterStorage.getStations({ crisisId }) || {}
+					const firstStation = Object.values(stations)[0]
+
+					if (!firstStation) {
+						log('No trusted station stored for handshake')
+						return
+					}
+
+					sendJson({
+						t: 'krisys_handshake_v1',
+						baseUrl: 'http://localhost:6001', // dev only for now
+						storedStation: firstStation,
+					})
+
+					log('sent handshake')
+				} catch (e) {
+					log(`handshake send failed: ${e?.message || String(e)}`)
+				}
 			}
 
 			dc.onclose = () => {

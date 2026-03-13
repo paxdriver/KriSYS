@@ -72,6 +72,19 @@ services:
       - STATION_AUTO_SYNC=1
       - STATION_ID=CAMP_CENTRAL
     volumes:
-      - ./krisys-backend/camp_central:/app/data
+      - ./krisys-backend/camp_central/station-data:/app/data
     depends_on:
       - backend
+  station_frontend:
+    build:
+      context: ./krisys-backend/device-offline-server/station-frontend
+    ports:
+      - "6600:3000"
+    environment:
+      - NEXT_PUBLIC_STATION_API=http://localhost:6001
+    volumes:
+      - ./krisys-backend/device-offline-server/station-frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - station

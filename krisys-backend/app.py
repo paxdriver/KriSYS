@@ -241,8 +241,8 @@ def dev_local_bootstrap_policy_id_and_cleanup() -> str | None:
 	- generate new policy_id
 	- wipe blockchain DB
 	- wipe station DB
+	- wipe station keys
 	- wipe relay DB
-	- wipe keys
 
 	Returns policy_id or None.
 	"""
@@ -279,14 +279,17 @@ def dev_local_bootstrap_policy_id_and_cleanup() -> str | None:
 	)
 	logger.warning("DEV: dev_policy_id.txt missing; resetting ALL local state")
 
+	# Delete old blockchain's api keys and databases to start fresh
 	db_path = os.getenv("BLOCKCHAIN_DB_PATH", "blockchain.db")
-
 	stale_paths = [
 		db_path,
 		"blockchain/master_public_key.asc",
 		"blockchain/master_private_key.asc",
 		os.path.join("device-offline-server", "station-data", "station.db"),
+		os.path.join("device-offline-server", "station-data", "krisys_station_identity.json"),
 		os.path.join("relay-offline-server", "relay-data", "relay.db"),
+		os.path.join("camp_central", "station-data", "station.db"),
+		os.path.join("camp_central", "station-data", "krisys_station_identity.json"),
 	]
 
 	for path in stale_paths:

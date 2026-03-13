@@ -1,6 +1,6 @@
 // krisys-frontend/components/WalletDashboard/ConnectionsPage.js
 'use client'
-import { useMemo, useState } from 'react'
+import { useMemo, useEffect, useState } from 'react'
 import { syncWithMeshHost } from '@/services/meshSync'
 import { disasterStorage } from '@/services/localStorage'
 import { createJoinCode, parseJoinCode } from '@/services/poolJoinCode'
@@ -10,6 +10,7 @@ import QRScanner from '../Scanner/QRScanner'
 import { parseStationQr } from '@/services/stationQr'
 import { performStationHandshake } from '@/services/stationHandshake'
 import P2PRoom from './P2PRoom'
+import { useP2P } from '@/contexts/P2PContext'
 
 const DEFAULT_STATION_URL = process.env.NEXT_PUBLIC_STATION_URL || 'http://localhost:6001'
 const DEFAULT_RELAY_URL = process.env.NEXT_PUBLIC_RELAY_URL || 'http://localhost:6002'
@@ -74,8 +75,10 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 	const [trustedStations, setTrustedStations] = useState(() => crisisId ? disasterStorage.getStations({ crisisId }) : {})
 	const [selectedStationId, setSelectedStationId] = useState(null)
 
+	const { joinWithOffer } = useP2P()
 	const [stationPools, setStationPools] = useState([])
 	const [loadingPools, setLoadingPools] = useState(false)
+	const [selectedOffer, setSelectedOffer] = useState('')
 
 	const localCounts = useMemo(() => getLocalCounts({ crisisId, familyId }), [lastResult, crisisId, familyId])
 
@@ -97,10 +100,25 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 		}
 	}
 
+	// Fetch station pools
+	useEffect(() => {
+		async function loadPools() {
+			try {
+				const res = await fetch(`${hostUrl}/station/pools`)	// DEV NOTE: later users will connect to pool to get baseurl for this
+				const data = await res.json()
+				setStationPools(data.pools || [])
+			} catch (e) {
+				console.warn('Failed to load station pools', e)
+			}
+		}
+
+		loadPools()
+	}, [])
+
 	// ------------------------------
 	// DEV NOTE: Button for convenience will change to "scan station qr code"
 	const fetchStationProfile = async () => {
-		const res = await fetch('http://localhost:6001/station/profile')
+		const res = await fetch(`${process.env.NEXT_PUBLIC_STATION_API}/station/profile`)
 		if (!res.ok) throw new Error("Failed to fetch station profile")
 		const profile = await res.json()
 
@@ -707,6 +725,29 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 								Available Pools
 							</div>
 
+							<h3>Available Station Pools</h3>
+							{stationPools.length === 0 && (
+								<p>No station pools found.</p>
+							)}
+
+							{stationPools.map((pool) => (
+								<div key={pool.pool_id} style={{ marginBottom: 12 }}>
+									<strong>{pool.label || 'Station Pool'}</strong>
+									<br />
+									Pool ID: {pool.pool_id}
+									<br />
+									<button
+										onClick={() => {
+											const offer = prompt('Paste station offer code:')
+											if (!offer) return
+											joinWithOffer(offer)
+										}}
+									>
+										Connect
+									</button>
+								</div>
+							))}
+
 							<button
 								className="btn"
 								type="button"
@@ -717,7 +758,7 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 								{loadingPools ? 'Loading...' : 'Refresh Pools'}
 							</button>
 
-							{stationPools.length === 0 ? (
+							{/* {stationPools.length === 0 ? (
 								<div className="privacy-notice">
 									No active pools.
 								</div>
@@ -758,7 +799,7 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 										</div>
 									)
 								})
-							)}
+							)} */}
 						</div>
 					</div>
 				</div>

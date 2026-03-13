@@ -497,6 +497,7 @@ Phase 3.8 testing goal:
 ### UI's:
 - krisys-frontend → User wallet UI
 - device-offline-server/station-frontend → Station kiosk/operational UI
+- krisys-backend → Admin panel
 ---
 
 ## File Structure (comprehensive)
@@ -631,6 +632,7 @@ LOCAL PORTS (DEV)
 - frontend: http://localhost:3000
 - station: http://localhost:6001	(foodtruck*, hospital, station_001)
 - station: http://localhost:6003	(camp_central*)
+- station-frontend: http://localhost:6600 (station frontend UI)
 *fake stations for devtools actions, NOT provisioned or conventional, dev only dummies
 ---
 
@@ -731,15 +733,6 @@ Core ledger + canonical chain rules:
 	- `relay_hash` uniqueness enforced for non-empty values (SQLite partial unique index)
 	- `/transaction` idempotent by `relay_hash` (dedupe success responses)
 
-Key endpoints (central aka HQ):
-- `GET /health`
-- `GET /crisis` (returns pinned `block_public_key`)
-- `GET /blockchain`
-- `POST /transaction` (relay_hash required; offline-safe)
-- `POST /checkin` (station-authenticated)
-- `POST /admin/mine` (dev mining)
-- `POST /admin/alert` (provider-only alerts; priority 1)
-
 ---
 
 ### Phase 2 — PGP messaging & wallets (Completed)
@@ -768,12 +761,6 @@ Wallet identity + encryption plumbing (no currency):
 		- `family_id`
 		- optional `crisis_id`
 		- armored public key block
-
-Key endpoints (app):
-- `POST /wallet` (creates wallet + keys)
-- `GET /wallet/<family_id>` (metadata only; no keys)
-- `GET /wallet/<family_id>/public-key` (for encryption)
-- `GET /wallet/<family_id>/qr/<address>` (QR image)
 
 Data handling constraints:
 - No per-transaction signatures; only blocks are signed
@@ -986,16 +973,6 @@ Iron out rules and flow of coordinating P2P:
 - [ ] Establish public gathering to facilitate offline pools / exchanges
 - [ ] Automate propagation between pools (pool-2-pool sharing)
 - [ ] Aggregate propagated unconfirmed queues to stations
-
-Key endpoints (central aka HQ):
-Station server:
-- GET /health
-- POST /mesh/inventory
-- POST /mesh/sync
-- POST /station/checkin (offline intake)
-- POST /station/flush (flush + pull blocks + derive confirmations)
-- GET /station/pools
-- POST /station/pools
 
 #### Phase 6.4 — Safe Admin Controls
 Add admin controls:

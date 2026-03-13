@@ -94,7 +94,7 @@ is_dev = os.environ.get("FLASK_ENV") == "development"
 dev_remote = os.environ.get("FLASK_ENV") == "dev_remote"
 
 if is_dev or dev_remote:
-	FRONTEND_ORIGINS = ["http://localhost:3000",]
+	FRONTEND_ORIGINS = ["http://localhost:3000","http://localhost:6600"]
 else:
 	# Production, lock this down later
 	FRONTEND_ORIGINS = []
