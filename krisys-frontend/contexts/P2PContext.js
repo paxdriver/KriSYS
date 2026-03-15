@@ -195,158 +195,196 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		sender.sendJson(obj)
 	}, [])
 
-	const handleIncomingJson = useCallback(
-		async (obj) => {
-			if (!obj || typeof obj !== 'object') return
+	const handleIncomingJson = useCallback( async (obj) => {
+		if (!obj || typeof obj !== 'object') return
+		if (!crisisId || !familyId) {
+			log('recv sync req: missing crisisId/familyId context locally')
+			return
+		}
+
+		// Station → Wallet Inventory
+		if (obj.t === 'krisys_mesh_inventory_v1') {
+			const id = obj.id
+			log(`recv inventory id=${id}`)
+
 			if (!crisisId || !familyId) {
-				log('recv sync req: missing crisisId/familyId context locally')
+				log('inventory ignored: missing crisisId/familyId')
 				return
 			}
 
-			// Station → Wallet Inventory
-			if (obj.t === 'krisys_mesh_inventory_v1') {
-				const id = obj.id
-				log(`recv inventory id=${id}`)
+			// 1) Get local state
+			const localPayload = disasterStorage.exportSyncPayload({
+				crisisId,
+				familyId,
+			})
+			// De-duplication
+			const localRelayHashes = new Set(( localPayload.queued || [] ).map(m => m?.relay_hash).filter(Boolean) )
 
-				if (!crisisId || !familyId) {
-					log('inventory ignored: missing crisisId/familyId')
-					return
+			// 2) Determine missing relay hashes
+			const remoteRelayHashes = Array.isArray(obj.relay_hashes) ? obj.relay_hashes.slice(0, 100) : [] // safety bound
+			const wantRelayHashes = remoteRelayHashes.filter( rh => !localRelayHashes.has(rh) )
+
+			// 3) Compare chain tips
+			let wantBlocksFrom = null
+			const localTip = localPayload.chain_tip
+			const remoteTip = obj.chain_tip
+
+			// DEV NOTE: TODO - proper type checking later
+			if (remoteTip && typeof remoteTip.block_index === 'number' && localTip && typeof localTip.block_index === 'number') {
+				if (remoteTip.block_index > localTip.block_index) {
+					// We are behind → request blocks starting from our tip + 1
+					wantBlocksFrom = localTip.block_index + 1
 				}
+			}
 
-				// 1) Get local state
-				const localPayload = disasterStorage.exportSyncPayload({
+			// 4) Send inventory response
+			sendJson({
+				t: 'krisys_mesh_inventory_res_v1',
+				id,
+				want_relay_hashes: wantRelayHashes.slice(0, 100), // bound
+				want_blocks_from: wantBlocksFrom,
+				sentAt: Date.now(),
+			})
+			log(`sent inventory_res id=${id} ` + `want_relay=${wantRelayHashes.length} ` + `want_blocks_from=${wantBlocksFrom}`)
+			return
+		}
+
+
+		// Handle station payload after inventory negotiation
+		if (obj.t === 'krisys_mesh_payload_v1') {
+			const id = obj.id
+			log(`recv payload id=${id}`)
+
+			if (!crisisId || !familyId) {
+				log('payload ignored: missing crisisId/familyId')
+				return
+			}
+
+			// Ensure arrays are bounded and valid
+			const blocks = Array.isArray(obj.blocks) ? obj.blocks.slice(0, 10) : []
+			const queued = Array.isArray(obj.queued) ? obj.queued.slice(0, 100) : []
+
+			try {
+				// Import into wallet storage using canonical async importer
+				await disasterStorage.importSyncPayloadAsync({
+					crisisId,
+					familyId,
+					payload: {
+						version: 1,
+						deviceId: 'station_peer',
+						crisisId,
+						generatedAt: Date.now(),
+						chain_tip: null,
+						blocks,
+						queued,
+						confirmed: {},
+					}
+				})
+
+				log(`imported payload id=${id} ` + `blocks=${blocks.length} queued=${queued.length}`)
+			} catch (e) {
+				log(`payload import failed id=${id}: ${e?.message || e}`)
+			}
+
+			return
+		}
+
+		// Handle requests for meshSync
+		if (obj.t === 'krisys_mesh_sync_req_v1') {
+			const id = obj.id
+			const mode = obj.mode === true
+			log(`recv sync req id=${id}`)
+
+			const payload = obj.payload
+			if (!payload || typeof payload !== 'object') {
+				log('recv sync req: missing payload')
+				return
+			}
+
+			try {
+				await disasterStorage.importSyncPayloadAsync({
+					crisisId,
+					familyId,
+					payload,
+				})
+				log(`imported peer payload (req id=${id})`)
+			} catch (e) {
+				log(`import failed (req id=${id}): ${e?.message || String(e)}`)
+				return
+			}
+
+			if (mode) {
+				log('push-only mode: not sending sync response')
+				return
+			}
+
+			try {
+				const myPayload = disasterStorage.exportSyncPayload({
 					crisisId,
 					familyId,
 				})
-				// De-duplication
-				const localRelayHashes = new Set(( localPayload.queued || [] ).map(m => m?.relay_hash).filter(Boolean) )
 
-				// 2) Determine missing relay hashes
-				const remoteRelayHashes = Array.isArray(obj.relay_hashes) ? obj.relay_hashes.slice(0, 100) : [] // safety bound
-				const wantRelayHashes = remoteRelayHashes.filter( rh => !localRelayHashes.has(rh) )
-
-				// 3) Compare chain tips
-				let wantBlocksFrom = null
-				const localTip = localPayload.chain_tip
-				const remoteTip = obj.chain_tip
-
-				// DEV NOTE: TODO - proper type checking later
-				if (remoteTip && typeof remoteTip.block_index === 'number' && localTip && typeof localTip.block_index === 'number') {
-					if (remoteTip.block_index > localTip.block_index) {
-						// We are behind → request blocks starting from our tip + 1
-						wantBlocksFrom = localTip.block_index + 1
-					}
-				}
-
-				// 4) Send inventory response
 				sendJson({
-					t: 'krisys_mesh_inventory_res_v1',
+					t: 'krisys_mesh_sync_res_v1',
 					id,
-					want_relay_hashes: wantRelayHashes.slice(0, 100), // bound
-					want_blocks_from: wantBlocksFrom,
-					sentAt: Date.now(),
+					sentAt: safeNow(),
+					payload: myPayload,
 				})
-				log(`sent inventory_res id=${id} ` + `want_relay=${wantRelayHashes.length} ` + `want_blocks_from=${wantBlocksFrom}`)
+				log(`sent sync res id=${id}`)
+			} catch (e) {
+				log(`send res failed: ${e?.message || String(e)}`)
+			}
+
+			return
+		}
+
+		if (obj.t === 'krisys_mesh_sync_res_v1') {
+			const id = obj.id
+			if (!pendingSyncIdsRef.current.has(id)) {
+				log(`recv sync res id=${id} (unexpected; ignoring)`)
+				return
+			}
+			pendingSyncIdsRef.current.delete(id)
+
+			const payload = obj.payload
+			if (!payload || typeof payload !== 'object') {
+				log(`recv sync res id=${id}: missing payload`)
 				return
 			}
 
-			if (obj.t === 'krisys_mesh_sync_req_v1') {
-				const id = obj.id
-				const mode = obj.mode === true
-				log(`recv sync req id=${id}`)
-
-				const payload = obj.payload
-				if (!payload || typeof payload !== 'object') {
-					log('recv sync req: missing payload')
-					return
-				}
-
-				try {
-					await disasterStorage.importSyncPayloadAsync({
-						crisisId,
-						familyId,
-						payload,
-					})
-					log(`imported peer payload (req id=${id})`)
-				} catch (e) {
-					log(`import failed (req id=${id}): ${e?.message || String(e)}`)
-					return
-				}
-
-				if (mode) {
-					log('push-only mode: not sending sync response')
-					return
-				}
-
-				try {
-					const myPayload = disasterStorage.exportSyncPayload({
-						crisisId,
-						familyId,
-					})
-
-					sendJson({
-						t: 'krisys_mesh_sync_res_v1',
-						id,
-						sentAt: safeNow(),
-						payload: myPayload,
-					})
-					log(`sent sync res id=${id}`)
-				} catch (e) {
-					log(`send res failed: ${e?.message || String(e)}`)
-				}
-
+			if (!crisisId || !familyId) {
+				log('recv sync res: missing crisisId/familyId context locally')
 				return
 			}
 
-			if (obj.t === 'krisys_mesh_sync_res_v1') {
-				const id = obj.id
-				if (!pendingSyncIdsRef.current.has(id)) {
-					log(`recv sync res id=${id} (unexpected; ignoring)`)
-					return
-				}
-				pendingSyncIdsRef.current.delete(id)
-
-				const payload = obj.payload
-				if (!payload || typeof payload !== 'object') {
-					log(`recv sync res id=${id}: missing payload`)
-					return
-				}
-
-				if (!crisisId || !familyId) {
-					log('recv sync res: missing crisisId/familyId context locally')
-					return
-				}
-
-				try {
-					await disasterStorage.importSyncPayloadAsync({
-						crisisId,
-						familyId,
-						payload,
-					})
-					log(`imported peer payload (res id=${id})`)
-				} catch (e) {
-					log(`import failed (res id=${id}): ${e?.message || String(e)}`)
-				}
-				return
+			try {
+				await disasterStorage.importSyncPayloadAsync({
+					crisisId,
+					familyId,
+					payload,
+				})
+				log(`imported peer payload (res id=${id})`)
+			} catch (e) {
+				log(`import failed (res id=${id}): ${e?.message || String(e)}`)
 			}
+			return
+		}
 
-			if (obj.t === 'krisys_p2p_ping') {
-				log('recv ping')
-				try {
-					sendJson({ t: 'krisys_p2p_pong', at: safeNow() })
-				} catch {
-					// ignore
-				}
-				return
+		if (obj.t === 'krisys_p2p_ping') {
+			log('recv ping')
+			try {
+				sendJson({ t: 'krisys_p2p_pong', at: safeNow() })
+			} catch {
+				// ignore
 			}
+			return
+		}
 
-			if (obj.t === 'krisys_p2p_pong') {
-				log('recv pong')
-				return
-			}
-		},
-		[crisisId, familyId, log, sendJson]
-	)
+		if (obj.t === 'krisys_p2p_pong') {
+			log('recv pong')
+			return
+		}
+	}, [crisisId, familyId, log, sendJson] )
 
 	const attachDataChannelHandlers = useCallback( (dc) => {
 		senderRef.current = createChunkSender({

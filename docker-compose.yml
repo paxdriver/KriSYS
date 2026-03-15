@@ -25,6 +25,9 @@ services:
       - "3000:3000"
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:5000
+      # DEV ONLY: provides known station base URL to wallet frontend so trusted stations can be added and removed.
+      # In production, station base_url comes from scanned QR code and NEXT_PUBLIC_STATION_API is not used at all.
+      - NEXT_PUBLIC_STATION_API=http://localhost:6001
     # Development command with hot reload
     # command: npm start
     # For production, comment above and uncomment below:
