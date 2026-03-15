@@ -112,12 +112,12 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		try {
 			if (senderRef.current?.destroy) senderRef.current.destroy()
 		} catch {
-			// ignore
+			// ignore for now
 		}
 		try {
 			if (receiverRef.current?.destroy) receiverRef.current.destroy()
 		} catch {
-			// ignore
+			// ignore for now
 		}
 		senderRef.current = null
 		receiverRef.current = null
@@ -127,12 +127,12 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		try {
 			if (dcRef.current) dcRef.current.close()
 		} catch {
-			// ignore
+			// ignore for now
 		}
 		try {
 			if (pcRef.current) pcRef.current.close()
 		} catch {
-			// ignore
+			// ignore for now
 		}
 		dcRef.current = null
 		pcRef.current = null
@@ -163,7 +163,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			try {
 				reset()
 			} catch {
-				// ignore
+				// ignore for now
 			}
 		}
 	}, [reset])
@@ -203,6 +203,53 @@ export function P2PProvider({ children, crisisId, familyId }) {
 				return
 			}
 
+			// Station → Wallet Inventory
+			if (obj.t === 'krisys_mesh_inventory_v1') {
+				const id = obj.id
+				log(`recv inventory id=${id}`)
+
+				if (!crisisId || !familyId) {
+					log('inventory ignored: missing crisisId/familyId')
+					return
+				}
+
+				// 1) Get local state
+				const localPayload = disasterStorage.exportSyncPayload({
+					crisisId,
+					familyId,
+				})
+				// De-duplication
+				const localRelayHashes = new Set(( localPayload.queued || [] ).map(m => m?.relay_hash).filter(Boolean) )
+
+				// 2) Determine missing relay hashes
+				const remoteRelayHashes = Array.isArray(obj.relay_hashes) ? obj.relay_hashes.slice(0, 100) : [] // safety bound
+				const wantRelayHashes = remoteRelayHashes.filter( rh => !localRelayHashes.has(rh) )
+
+				// 3) Compare chain tips
+				let wantBlocksFrom = null
+				const localTip = localPayload.chain_tip
+				const remoteTip = obj.chain_tip
+
+				// DEV NOTE: TODO - proper type checking later
+				if (remoteTip && typeof remoteTip.block_index === 'number' && localTip && typeof localTip.block_index === 'number') {
+					if (remoteTip.block_index > localTip.block_index) {
+						// We are behind → request blocks starting from our tip + 1
+						wantBlocksFrom = localTip.block_index + 1
+					}
+				}
+
+				// 4) Send inventory response
+				sendJson({
+					t: 'krisys_mesh_inventory_res_v1',
+					id,
+					want_relay_hashes: wantRelayHashes.slice(0, 100), // bound
+					want_blocks_from: wantBlocksFrom,
+					sentAt: Date.now(),
+				})
+				log(`sent inventory_res id=${id} ` + `want_relay=${wantRelayHashes.length} ` + `want_blocks_from=${wantBlocksFrom}`)
+				return
+			}
+
 			if (obj.t === 'krisys_mesh_sync_req_v1') {
 				const id = obj.id
 				const mode = obj.mode === true
@@ -213,7 +260,6 @@ export function P2PProvider({ children, crisisId, familyId }) {
 					log('recv sync req: missing payload')
 					return
 				}
-
 
 				try {
 					await disasterStorage.importSyncPayloadAsync({
@@ -302,81 +348,78 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		[crisisId, familyId, log, sendJson]
 	)
 
-	const attachDataChannelHandlers = useCallback(
-		(dc) => {
-			senderRef.current = createChunkSender({
-				dc,
-				log,
-				onStats: (s) => {
-					setMetrics((prev) => ({
-						...(prev || {}),
-						send: s,
-					}))
-				},
-			})
+	const attachDataChannelHandlers = useCallback( (dc) => {
+		senderRef.current = createChunkSender({
+			dc,
+			log,
+			onStats: (s) => {
+				setMetrics((prev) => ({
+					...(prev || {}),
+					send: s,
+				}))
+			},
+		})
 
-			receiverRef.current = createChunkReceiver({
-				onJson: handleIncomingJson,
-				log,
-				onStats: (s) => {
-					setMetrics((prev) => ({
-						...(prev || {}),
-						recv: s,
-					}))
-				},
-			})
+		receiverRef.current = createChunkReceiver({
+			onJson: handleIncomingJson,
+			log,
+			onStats: (s) => {
+				setMetrics((prev) => ({
+					...(prev || {}),
+					recv: s,
+				}))
+			},
+		})
 
-			dc.onopen = () => {
-				log('dc.open')
-				setStatus('connected')
+		dc.onopen = () => {
+			log('dc.open')
+			setStatus('connected')
 
-				// Send mandatory handshake immediately after connection opens
-				try {
-					const stations = disasterStorage.getStations({ crisisId }) || {}
-					const firstStation = Object.values(stations)[0]
+			// Send mandatory handshake immediately after connection opens
+			try {
+				const stations = disasterStorage.getStations({ crisisId }) || {}
+				const firstStation = Object.values(stations)[0]
 
-					if (!firstStation) {
-						log('No trusted station stored for handshake')
-						return
-					}
-
-					sendJson({
-						t: 'krisys_handshake_v1',
-						baseUrl: 'http://localhost:6001', // dev only for now
-						storedStation: firstStation,
-					})
-
-					log('sent handshake')
-				} catch (e) {
-					log(`handshake send failed: ${e?.message || String(e)}`)
+				if (!firstStation) {
+					log('No trusted station stored for handshake')
+					return
 				}
-			}
 
-			dc.onclose = () => {
-				log('dc.close')
-			}
+				sendJson({
+					t: 'krisys_handshake_v1',
+					baseUrl: 'http://localhost:6001', // dev only for now
+					storedStation: firstStation,
+				})
 
-			dc.onerror = () => {
-				log('dc.error')
+				log('sent handshake')
+			} catch (e) {
+				log(`handshake send failed: ${e?.message || String(e)}`)
 			}
+		}
 
-			dc.onmessage = async (evt) => {
-				try {
-					const text = typeof evt?.data === 'string' ? evt.data : ''
-					if (!text) {
-						log('dc.message: [non-string or empty]')
-						return
-					}
-					const receiver = receiverRef.current
-					if (!receiver) return
-					await receiver.handleText(text)
-				} catch (e) {
-					log(`dc.message error: ${e?.message || String(e)}`)
+		dc.onclose = () => {
+			log('dc.close')
+		}
+
+		dc.onerror = () => {
+			log('dc.error')
+		}
+
+		dc.onmessage = async (evt) => {
+			try {
+				const text = typeof evt?.data === 'string' ? evt.data : ''
+				if (!text) {
+					log('dc.message: [non-string or empty]')
+					return
 				}
+				const receiver = receiverRef.current
+				if (!receiver) return
+				await receiver.handleText(text)
+			} catch (e) {
+				log(`dc.message error: ${e?.message || String(e)}`)
 			}
-		},
-		[handleIncomingJson, log]
-	)
+		}
+	}, [handleIncomingJson, log])
 
 	const createHostOffer = useCallback(async () => {
 		setError(null)
@@ -413,121 +456,102 @@ export function P2PProvider({ children, crisisId, familyId }) {
 
 		setOfferCode(code)
 		log('Offer ready (copy/paste or show QR).')
-	}, [
-		attachCommonHandlers,
-		attachDataChannelHandlers,
-		canWebRTC,
-		crisisId,
-		log,
-		reset,
-	])
+	}, [attachCommonHandlers, attachDataChannelHandlers, canWebRTC, crisisId, log, reset,])
 
-	const joinWithOffer = useCallback(
-		async (rawOfferCode, { pushOnly = false } = {}) => {
-			setError(null)
+	const joinWithOffer = useCallback( async (rawOfferCode, { pushOnly = false } = {}) => {
+		setError(null)
 
-			if (!canWebRTC) {
-				setError('WebRTC not available in this browser/environment.')
-				return
-			}
+		if (!canWebRTC) {
+			setError('WebRTC not available in this browser/environment.')
+			return
+		}
 
-			const raw = (rawOfferCode || '').trim()
-			if (!raw) {
-				setError('Paste or scan an offer code first.')
-				return
-			}
+		const raw = (rawOfferCode || '').trim()
+		if (!raw) {
+			setError('Paste or scan an offer code first.')
+			return
+		}
 
-			setPushOnlyOnJoin(!!pushOnly)
+		setPushOnlyOnJoin(!!pushOnly)
 
-			reset()
-			setRole('join')
-			setStatus('connecting')
-			log('Joining with offer...')
+		reset()
+		setRole('join')
+		setStatus('connecting')
+		log('Joining with offer...')
 
-			const parsed = parseWebRTCRoomCode(raw)
-			if (parsed.kind !== 'offer') {
-				setError('That code is not an offer.')
-				return
-			}
-			if (parsed.crisisId && crisisId && parsed.crisisId !== crisisId) {
-				const ok = confirm(
-					`Offer crisisId mismatch.\n\nLocal: ${crisisId}\nOffer: ${parsed.crisisId}\n\nContinue anyway?`
-				)
-				if (!ok) return
-			}
+		const parsed = parseWebRTCRoomCode(raw)
+		if (parsed.kind !== 'offer') {
+			setError('That code is not an offer.')
+			return
+		}
+		if (parsed.crisisId && crisisId && parsed.crisisId !== crisisId) {
+			const ok = confirm(
+				`Offer crisisId mismatch.\n\nLocal: ${crisisId}\nOffer: ${parsed.crisisId}\n\nContinue anyway?`
+			)
+			if (!ok) return
+		}
 
-			const pc = new RTCPeerConnection({ iceServers: [] })
-			pcRef.current = pc
-			attachCommonHandlers(pc)
+		const pc = new RTCPeerConnection({ iceServers: [] })
+		pcRef.current = pc
+		attachCommonHandlers(pc)
 
-			pc.ondatachannel = (evt) => {
-				const dc = evt.channel
-				dcRef.current = dc
-				attachDataChannelHandlers(dc)
-				log('Received data channel from host.')
-			}
+		pc.ondatachannel = (evt) => {
+			const dc = evt.channel
+			dcRef.current = dc
+			attachDataChannelHandlers(dc)
+			log('Received data channel from host.')
+		}
 
-			await pc.setRemoteDescription(parsed.sdp)
+		await pc.setRemoteDescription(parsed.sdp)
 
-			const answer = await pc.createAnswer()
-			await pc.setLocalDescription(answer)
-			await waitForIceGatheringComplete(pc)
+		const answer = await pc.createAnswer()
+		await pc.setLocalDescription(answer)
+		await waitForIceGatheringComplete(pc)
 
-			const local = pc.localDescription
+		const local = pc.localDescription
 
-			const code = createWebRTCRoomCode({
-				kind: 'answer',
-				crisisId,
-				sdp: { type: local.type, sdp: local.sdp },
-			})
-
-			setAnswerCode(code)
-			log('Answer ready. Give it back to the host.')
-		},
-		[
-			attachCommonHandlers,
-			attachDataChannelHandlers,
-			canWebRTC,
+		const code = createWebRTCRoomCode({
+			kind: 'answer',
 			crisisId,
-			log,
-			reset,
-		]
-	)
+			sdp: { type: local.type, sdp: local.sdp },
+		})
 
-	const hostApplyAnswer = useCallback(
-		async (rawAnswerCode) => {
-			setError(null)
+		setAnswerCode(code)
+		log('Answer ready. Give it back to the host.')
+	}, [ attachCommonHandlers, attachDataChannelHandlers, canWebRTC, crisisId, log, reset,])
 
-			const raw = (rawAnswerCode || '').trim()
-			if (!raw) {
-				setError('Paste or scan an answer code first.')
-				return
-			}
+	const hostApplyAnswer = useCallback( async (rawAnswerCode) => {
+		setError(null)
 
-			const pc = pcRef.current
-			if (!pc) {
-				setError('No active host session. Create an offer first.')
-				return
-			}
+		const raw = (rawAnswerCode || '').trim()
+		if (!raw) {
+			setError('Paste or scan an answer code first.')
+			return
+		}
 
-			const parsed = parseWebRTCRoomCode(raw)
-			if (parsed.kind !== 'answer') {
-				setError('That code is not an answer.')
-				return
-			}
+		const pc = pcRef.current
+		if (!pc) {
+			setError('No active host session. Create an offer first.')
+			return
+		}
 
-			if (parsed.crisisId && crisisId && parsed.crisisId !== crisisId) {
-				const ok = confirm(
-					`Answer crisisId mismatch.\n\nLocal: ${crisisId}\nAnswer: ${parsed.crisisId}\n\nContinue anyway?`
-				)
-				if (!ok) return
-			}
+		const parsed = parseWebRTCRoomCode(raw)
+		if (parsed.kind !== 'answer') {
+			setError('That code is not an answer.')
+			return
+		}
 
-			log('Applying answer...')
-			await pc.setRemoteDescription(parsed.sdp)
-		},
-		[crisisId, log]
-	)
+		if (parsed.crisisId && crisisId && parsed.crisisId !== crisisId) {
+			const ok = confirm(
+				`Answer crisisId mismatch.\n\nLocal: ${crisisId}\nAnswer: ${parsed.crisisId}\n\nContinue anyway?`
+			)
+			if (!ok) return
+		}
+
+		log('Applying answer...')
+		await pc.setRemoteDescription(parsed.sdp)
+	}, [crisisId, log])
+
 
 	const sendPing = useCallback(() => {
 		sendJson({ t: 'krisys_p2p_ping', at: safeNow() })

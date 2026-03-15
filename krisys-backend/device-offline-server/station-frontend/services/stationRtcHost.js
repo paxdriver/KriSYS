@@ -166,6 +166,12 @@ export class StationRTCHost {
 				return
 			}
 
+			// Handle wallet inventory response
+			if (obj?.t === 'krisys_mesh_inventory_res_v1') {
+				await this._handleInventoryResponse(peerId, obj)
+				return
+			}
+
 			console.warn('Rejecting message before handshake')
 			return
 		}
@@ -210,6 +216,60 @@ export class StationRTCHost {
 		catch (e) {
 			console.error('Handshake failed:', e)
 			this._cleanupPeer(peerId)
+		}
+	}
+
+	// Handle wallet's inventory response and send requested payload
+	async _handleInventoryResponse(peerId, obj) {
+		const peer = this.peers.get(peerId)
+		if (!peer || !peer.sender) return
+		if (!peer.handshakeVerified) return
+
+		const id = obj.id
+		console.log('Station received inventory_res:', id)
+
+		try {
+			// 1. Fetch full station payload from backend
+			const res = await fetch(`${process.env.NEXT_PUBLIC_STATION_API}/mesh/sync`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					crisisId: this.crisisId,
+					queued: [],
+					blocks: []
+				})
+			})
+
+			const fullPayload = await res.json()
+			const allQueued = Array.isArray(fullPayload.queued) ? fullPayload.queued : []
+			const allBlocks = Array.isArray(fullPayload.blocks) ? fullPayload.blocks : []
+
+			// 2. Select only requested relay hashes
+			const wantRelay = Array.isArray(obj.want_relay_hashes) ? obj.want_relay_hashes.slice(0, 100) : []
+			const queuedToSend = allQueued.filter( m => wantRelay.includes(m?.relay_hash) )
+
+			// 3. Select block suffix if requested
+			let blocksToSend = []
+			if (typeof obj.want_blocks_from === 'number' && Number.isFinite(obj.want_blocks_from)) {
+				blocksToSend = allBlocks.filter(b => 
+					typeof b.block_index === 'number' &&
+					b.block_index >= obj.want_blocks_from).slice(0, 10)
+			}
+
+			// 4. Send payload
+			peer.sender.sendJson({
+				t: 'krisys_mesh_payload_v1',
+				id,
+				blocks: blocksToSend,
+				queued: queuedToSend,
+				sentAt: Date.now(),
+			})
+
+			console.log('Station sent payload:',`blocks=${blocksToSend.length}`,`queued=${queuedToSend.length}`)
+
+		}
+		catch (err) {
+			console.warn('Failed to send requested payload:', err)
 		}
 	}
 
