@@ -159,16 +159,10 @@ export class StationRTCHost {
 		const peer = this.peers.get(peerId)
 		if (!peer) return
 
-		// Mandatory handshake enforcement
+		// First, mandatory handshake enforcement
 		if (!peer.handshakeVerified) {
 			if (obj?.t === 'krisys_handshake_v1') {
 				await this._verifyHandshake(peerId, obj)
-				return
-			}
-
-			// Handle wallet inventory response
-			if (obj?.t === 'krisys_mesh_inventory_res_v1') {
-				await this._handleInventoryResponse(peerId, obj)
 				return
 			}
 
@@ -176,6 +170,13 @@ export class StationRTCHost {
 			return
 		}
 
+		// Then, Handle wallet inventory response
+		if (obj?.t === 'krisys_mesh_inventory_res_v1') {
+			await this._handleInventoryResponse(peerId, obj)
+			return
+		}
+
+		// Other handlers go here...
 		if (typeof this.onJsonMessage === 'function') {
 			await this.onJsonMessage(peerId, obj)
 		}

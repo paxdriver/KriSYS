@@ -75,7 +75,7 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 	const [trustedStations, setTrustedStations] = useState(() => crisisId ? disasterStorage.getStations({ crisisId }) : {})
 	const [selectedStationId, setSelectedStationId] = useState(null)
 
-	const { joinWithOffer } = useP2P()
+	const { joinWithOffer, p2pStationInventoryNow, status } = useP2P()
 	const [stationPools, setStationPools] = useState([])
 	const [loadingPools, setLoadingPools] = useState(false)
 	const [selectedOffer, setSelectedOffer] = useState('')
@@ -717,90 +717,6 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 							})
 						)}
 						
-						{/* AVAILABLE POOLS */}
-						<hr style={{ margin: '12px 0', opacity: 0.2 }} />
-
-						<div>
-							<div style={{ fontWeight: 700, marginBottom: '6px' }}>
-								Available Pools
-							</div>
-
-							<h3>Available Station Pools</h3>
-							{stationPools.length === 0 && (
-								<p>No station pools found.</p>
-							)}
-
-							{stationPools.map((pool) => (
-								<div key={pool.pool_id} style={{ marginBottom: 12 }}>
-									<strong>{pool.label || 'Station Pool'}</strong>
-									<br />
-									Pool ID: {pool.pool_id}
-									<br />
-									<button
-										onClick={() => {
-											const offer = prompt('Paste station offer code:')
-											if (!offer) return
-											joinWithOffer(offer)
-										}}
-									>
-										Connect
-									</button>
-								</div>
-							))}
-
-							<button
-								className="btn"
-								type="button"
-								onClick={fetchStationPools}
-								disabled={!selectedStationId || loadingPools}
-								style={{ marginBottom: '10px' }}
-							>
-								{loadingPools ? 'Loading...' : 'Refresh Pools'}
-							</button>
-
-							{/* {stationPools.length === 0 ? (
-								<div className="privacy-notice">
-									No active pools.
-								</div>
-							) : (
-								stationPools.map((pool) => {
-									const expiresIn = Math.max(
-										0,
-										pool.expires_at - Math.floor(Date.now() / 1000)
-									)
-
-									return (
-										<div key={pool.pool_id} className="contact-item">
-											<div>
-												<strong>{pool.label || 'Unnamed Pool'}</strong>
-												<div className="contact-address">
-													Host: {pool.host_device_id}
-												</div>
-												<div className="privacy-notice">
-													Expires in: {expiresIn}s
-												</div>
-											</div>
-
-											<div>
-												<button
-													className="btn"
-													type="button"
-													onClick={() => {
-														alert(
-															`Pool selected:\n` +
-															`Host device: ${pool.host_device_id}\n\n` +
-															`Now exchange WebRTC offer with host.`
-														)
-													}}
-												>
-													Connect
-												</button>
-											</div>
-										</div>
-									)
-								})
-							)} */}
-						</div>
 					</div>
 				</div>
 
@@ -837,6 +753,58 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 					)}
 				</div>
 			</div>
+				{/* AVAILABLE POOLS */}
+				<hr style={{ margin: '12px 0', opacity: 0.2 }} />
+
+				<div>
+					<div style={{ fontWeight: 700, marginBottom: '6px' }}>
+						Available Pools
+					</div>
+
+					<h3>Available Station Pools</h3>
+					{stationPools.length === 0 && (
+						<p>No station pools found.</p>
+					)}
+
+					{stationPools.map((pool) => (
+						<div key={pool.pool_id} style={{ marginBottom: 12 }}>
+							<strong>{pool.label || 'Station Pool'}</strong>
+							<br />
+							Pool ID: {pool.pool_id}
+							<br />
+							<button
+								onClick={() => {
+									const offer = prompt('Paste station offer code:')
+									if (!offer) return
+									joinWithOffer(offer)
+								}}
+							>
+								Connect
+							</button>
+						</div>
+					))}
+
+					<button
+						className="btn"
+						type="button"
+						onClick={fetchStationPools}
+						disabled={!selectedStationId || loadingPools}
+						style={{ marginBottom: '10px' }}
+					>
+						{loadingPools ? 'Loading...' : 'Refresh Pools'}
+					</button>
+
+					<button
+						className="btn"
+						type="button"
+						onClick={p2pStationInventoryNow}
+						disabled={status !== 'connected'}
+						style={{ marginTop: '8px' }}
+					>
+						Sync Station
+					</button>
+				</div>
+
 		</div>
 	)
 }

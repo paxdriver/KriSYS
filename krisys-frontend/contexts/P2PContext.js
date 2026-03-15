@@ -655,6 +655,46 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		}
 	}, [closeAfterDrain, crisisId, familyId, log, pushOnlyOnJoin, sendJson])
 
+	// Manually trigger inventory negotiation with station (station as host sync-ing with connected client)
+	const p2pStationInventoryNow = useCallback(() => {
+		setError(null)
+
+		if (status !== 'connected') {
+			log('station inventory aborted: not connected')
+			return
+		}
+
+		try {
+			// 1. Export local wallet state
+			const payload = disasterStorage.exportSyncPayload({
+				crisisId,
+				familyId,
+			})
+
+			// 2. Build bounded relay hash list
+			const relayHashes = (payload.queued || [])
+				.map(m => m?.relay_hash)
+				.filter(Boolean)
+				.slice(0, 100)
+
+			// 3. Send inventory message to station
+			sendJson({
+				t: 'krisys_mesh_inventory_v1',
+				id: makeId(),
+				crisisId,
+				chain_tip: payload.chain_tip || null,
+				relay_hashes: relayHashes,
+				sentAt: Date.now(),
+			})
+
+			log(`sent station inventory relay_count=${relayHashes.length}`)
+
+		} catch (e) {
+			setError(e?.message || String(e))
+		}
+	}, [status, crisisId, familyId, log, sendJson])
+
+
 	const value = useMemo(() => {
 		return {
 			canWebRTC,
@@ -683,6 +723,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			joinWithOffer,
 			hostApplyAnswer,
 			p2pSyncNow,
+			p2pStationInventoryNow,
 			sendPing,
 		}
 	}, [
@@ -696,6 +737,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		metrics,
 		offerCode,
 		p2pSyncNow,
+		p2pStationInventoryNow,
 		pushOnlyOnJoin,
 		remoteAnswerInput,
 		remoteOfferInput,
