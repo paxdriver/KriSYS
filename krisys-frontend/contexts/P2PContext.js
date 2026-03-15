@@ -656,38 +656,75 @@ export function P2PProvider({ children, crisisId, familyId }) {
 	}, [closeAfterDrain, crisisId, familyId, log, pushOnlyOnJoin, sendJson])
 
 	// Manually trigger inventory negotiation with station (station as host sync-ing with connected client)
-	const p2pStationInventoryNow = useCallback(() => {
+	const p2pStationInventoryNow = useCallback(async () => {
+		/*		When you click Sync Station:
+		a) Wallet reads its own block index
+		b) Wallet asks station for its block index (via /mesh/sync)
+		c) Logs both
+		d) Only triggers inventory if station is ahead
+
+		DEV NOTE: This will be expanded later for 1 station to pull from HQ, distribute to sister stations nearby on same LAN and/or include some sort of broadcast but for now it's a new button in ConnectionsPage to help keep dev tests separated until they're no longer needed.
+		*/
 		setError(null)
 
 		if (status !== 'connected') {
-			log('station inventory aborted: not connected')
+			log('station sync aborted: not connected')
 			return
 		}
 
 		try {
-			// 1. Export local wallet state
-			const payload = disasterStorage.exportSyncPayload({
+			// 1. Get local wallet chain tip
+			const localPayload = disasterStorage.exportSyncPayload({
 				crisisId,
 				familyId,
 			})
 
-			// 2. Build bounded relay hash list
-			const relayHashes = (payload.queued || [])
-				.map(m => m?.relay_hash)
-				.filter(Boolean)
-				.slice(0, 100)
+			const localTipIndex =
+				typeof localPayload.chain_tip?.block_index === 'number'
+					? localPayload.chain_tip.block_index
+					: -1
 
-			// 3. Send inventory message to station
-			sendJson({
-				t: 'krisys_mesh_inventory_v1',
-				id: makeId(),
-				crisisId,
-				chain_tip: payload.chain_tip || null,
-				relay_hashes: relayHashes,
-				sentAt: Date.now(),
-			})
+			// 2. Ask station for its current chain tip
+			const res = await fetch(
+				`${process.env.NEXT_PUBLIC_STATION_API}/mesh/sync`,
+				{
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						crisisId,
+						queued: [],
+						blocks: [],
+					}),
+				}
+			)
 
-			log(`sent station inventory relay_count=${relayHashes.length}`)
+			const stationPayload = await res.json()
+
+			const stationTipIndex =
+				typeof stationPayload.chain_tip?.block_index === 'number'
+					? stationPayload.chain_tip.block_index
+					: -1
+
+			log(
+				`station sync check local_tip=${localTipIndex} ` +
+				`station_tip=${stationTipIndex}`
+			)
+
+			// 3. If station is ahead, trigger inventory negotiation
+			if (stationTipIndex > localTipIndex) {
+				log('station ahead — requesting inventory')
+
+				sendJson({
+					t: 'krisys_mesh_inventory_v1',
+					id: makeId(),
+					crisisId,
+					chain_tip: localPayload.chain_tip || null,
+					relay_hashes: [],
+					sentAt: Date.now(),
+				})
+			} else {
+				log('station sync not needed — no new blocks')
+			}
 
 		} catch (e) {
 			setError(e?.message || String(e))

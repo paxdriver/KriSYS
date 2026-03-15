@@ -134,7 +134,7 @@ export class StationRTCHost {
 
 		const sender = createChunkSender({ dc })
 		const receiver = createChunkReceiver({
-			onJson: async obj => await this._handleIncoming(peerId, obj),
+			onJson: async obj => await this._handlePeerMessage(peerId, obj),
 		})
 
 		dc.onopen = () => { console.log('DC open:', peerId) }
@@ -154,31 +154,103 @@ export class StationRTCHost {
 		peer.receiver = receiver
 	}
 
-	//  Enforces handshake requirement before allowing peer messages through
-	async _handleIncoming(peerId, obj) {
+	// Handle wallet-initiated inventory negotiation
+	async _handleInventoryRequest(peerId, obj) {
+		const peer = this.peers.get(peerId)
+		if (!peer || !peer.sender) return
+		if (!peer.handshakeVerified) return
+
+		const id = obj.id
+		console.log('Station received inventory request:', id)
+
+		try {
+			// 1. Fetch full station state from backend
+			const res = await fetch(
+				`${process.env.NEXT_PUBLIC_STATION_API}/mesh/sync`,
+				{
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						crisisId: this.crisisId,
+						queued: [],
+						blocks: [],
+					}),
+				}
+			)
+
+			const fullPayload = await res.json()
+
+			const stationRelayHashes = (fullPayload.queued || [])
+				.map(m => m?.relay_hash)
+				.filter(Boolean)
+				.slice(0, 100)
+
+			const stationTipIndex = typeof fullPayload.chain_tip?.block_index === 'number' ? fullPayload.chain_tip.block_index : -1
+			const walletTipIndex = typeof obj.chain_tip?.block_index === 'number' ? obj.chain_tip.block_index : -1
+
+			// 2. Compute missing relay hashes (station perspective)
+			const walletRelayHashes = Array.isArray(obj.relay_hashes) ? obj.relay_hashes.slice(0, 100) : []
+			const wantRelay = stationRelayHashes.filter( rh => !walletRelayHashes.includes(rh) )
+
+			// 3. Determine if wallet needs blocks
+			let wantBlocksFrom = null
+
+			if (stationTipIndex > walletTipIndex) {
+				wantBlocksFrom = walletTipIndex + 1
+			}
+
+			// 4. Send inventory response back to wallet
+			peer.sender.sendJson({
+				t: 'krisys_mesh_inventory_res_v1',
+				id,
+				want_relay_hashes: wantRelay,
+				want_blocks_from: wantBlocksFrom,
+				sentAt: Date.now(),
+			})
+
+			console.log( 'Station sent inventory_res:', `want_relay=${wantRelay.length}`, `want_blocks_from=${wantBlocksFrom}`)
+
+		} catch (err) {
+			console.warn('Failed handling inventory request:', err)
+		}
+	}
+
+	// Handle protocol messages received from a connected peer
+	async _handlePeerMessage(peerId, obj) {
 		const peer = this.peers.get(peerId)
 		if (!peer) return
 
-		// First, mandatory handshake enforcement
+		const messageType = obj?.t
+
+		// 1. Handshake must happen first
 		if (!peer.handshakeVerified) {
-			if (obj?.t === 'krisys_handshake_v1') {
-				await this._verifyHandshake(peerId, obj)
-				return
+			switch (messageType) {
+				case 'krisys_handshake_v1':
+					await this._verifyHandshake(peerId, obj)
+					return
+
+				default:
+					console.warn('Rejecting message before handshake')
+					return
 			}
-
-			console.warn('Rejecting message before handshake')
-			return
 		}
 
-		// Then, Handle wallet inventory response
-		if (obj?.t === 'krisys_mesh_inventory_res_v1') {
-			await this._handleInventoryResponse(peerId, obj)
-			return
-		}
+		// 2. After handshake, route by message type
+		switch (messageType) {
 
-		// Other handlers go here...
-		if (typeof this.onJsonMessage === 'function') {
-			await this.onJsonMessage(peerId, obj)
+			case 'krisys_mesh_inventory_v1':
+				await this._handleInventoryRequest(peerId, obj)
+				return
+
+			case 'krisys_mesh_inventory_res_v1':
+				await this._handleInventoryResponse(peerId, obj)
+				return
+
+			default:
+				if (typeof this.onJsonMessage === 'function') {
+					await this.onJsonMessage(peerId, obj)
+				}
+				return
 		}
 	}
 
