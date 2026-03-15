@@ -34,9 +34,9 @@ def get_db_size_kb():
 	# Convert to Kilobytes (KB)
 	return size_bytes / 1024.0
 
-# ----------------------------------------------------------------------
+# -----------------------
 # TELEMETRY CONFIGURATION
-# ----------------------------------------------------------------------
+# -----------------------
 
 TIME_TIL_STATION_DEEMED_STALE = 120 	# Stations ping hq with status update every 60s, so 120s without a ping the station is stale
 

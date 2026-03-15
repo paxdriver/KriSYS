@@ -171,6 +171,7 @@ during future events of crisis requiring deployment of aid and volunteers.
 - Prune local queue when relay_hash is confirmed by a verified block
 
 ### Pooled rendezvous relays (offline infrastructure)
+**NOTE: Client WalletDashboard auto-sends krisys_handshake_v1 on dc.open**
 KriSYS does not require pairwise peer-to-peer gossip as the primary model.
 Instead, it uses pooled rendezvous sync:
 - Devices connect to a pool host (station / untrusted relay / temporary user pool)
@@ -682,6 +683,10 @@ LOCAL PORTS (DEV)
 - station-frontend: `http://localhost:6600` (station frontend UI)
 
 ***fake stations for devtools actions, NOT provisioned or conventional, dev only dummies**
+
+CORS origins for development:
+- `http://localhost:3000`
+- `http://localhost:6600`
 
 ---
 

@@ -195,7 +195,12 @@ export class StationRTCHost {
 			if (result?.trusted) {
 				console.log('Handshake verified for peer:', peerId)
 				const peer = this.peers.get(peerId)
-				if (peer) peer.handshakeVerified = true
+				if (peer) {
+					peer.handshakeVerified = true
+					
+					// Immediately send inventory after successful handshake
+					this.sendInventory(peerId)
+				}
 
 				if (typeof this.onPeerConnected === 'function') {
 					this.onPeerConnected(peerId)
@@ -205,6 +210,71 @@ export class StationRTCHost {
 		catch (e) {
 			console.error('Handshake failed:', e)
 			this._cleanupPeer(peerId)
+		}
+	}
+
+	// Send inventory to a specific peer after handshake verification
+	sendInventory(peerId) {
+		const peer = this.peers.get(peerId)
+		if (!peer || !peer.sender) return
+
+		// We do NOT auto-send if handshake not verified
+		if (!peer.handshakeVerified) return
+
+		try {
+			// Get local relay_hash inventory from station backend. Fetch via HTTP because this is station-frontend context
+			fetch(`${process.env.NEXT_PUBLIC_STATION_API}/mesh/inventory`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					crisisId: this.crisisId,
+					relay_hashes: [] // empty list → backend returns all known hashes
+				})
+			})
+			.then(res => res.json())
+			.then(data => {
+
+				// Extract relay hashes known by station
+				const relayHashes = Array.isArray(data?.missing_relay_hashes) ? [] : []
+
+				// We instead need full local known relay hashes.
+				// So we ask station backend directly for payload export.
+				return fetch(`${process.env.NEXT_PUBLIC_STATION_API}/mesh/sync`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						crisisId: this.crisisId,
+						queued: [],
+						blocks: []
+					})
+				})
+			})
+			.then(res => res.json())
+			.then(payload => {
+
+				// --- 2️⃣ Build inventory message ---
+				const message = {
+					t: 'krisys_mesh_inventory_v1',
+					id: crypto.randomUUID(), // correlation id
+					crisisId: this.crisisId,
+					chain_tip: payload.chain_tip || null,
+					relay_hashes: (payload.queued || [])
+						.map(m => m.relay_hash)
+						.filter(Boolean)
+						.slice(0, 100) // bound size
+				}
+
+				// --- 3️⃣ Send via chunked sender ---
+				peer.sender.sendJson(message)
+
+				console.log('Station inventory sent to peer:', peerId)
+			})
+			.catch(err => {
+				console.warn('Failed to send inventory:', err)
+			})
+
+		} catch (e) {
+			console.warn('Inventory error:', e)
 		}
 	}
 
