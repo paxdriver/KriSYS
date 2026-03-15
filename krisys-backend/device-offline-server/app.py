@@ -146,8 +146,8 @@ HEARTBEAT_INTERVAL_MS = 60_000  # 1 minute	DEV NOTE: probably can set this to ho
 ####### THESE VALUES ARE FOR DEVELOPMENT ONLY, WILL BE SET BY POLICY IN PROD
 # Storage pruning (DEV-TUNED DEFAULTS)
 QUEUED_TTL_MS = 7 * 24 * 60 * 60 * 1000
-QUEUED_HIGH_WATER = 40
-QUEUED_LOW_WATER = 20
+QUEUED_HIGH_WATER = 500
+QUEUED_LOW_WATER = 250
 QUEUED_SOFT_WATER = int(QUEUED_HIGH_WATER * 0.6) # heads up before the stop, just for soft warnings
 def is_storage_under_pressure(count: int) -> bool:
 	return count >= int(QUEUED_SOFT_WATER)
