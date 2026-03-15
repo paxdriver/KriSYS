@@ -91,37 +91,68 @@ during future events of crisis requiring deployment of aid and volunteers.
 
 ---
 ## Quick Start
-1. Clone the repo 
-    - use the latest branch "phase-five-react" at the time of writing this
-    - use the latest commit with "CP" or "CHECKPOINT" prefix to make sure you get the latest working state
-2. Run `docker-compose up --build` to spin up the blockchain, frontend, and a local station.
-3. Navigate to http://localhost:3000 to create a wallet with a passphrase.
-4. Log in to the wallet and use dev tools for some basic functionality tests
-5. Create a second wallet in another browser (separate local storage) and send messages side by side
-6. Play with the devtools for simulating offline so you can connect 2 wallets in offline mode by copy-pasting connection codes, sync offline messages
-7. Explore localhost:3000/explorer for the blockchain explorer, the way family members abroad can track loved ones and see the alerts practically live during a crisis
+
+1. Clone the repository
+- Use the latest branch (e.g. `phase-six-react` if applicable).
+- Use the latest commit with a `CP` or `CHECKPOINT` prefix to ensure a stable state.
+
+2. Start the full development environment
+- From the project root, run: `docker-compose up --build`
+- This spins up:
+	- HQ backend (blockchain + admin)
+	- Wallet frontend
+	- Station backend (local station instance)
+	- Station frontend (station UI)
+	- Relay backend
+
+3. Verify core services are running
+- HQ backend: http://localhost:5000
+- Wallet frontend: http://localhost:3000
+- Station backend API: http://localhost:6001
+- Station frontend UI: http://localhost:6600
+
+4. Create and use a wallet
+- Navigate to http://localhost:3000
+- Create a wallet with a passphrase.
+- Unlock the wallet and explore the dashboard.
+
+5. Test multi-wallet messaging
+- Open a second browser (or private window).
+- Create a second wallet (separate local storage).
+- Send encrypted messages between wallets.
+
+6. Test offline and P2P behavior
+- Use browser dev tools to simulate offline mode.
+- Use copy-paste signaling to establish WebRTC connections.
+- Test push-only and full sync flows between wallets and stations.
+
+7. Test station functionality
+- Open the station UI at http://localhost:6600
+- Verify:
+	- Station identity and fingerprint are displayed.
+	- WebRTC offer is generated.
+	- Pools are registered via `/station/pools`.
+- Connect a wallet to the station using manual offer/answer exchange.
+
+8. Monitor station and system state  
+- Visit http://localhost:5000/admin to view the admin panel.
+- Check station lifecycle, connectivity, and telemetry logs.
+
+9. Explore the blockchain
+- Visit http://localhost:3000/explorer
+- View blocks, transactions, and alerts as they are mined.
+
+10. Reset development state (optional)
+- Delete `blockchain/dev_policy_id.txt` to wipe:
+	- Blockchain database  
+	- Master keys
+	- Station data
+	- Relay data
+- Restart with `docker-compose up --build` for a clean slate then restart again with `docker-compose down; docker-compose up;` so that containers run with bootstrappings initialized.
 
 ---
 
-## Current Status
-### Current milestones: Phase 4 complete
-Phase 4 completed the lifecycle of stations, relays and central HQ mining
-- automatically mines
-- rate limiting transaction queues
-- checking for connectivity
-- thread locks for race condition mitigation
-- prioritizing messages
-- adaptive timing based on volume of transaction and queue sizes
-Phase 3 completed the “station pooled rendezvous” architecture:
-- offline message queuing on clients
-- station-side pooled relay and dedupe
-- station flush to central when connectivity returns
-- mined block confirmation propagation back through stations
-- offline check-in intake and flush via station
-- verified block propagation and confirmation pruning (relay_hash based)
-- Expand pooled rendezvous syncing to work without an authorized station (untrusted pool hosts and “dumb relays”), using the same inventory/sync rules.
-
-
+## Current Status: Phase 6 - Station/Peer Rendez-vous pools
 
 ---
 
@@ -291,13 +322,16 @@ UI rule:
 - Person‑to‑person messages
 
 ---
-TODO: Offline Gossip eviction rules, pruning algorithm
-TODO: Set eviction rules and priority system rules to policy
-TODO: client-side prune and eviction rules, set by user settings, not policy
-
+## High Level TO-DO list
+- Offline Gossip eviction rules, pruning algorithm.
+- Set eviction rules and priority system rules to policy.
+- Client-side prune and eviction rules, set by user settings, not policy.
+- Create a version for Native to allow access to mobile device AP (BLE, WIFI, NFC), camera, gestures, etc.
+- Finalize room protocol for hosting many 1-1 connections as a star network topology
+- Finalize station room protocol for sharing pool-to-pool
 ---
 
-## Pooled Rendezvous Relay Modes (Phase 3.8 direction)
+## Pooled Rendezvous Relay Modes
 
 KriSYS uses pooled rendezvous syncing rather than requiring pairwise peer gossip.
 
@@ -335,6 +369,15 @@ Operational model for safety and privacy:
 
 ## Check-in Stations (Authentication and Offline Behavior)
 
+**Definition:** Stations serve as trusted operational nodes during a crisis.
+- Perform check-ins via scanner and QR code workflows.
+- Display their identity and connection details for wallets to verify and connect.
+- Act as local access points and help balance load away from HQ.
+- Distribute blocks and relay queues between stations to improve resilience.
+- Coordinate offline gossip pools more efficiently as trusted brokers.
+- Cull duplicate transactions and reject malformed or invalid data before propagation.
+- Emit lifecycle and status events to HQ when connectivity is restored.
+
 ### Stations authenticate check-ins to the central backend via API key:
 - Header: X-Station-API-Key
 - Body includes:
@@ -347,20 +390,18 @@ Operational model for safety and privacy:
 - The station device can accept check-ins locally while offline and queue them.
 - When connectivity returns, the station flushes queued check-ins to central.
 - Confirmations are derived when the relay_hash appears in a verified block.
+- Station UI displays QR codes for "I can trust this is a real station" and "Here, check-in for yourself if scanner is broken or busy"
 
-Development note:
-- Station plaintext API keys are stored in:
-	station_identity_<STATION_ID>.json
-  in the station’s mounted volume so the station can flush check-ins without
-  manual copy/paste in dev.
-
-Stations have their own wallet addresses but become configured by a single first password entry upon activation. HQ provides their metadata, fixed plain text template message for handling check-ins, will later have their GUI launch for camera and station details to display to the public. Activated stations auto-login with api key from local storage after activation and fallback to relay status when offline. Connectivity loop checks for active connection and maintains blockchain and unconfirmed messages can be pushed to HQ from a station that has de-duped messages, verified hashes, and analyzed transaction for limits prescribed by the blockchain's policy when the KriSys blockchain was first set up.
-
-Stations do NOT rotate keys. They are completely reset and provided a new activation code by HQ if a new api key is required. Hard reset only mitigates risk of elevated message priority messages from being tampered with and simplifies revocation of station credentials by HQ when a device is intercepted or otherwise compromised.
----
+### Development notes about stations:
+- Station plaintext API keys are stored in: `station_identity_<STATION_ID>.json` in the station’s mounted volume so the station can flush check-ins without manual copy/paste in dev.
+- Stations have their own wallet addresses but become configured by a single first password entry upon activation. 
+- HQ provides their metadata, fixed plain text template message for handling check-ins, will later have their GUI launch for camera and station details to display to the public. 
+- Activated stations auto-login with api key from local storage after activation and fallback to relay status when offline. 
+- Connectivity loop checks for active connection and maintains blockchain and unconfirmed messages can be pushed to HQ from a station that has de-duped messages, verified hashes, and analyzed transaction for limits prescribed by the blockchain's policy when the KriSys blockchain was first set up.
+- Stations do NOT rotate keys. They are completely reset and provided a new activation code by HQ if a new api key is required. Hard reset only mitigates risk of elevated message priority messages from being tampered with and simplifies revocation of station credentials by HQ when a device is intercepted or otherwise compromised.
 ---
 
-### Summary of Communication Flow
+### Summary of KriSYS Communication Flow
 ```
 Station boots
     ↓
@@ -440,32 +481,37 @@ This triggers regeneration of:
 - central blockchain DB
 - master key files
 - station DB
-- station identity files
+- station identity files (relay-offline-server, device-offline-server, camp_central)
 
 This prevents accidental mixing of:
 - different crisis_id values
 - different block_public_key trust anchors
 - stale station provisioning data
 
+NOTE: camp_central is a volume mimicking a station built and provisioned, device-offline-server is the build.
+<br>
+NOTE: on clean slate the station will fail due to race condition with bootstrapping. this is dev-only. docker-compose restart station or docker-compose down; docker-compose up; and the station will be provisioned and activated thereafter.
+
 ---
 
 ## Development and Testing Notes (High level)
 
 Typical offline workflow tests:
-- create two wallets (A and B)
-- unlock once to cache needed keys
+- run bash scripts once from clean slate (requires container restarts) to seed stations and then provision 2 of them for testing
+- in browser, wallet dashboard frontend (port 3000) create two wallets (A and B)
+- unlock once to cache needed keys (self)
+- send messages while online (A to cache B, B to cache A)
 - send messages while “offline mode” is enabled (queued locally)
-- sync to a pool (authorized station in Phase 3.7)
-- flush station to central
-- mine a block
-- sync again to propagate blocks and confirmations
+- manual public key for new offline recipients also available by copy-paste
+- station UI displays meta details, self check-in QR, and trusted access point QR
+- sync to a pool offered by a trusted station on bulletin board (ConnectionsPage)
+- flush station to central, station to station, relay to station on auto loops
+- mine a block (HQ only, on auto loop after POST) confirms messages
 - verify queues prune only on confirmed relay_hash in verified blocks
-
-Phase 3.8 testing goal:
-- replicate “camp LAN” conditions using an isolated local network where a pool
-  host exists but central internet does not.
-- validate pooled rendezvous sync without manual copy/paste where possible
-  (local rendezvous host for signaling and/or pooled HTTP sync).
+- “camp LAN” conditions using an isolated local network where a pool host exists but internet does not
+- validate pooled rendezvous sync without manual copy/paste where possible (local rendezvous host for signaling and/or pooled HTTP sync)
+- central HQ can log station telemetry via event emitters stored in sql and strict categories in /admin to show statuses (admin_events table)
+- simulate offline behaviour with docker-compose stop -=station container=- or -=HQ container=-
 
 ---
 
@@ -517,11 +563,12 @@ Phase 3.8 testing goal:
 │   │   │	├── StationIdentity.js
 │   │   │	└── StationPool.js
 │   │   ├── services
-│   │   │	├── stationQr.js
+│   │   │	├── stationApi.js
 │   │   │	├── stationHandshake.js
-│   │   │	├── webrtcRoomCode.js
+│   │   │	├── stationQr.js
+│   │   │	├── stationRtcHost.js (multiple pairwise webrtc connections)
 │   │   │	├── webrtcChunking.js
-│   │   │	└── stationApi.js
+│   │   │	└── webrtcRoomCode.js
 │   │   ├── package.json
 │   │   └── next.config.js
 │   ├── station-data  (simulating offline station persistent storage for blockchain and message queues when gathering offline unconfirmed transactions)
@@ -628,12 +675,14 @@ Phase 3.8 testing goal:
 │   └── wallet_dashboard.css
 ```
 LOCAL PORTS (DEV)
-- backend: http://localhost:5000
-- frontend: http://localhost:3000
-- station: http://localhost:6001	(foodtruck*, hospital, station_001)
-- station: http://localhost:6003	(camp_central*)
-- station-frontend: http://localhost:6600 (station frontend UI)
-*fake stations for devtools actions, NOT provisioned or conventional, dev only dummies
+- backend: `http://localhost:5000`
+- frontend: `http://localhost:3000`
+- station: `http://localhost:6001`	(foodtruck*, hospital, station_001) 
+- station: `http://localhost:6003`	(camp_central*)
+- station-frontend: `http://localhost:6600` (station frontend UI)
+
+***fake stations for devtools actions, NOT provisioned or conventional, dev only dummies**
+
 ---
 
 ## Security and Privacy (What KriSYS tries to guarantee)
@@ -703,7 +752,7 @@ Core ledger + canonical chain rules:
 - Single canonical chain (no forks; conflicts ignored)
 - Central backend is the only miner (authoritative chain)
 - Blocks include:
-	- `block_index`, `timestamp` (seconds), `transactions`, `previous_hash`, `nonce`, `hash`, `signature`
+	- `block_index`, `timestamp` (integer seconds), `transactions`, `previous_hash`, `nonce`, `hash`, `signature`
 - Deterministic block hashing (non-negotiable):
 	- SHA-256 over UTF-8 bytes of canonical JSON body:
 		- `{ block_index, timestamp, transactions, previous_hash, nonce }`
@@ -903,7 +952,7 @@ Field-test artifacts:
 
 ---
 
-### Phase 6 — UX cleanup & optimization (In Progress)
+### Phase 6 — P2P pools & station operations (In Progress)
 Goal: improve usability without changing the trust model or protocol.
 
 Targets:
