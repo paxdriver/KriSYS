@@ -110,6 +110,7 @@ export class StationRTCHost {
 			sender: null,
 			receiver: null,
 			handshakeVerified: false,
+			role: 'wallet', 	// default assumption until handshake proves otherwise (station is alternative)
 		})
 
 		return { answerCode, peerId }
