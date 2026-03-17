@@ -112,8 +112,15 @@ STATION_STATE = {
 
 RUNTIME_STATE_LOCK = threading.Lock()
 
+# Inventory protocol bounds (must match wallet + station-frontend limits)
+# DEV NOTE: see also ->
+# 	- device-offline-server/station-frontend/services/stationRtcHost.js
+# 	- krisys-frontend/contexts/P2PContext.js
+MAX_QUEUED_PER_PAYLOAD = 100      # relay_hash cap per inventory exchange
+MAX_BLOCKS_PER_PAYLOAD = 10       # block suffix cap per payload
+
 # Abuse / safety limits (keep bounded to protect station)
-MAX_QUEUED_PER_PAYLOAD = 100
+MAX_BLOCKS_STORED = 25
 MAX_CONFIRMED_PER_PAYLOAD = 500
 MAX_PER_ORIGIN = 50
 MAX_MESSAGE_LENGTH = 8192
@@ -121,9 +128,6 @@ MAX_ADDRESSES_PER_TX = 16
 MAX_ADDRESS_LENGTH = 128
 MAX_STATION_ADDRESS_LENGTH = 128
 MAX_TYPE_FIELD_LENGTH = 32
-
-MAX_BLOCKS_PER_PAYLOAD = 10
-MAX_BLOCKS_STORED = 25
 
 # Inventory request cap (relay_hashes only)
 RELAY_HASH_CAP = 1000

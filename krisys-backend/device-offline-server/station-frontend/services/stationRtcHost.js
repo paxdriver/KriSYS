@@ -21,6 +21,8 @@
 import { createChunkSender, createChunkReceiver, makeId } from './webrtcChunking'
 import { createWebRTCRoomCode, parseWebRTCRoomCode } from './webrtcRoomCode'
 import { performStationHandshake } from './stationHandshake'
+const INVENTORY_MAX_RELAY_HASHES = 100	// DEV NOTE: Set this by env var when building policy wizard
+const INVENTORY_MAX_BLOCKS = 10 		// DEV NOTE: Set this by env var when building policy wizard
 
 export class StationRTCHost {
 	// initialize station host state and peer registry
@@ -183,13 +185,13 @@ export class StationRTCHost {
 			const stationRelayHashes = (fullPayload.queued || [])
 				.map(m => m?.relay_hash)
 				.filter(Boolean)
-				.slice(0, 100)
+				.slice(0, INVENTORY_MAX_RELAY_HASHES)
 
 			const stationTipIndex = typeof fullPayload.chain_tip?.block_index === 'number' ? fullPayload.chain_tip.block_index : -1
 			const walletTipIndex = typeof obj.chain_tip?.block_index === 'number' ? obj.chain_tip.block_index : -1
 
 			// 2. Compute missing relay hashes (station perspective)
-			const walletRelayHashes = Array.isArray(obj.relay_hashes) ? obj.relay_hashes.slice(0, 100) : []
+			const walletRelayHashes = Array.isArray(obj.relay_hashes) ? obj.relay_hashes.slice(0, INVENTORY_MAX_RELAY_HASHES) : []
 			const wantRelay = stationRelayHashes.filter( rh => !walletRelayHashes.includes(rh) )
 
 			// 3. Determine if wallet needs blocks
@@ -318,18 +320,28 @@ export class StationRTCHost {
 			const allBlocks = Array.isArray(fullPayload.blocks) ? fullPayload.blocks : []
 
 			// 2. Select only requested relay hashes
-			const wantRelay = Array.isArray(obj.want_relay_hashes) ? obj.want_relay_hashes.slice(0, 100) : []
-			const queuedToSend = allQueued.filter( m => wantRelay.includes(m?.relay_hash) )
+			const wantRelay = Array.isArray(obj.want_relay_hashes) ? obj.want_relay_hashes.slice(0, INVENTORY_MAX_RELAY_HASHES) : []
+			let queuedToSend = allQueued.filter( m => wantRelay.includes(m?.relay_hash) )
 
 			// 3. Select block suffix if requested
 			let blocksToSend = []
 			if (typeof obj.want_blocks_from === 'number' && Number.isFinite(obj.want_blocks_from)) {
 				blocksToSend = allBlocks.filter(b => 
 					typeof b.block_index === 'number' &&
-					b.block_index >= obj.want_blocks_from).slice(0, 10)
+					b.block_index >= obj.want_blocks_from).slice(0, INVENTORY_MAX_BLOCKS)
 			}
 
-			// 4. Send payload
+			// 4. Defensive bounds enforcement before sending payload
+			if (blocksToSend.length > INVENTORY_MAX_BLOCKS) {
+				console.warn('Trimming blocksToSend from', blocksToSend.length, 'to', INVENTORY_MAX_BLOCKS)
+				blocksToSend = blocksToSend.slice(0, INVENTORY_MAX_BLOCKS)	// easy refactor, separated for readability
+			}
+			if (queuedToSend.length > INVENTORY_MAX_RELAY_HASHES) {
+				console.warn('Trimming queuedToSend from', queuedToSend.length,'to',INVENTORY_MAX_RELAY_HASHES)
+				queuedToSend = queuedToSend.slice(0, INVENTORY_MAX_RELAY_HASHES) // easy refactor, separated for readability
+			}
+
+			// 5. Send bounded payload
 			peer.sender.sendJson({
 				t: 'krisys_mesh_payload_v1',
 				id,
@@ -339,7 +351,6 @@ export class StationRTCHost {
 			})
 
 			console.log('Station sent payload:',`blocks=${blocksToSend.length}`,`queued=${queuedToSend.length}`)
-
 		}
 		catch (err) {
 			console.warn('Failed to send requested payload:', err)
@@ -366,12 +377,10 @@ export class StationRTCHost {
 			})
 			.then(res => res.json())
 			.then(data => {
-
-				// Extract relay hashes known by station
+				// 1) Extract relay hashes known by station
 				const relayHashes = Array.isArray(data?.missing_relay_hashes) ? [] : []
 
-				// We instead need full local known relay hashes.
-				// So we ask station backend directly for payload export.
+				// We instead need full local known relay hashes so we ask station backend directly for payload export
 				return fetch(`${process.env.NEXT_PUBLIC_STATION_API}/mesh/sync`, {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
@@ -384,8 +393,7 @@ export class StationRTCHost {
 			})
 			.then(res => res.json())
 			.then(payload => {
-
-				// --- 2️⃣ Build inventory message ---
+				// 2) Build inventory message
 				const message = {
 					t: 'krisys_mesh_inventory_v1',
 					id: crypto.randomUUID(), // correlation id
@@ -394,10 +402,9 @@ export class StationRTCHost {
 					relay_hashes: (payload.queued || [])
 						.map(m => m.relay_hash)
 						.filter(Boolean)
-						.slice(0, 100) // bound size
+						.slice(0, INVENTORY_MAX_RELAY_HASHES) // bound size
 				}
-
-				// --- 3️⃣ Send via chunked sender ---
+				// 3) Send via chunked sender
 				peer.sender.sendJson(message)
 
 				console.log('Station inventory sent to peer:', peerId)
