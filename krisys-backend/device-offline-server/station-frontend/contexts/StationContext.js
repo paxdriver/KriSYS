@@ -2,130 +2,72 @@
 'use client'
 
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
-import { StationRTCHost } from '../services/stationRtcHost'
-import { createWebRTCRoomCode } from '../services/webrtcRoomCode'
+import { createWebRTCRoomCode, parseWebRTCRoomCode } from '../services/webrtcRoomCode'
 
 const StationContext = createContext(null)
 
 export function StationProvider({ profile, children }) {
-	const hostRef = useRef(null)
+	const currentPeerIdRef = useRef(null)
 
 	const [offerCode, setOfferCode] = useState('')
-	const [poolId, setPoolId] = useState(null)
-	const [peers, setPeers] = useState([]) // dev visibility only
+	const [activePeers, setActivePeers] = useState([]) // dev only
 
-	// Initialize host once profile is available
 	useEffect(() => {
 		if (!profile) return
-
-		const host = new StationRTCHost({
-			crisisId: profile.crisis_id,
-		})
-
-		// Track connections for dev visibility
-		host.onPeerConnected = (peerId) => {
-			setPeers(prev => [...prev, peerId])
-		}
-
-		host.onPeerDisconnected = (peerId) => {
-			setPeers(prev => prev.filter(id => id !== peerId))
-		}
-
-		hostRef.current = host
-
-		createOffer()
-
+		// createOffer()
 	}, [profile])
 
-	// Create a new offer and publish pool
 	async function createOffer() {
-		const host = hostRef.current
-		if (!host) return
-
-		const pc = new RTCPeerConnection({ iceServers: [] })
-		const dc = pc.createDataChannel('krisys', { ordered: true })
-
-		const peerId = crypto.randomUUID()
-
-		host.peers.set(peerId, {
-			pc,
-			dc: null,
-			sender: null,
-			receiver: null,
-			handshakeVerified: false,
-			role: 'wallet',
+		const res = await fetch('http://localhost:7000/offer', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' }
 		})
+		const data = await res.json()
 
-		host._attachDataChannel(peerId, pc, dc)
+		const { peerId, offer } = data
 
-		const offer = await pc.createOffer()
-		await pc.setLocalDescription(offer)
-
-		await waitForIce(pc)
-
-		const local = pc.localDescription
+		currentPeerIdRef.current = peerId
 
 		const code = createWebRTCRoomCode({
 			kind: 'offer',
 			crisisId: profile.crisis_id,
-			sdp: {
-				type: local.type,
-				sdp: local.sdp,
-			},
+			sdp: offer
 		})
 
 		setOfferCode(code)
+	}
 
-		const id = crypto.randomUUID()
-		setPoolId(id)
+	async function applyAnswer(answerCode) {
+		const peerId = currentPeerIdRef.current
+		if (!peerId) throw new Error('No active offer')
 
-		await fetch(`${process.env.NEXT_PUBLIC_STATION_API}/station/pools`, {
+		const parsed = parseWebRTCRoomCode(answerCode)
+
+		if (parsed.kind !== 'answer') {
+			throw new Error('Expected answer code')
+		}
+
+		await fetch('http://localhost:7000/answer', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({
-				pool_id: id,
-				host_device_id: 'station',
-				label: 'Station Pool',
-				ttl_seconds: 300,
-			}),
-		})
-	}
-
-	// Apply wallet answer and immediately generate next offer
-	async function applyAnswer(answerCode) {
-		const host = hostRef.current
-		if (!host) return
-
-		const openPeer = [...host.peers.entries()]
-			.reverse()
-			.find(([id, p]) => p.pc && !p.pc.remoteDescription)
-
-		if (!openPeer) throw new Error('No pending offer found')
-
-		const [peerId] = openPeer
-
-		await host.applyAnswerFromPeer(peerId, answerCode)
-
-		// Immediately create next offer
-		await createOffer()
-	}
-
-	function waitForIce(pc) {
-		return new Promise((resolve) => {
-			if (pc.iceGatheringState === 'complete') return resolve()
-			pc.addEventListener('icegatheringstatechange', () => {
-				if (pc.iceGatheringState === 'complete') resolve()
+				peerId,
+				answer: parsed.sdp
 			})
 		})
+
+		// For dev visibility only
+		setActivePeers(prev => [...prev, peerId])
+
+		// Immediately generate next offer
+		await createOffer()
 	}
 
 	return (
 		<StationContext.Provider value={{
 			offerCode,
-			poolId,
-			peers,
-			applyAnswer,
-			createOffer,
+			activePeers,
+			applyAnswer
 		}}>
 			{children}
 		</StationContext.Provider>

@@ -7,18 +7,8 @@ export default function StationIdentity({ profile }) {
 	return (
 		<div>
 			<h2>Station Identity</h2>
-
-			<div>
-				<strong>Station ID:</strong>
-				<div>{profile.station_id}</div>
-			</div>
-
-			<div>
-				<strong>Fingerprint:</strong>
-				<div style={{ wordBreak: 'break-all' }}>
-					{profile.fingerprint}
-				</div>
-			</div>
+			<div><strong>Station ID:</strong> {profile.station_id}</div>
+			<div><strong>Fingerprint:</strong> {profile.fingerprint}</div>
 		</div>
 	)
 }

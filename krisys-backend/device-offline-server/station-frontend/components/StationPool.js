@@ -5,7 +5,7 @@ import { useState } from 'react'
 import { useStation } from '../contexts/StationContext'
 
 export default function StationPool() {
-	const { offerCode, peers, applyAnswer } = useStation()
+	const { offerCode, activePeers, applyAnswer } = useStation()
 	const [answerInput, setAnswerInput] = useState('')
 
 	return (
@@ -33,8 +33,8 @@ export default function StationPool() {
 			<h3 style={{ marginTop: 30 }}>Active Connections (Dev Only)</h3>
 
 			<ul>
-				{peers.map((peerId) => (
-					<li key={peerId}>{peerId}</li>
+				{activePeers.map(id => (
+					<li key={id}>{id}</li>
 				))}
 			</ul>
 		</div>

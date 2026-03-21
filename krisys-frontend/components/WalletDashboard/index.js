@@ -33,6 +33,15 @@ export default function WalletDashboard({ walletData, transactions = [], familyI
         }
     }, [crisisId, familyId, privateKey])
 
+    // Updates to saved blockchain in localStorage (ie: DisasterStorage class) will trigger some components to re-render
+    useEffect(() => {
+        function onUpdate() {
+            setRefreshTick(t => t + 1)
+        }
+        window.addEventListener('krisys:blockchain_updated', onUpdate)
+        return () => window.removeEventListener('krisys:blockchain_updated', onUpdate)
+    }, [])
+
     // Listen for URL changes from any component Page and update currentPage to perform the route
     useEffect(() => {
         const urlPage = searchParams.get('page')

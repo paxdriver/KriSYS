@@ -7,7 +7,7 @@ import { createWebRTCRoomCode, parseWebRTCRoomCode } from '@/services/webrtcRoom
 import { createChunkReceiver, createChunkSender, makeId } from '@/services/webrtcChunking'
 const INVENTORY_MAX_RELAY_HASHES = 100	// DEV NOTE: Set this by env var when building policy wizard
 const INVENTORY_MAX_BLOCKS = 10			// DEV NOTE: Set this by env var when building policy wizard
-
+const STATION_SIGNAL_URL = 'http://localhost:7000'
 const P2PContext = createContext(null)
 
 function waitForIceGatheringComplete(pc, timeoutMs = 12000) {
@@ -484,6 +484,88 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		}
 	}, [handleIncomingJson, log])
 
+
+	// Connect to Station Node WebRTC host
+	const connectToStation = useCallback(async () => {
+		setError(null)
+
+		if (!canWebRTC) {
+			setError('WebRTC not available in this browser.')
+			return
+		}
+
+		reset()
+		setRole('join')
+		setStatus('connecting')
+		log('Requesting offer from station...')
+
+		try {
+			// 1. Ask station Node for a new offer
+			const offerResp = await fetch(`${STATION_SIGNAL_URL}/offer`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' }
+			})
+
+			if (!offerResp.ok) {
+				throw new Error(`Offer request failed: ${offerResp.status}`)
+			}
+
+			const { peerId, offer } = await offerResp.json()
+
+			log(`Received offer from station (peerId=${peerId})`)
+
+			// 2. Create local RTCPeerConnection
+			const pc = new RTCPeerConnection({ iceServers: [] })
+			pcRef.current = pc
+
+			attachCommonHandlers(pc)
+
+			// 3. Listen for data channel from station
+			pc.ondatachannel = (evt) => {
+				const dc = evt.channel
+				dcRef.current = dc
+				attachDataChannelHandlers(dc)
+				log('Data channel received from station')
+			}
+
+			// 4. Apply station's offer
+			await pc.setRemoteDescription(offer)
+
+			// 5. Generate answer
+			const answer = await pc.createAnswer()
+			await pc.setLocalDescription(answer)
+
+			await waitForIceGatheringComplete(pc)
+
+			// 6. Send answer back to station Node
+			const answerResp = await fetch(`${STATION_SIGNAL_URL}/answer`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					peerId,
+					answer: pc.localDescription
+				})
+			})
+
+			if (!answerResp.ok) {
+				throw new Error(`Answer POST failed: ${answerResp.status}`)
+			}
+
+			log('Answer sent to station')
+
+		} catch (e) {
+			setError(e?.message || String(e))
+		}
+	}, [
+		canWebRTC,
+		reset,
+		log,
+		attachCommonHandlers,
+		attachDataChannelHandlers
+	])
+
+
+
 	const createHostOffer = useCallback(async () => {
 		setError(null)
 
@@ -582,6 +664,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		setAnswerCode(code)
 		log('Answer ready. Give it back to the host.')
 	}, [ attachCommonHandlers, attachDataChannelHandlers, canWebRTC, crisisId, log, reset,])
+	
 
 	const hostApplyAnswer = useCallback( async (rawAnswerCode) => {
 		setError(null)
@@ -778,6 +861,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			setPushOnlyOnJoin,
 
 			reset,
+			connectToStation,
 			createHostOffer,
 			joinWithOffer,
 			hostApplyAnswer,
@@ -788,6 +872,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 	}, [
 		answerCode,
 		canWebRTC,
+		connectToStation,
 		createHostOffer,
 		error,
 		hostApplyAnswer,

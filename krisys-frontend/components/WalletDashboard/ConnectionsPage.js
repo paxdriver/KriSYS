@@ -75,7 +75,7 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 	const [trustedStations, setTrustedStations] = useState(() => crisisId ? disasterStorage.getStations({ crisisId }) : {})
 	const [selectedStationId, setSelectedStationId] = useState(null)
 
-	const { joinWithOffer, p2pStationInventoryNow, status } = useP2P()
+	const { joinWithOffer, p2pStationInventoryNow, status, connectToStation } = useP2P()
 	const [stationPools, setStationPools] = useState([])
 	const [loadingPools, setLoadingPools] = useState(false)
 	const [selectedOffer, setSelectedOffer] = useState('')
@@ -802,6 +802,14 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 						style={{ marginTop: '8px' }}
 					>
 						Sync Station
+					</button>
+
+					<button
+						className="btn"
+						type="button"
+						onClick={connectToStation}
+					>
+						CONNECT TO STATION
 					</button>
 				</div>
 

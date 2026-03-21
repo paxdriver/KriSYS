@@ -40,6 +40,7 @@ services:
       dockerfile: ./device-offline-server/Dockerfile
     ports:
       - "6001:5000"
+      - "7000:7000"
     environment:
       - FLASK_ENV=development
       - CENTRAL_API_URL=http://backend:5000
@@ -47,6 +48,7 @@ services:
     volumes:
       # DEV: local folder where station stores its own mesh DB/cache
       - ./krisys-backend/device-offline-server/station-data:/app/data
+      - ./krisys-backend/device-offline-server/rtc-host:/app/rtc-host
     depends_on:
       - backend
   relay:

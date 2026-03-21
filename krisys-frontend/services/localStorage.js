@@ -1029,6 +1029,7 @@ class DisasterStorage {
 
 			if (accepted.length) {
 				this.saveBlockchain({ crisisId, blocks: accepted })
+				this._emit('krisys:blockchain_updated')
 				console.log(`Imported ${accepted.length} canonical block(s) from peer into empty local chain.`)
 			}
 			return

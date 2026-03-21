@@ -639,7 +639,8 @@ def db_put_block_verified(block: dict) -> None:
 		conn.execute(
 			"""
 			DELETE FROM blocks
-			WHERE block_index NOT IN (
+			WHERE block_index != 0
+			AND block_index NOT IN (
 				SELECT block_index
 				FROM blocks
 				ORDER BY block_index DESC
@@ -737,6 +738,16 @@ def update_station_mode() -> None:
 		# reload once in case provisioning just happened
 		reload_station_identity_in_memory()
 		has_identity = _station_identity is not None
+
+	# DEV NOTE: DEBUGGING
+	logger.info(
+		"MODE CHECK identity=%s anchor=%s genesis=%s crisisId=%s block_pub=%s",
+		has_identity,
+		has_anchor,
+		has_genesis,
+		crisis_id,
+		bool(pub),
+	)
 
 	if has_identity and has_anchor and has_genesis:
 		STATION_STATE["mode"] = "station"
@@ -836,12 +847,18 @@ def flush_station_events_to_hq():
 def require_station_mode() -> tuple[bool, str]:
 	update_station_mode()
 
+	mode = STATION_STATE.get('mode')
+	logger.info("MODE INSIDE required_station_mode GUARD: %s", mode)
+
 	if STATION_STATE.get("mode") != "station":
 		return False, f"Station-only endpoint (mode={STATION_STATE.get('mode')})"
 
 	return True, ""
 def require_relay_or_station_mode() -> tuple[bool, str]:
 	update_station_mode()
+
+	mode = STATION_STATE.get('mode')
+	logger.info("MODE INSIDE require_relay_or_station_mode GUARD: %s", mode)
 
 	if STATION_STATE.get("mode") not in ("station", "relay"):
 		return False, f"Relay endpoint unavailable (mode={STATION_STATE.get('mode')})"
@@ -854,6 +871,9 @@ def has_usable_chain() -> bool:
 
 def require_usable_relay() -> tuple[bool, str]:
 	update_station_mode()
+
+	mode = STATION_STATE.get('mode')
+	logger.info("MODE INSIDE require_usable_relay GUARD: %s", mode)
 
 	if STATION_STATE.get("mode") not in ("station", "relay"):
 		return False, f"Relay unavailable (mode={STATION_STATE.get('mode')})"
@@ -1159,10 +1179,7 @@ def db_prune_queued() -> dict:
 		if remaining <= int(QUEUED_HIGH_WATER):
 			if remaining <= int(QUEUED_LOW_WATER):
 				if db_get_intake_paused():
-					logger.info(
-						"Queued reduced to %d, resuming STATION intake",
-						remaining,
-					)
+					logger.info("Queued reduced to %d, resuming STATION intake",remaining,)
 					db_set_intake_paused(False)
 
 			conn.commit()
@@ -1224,10 +1241,7 @@ def db_prune_queued() -> dict:
 		# Eviction completed — resume intake if we've recovered enough STATION HDD space
 		if remaining <= int(QUEUED_LOW_WATER):
 			if db_get_intake_paused():
-				logger.info(
-					"Queued reduced to %d, resuming STATION intake",
-					remaining,
-				)
+				logger.info("Queued reduced to %d, resuming STATION intake", remaining,)
 				db_set_intake_paused(False)
 
 		conn.commit()
@@ -1367,14 +1381,12 @@ def bootstrap_station_or_die() -> None:
 			break
 		except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
 			if attempt < max_retries:
-				logger.warning(f"Failed to reach central (attempt {attempt}): {e}. " f"Retrying in {retry_delay}s...")
+				logger.warning(f"Failed to reach central (attempt {attempt}): {e}. Retrying in {retry_delay}s...")
 				time.sleep(retry_delay)
 				retry_delay = min(retry_delay * 2, 10)  # cap at 10s
 			else:
 				logger.error(f"Failed to bootstrap after {max_retries} attempts.")
-				raise RuntimeError(
-					f"Could not reach central backend after {max_retries} retries: {e}"
-				) from e
+				raise RuntimeError(f"Could not reach central backend after {max_retries} retries: {e}") from e
 	
 	#############################
 	chain = resp.json()
@@ -1469,7 +1481,7 @@ CENTRAL_MAX_BACKOFF_MS = 30_000
 # 	180_000,	# medium
 # 	600_000,	# casual max
 # ]
-SYNC_TIERS_MS = [10_000, 30_000, 60_000] # DEV NOTE: faster timings are being used for development iteration
+SYNC_TIERS_MS = [5_000, 10_000, 20_000] # DEV NOTE: faster timings are being used for development iteration
 NO_WORK_ESCALATE_AFTER = 3
 
 # Sync between HQ
@@ -1505,7 +1517,6 @@ RUNTIME_STATE = {
 # ----------------------------
 # Block verification + confirmations
 # ----------------------------
-
 def compute_block_hash(block: dict) -> str | None:
 	"""
 	Recompute block hash(body) using the exact canonical JSON rules used by
@@ -1600,10 +1611,12 @@ def process_incoming_blocks(incoming_blocks: list[dict]) -> int:
 		# Integrity: hash(body)
 		expected = compute_block_hash(b)
 		if not expected or expected != b["hash"]:
+			logger.info("HASH MISMATCH at index %d", b["block_index"])
 			continue
 
 		# Authenticity: signature(header)
 		if not verify_block_signature(b, block_public_key):
+			logger.info("SIGNATURE FAIL at index %d", b["block_index"])
 			continue
 
 		# Verified => store
@@ -1766,10 +1779,15 @@ def export_station_payload() -> dict:
 	Build a sync payload from the station's persisted state.
 	Clients use this to update their local caches.
 	"""
+
+	mode = STATION_STATE.get("mode")
+	logger.info("MODE INSIDE export_station_payload: %s", mode)
+
 	now_ms = int(time.time() * 1000)
 	STATION_STATE["crisisId"] = db_get_meta("crisisId")
 
-	blocks = db_list_blocks(MAX_BLOCKS_PER_PAYLOAD)
+	blocks = db_list_blocks(10_000) # DEV NOTE: DEBUGGING STATION PULL
+	# blocks = db_list_blocks(MAX_BLOCKS_PER_PAYLOAD)
 	last_block = blocks[-1] if blocks else None
 
 	chain_tip = None
@@ -1820,11 +1838,16 @@ except Exception as e:
 def health():
 	update_station_mode()
 
+	logger.info("HEALTH ENDPOINT PID: %d", os.getpid())
+
 	# DEV TEST ----
 	refresh_peer_stations_from_hq() 
 	with station_db() as conn:
 		rows = conn.execute("SELECT station_id FROM station_peers").fetchall()
 		peer_ids = [r["station_id"] for r in rows]
+
+	mode = STATION_STATE.get("mode")
+	logger.info("MODE INSIDE /health: %s", mode)
 	# -------------
 
 	return jsonify({
@@ -1912,6 +1935,9 @@ def station_profile():
 	identity = get_station_device_identity()
 	if not identity:
 		return jsonify({"error": "Station identity unavailable"}), 500
+	
+	mode = STATION_STATE.get("mode")
+	logger.info("MODE INSIDE station_profile(): %s", mode)
 
 	return jsonify({
 		"station_id": identity["station_id"],
@@ -1973,9 +1999,7 @@ def station_handshake():
 
 	# --- Build message to sign ---
 	# Important: exact ordering must be consistent for verification
-	message = (
-		f"{STATION_ID}|{crisis_id}|{client_nonce}|{station_nonce}"
-	).encode("utf-8")
+	message = (f"{STATION_ID}|{crisis_id}|{client_nonce}|{station_nonce}").encode("utf-8")
 
 	# --- Sign message ---
 	try:
@@ -2353,6 +2377,7 @@ def mesh_sync():
 		db_put_checkin_queued(chk)
 
 	payload = export_station_payload()
+	
 	return jsonify(payload), 200
 
 
@@ -2490,17 +2515,55 @@ def flush_to_central_internal() -> dict:
 	pull_error = None
 
 	try:
+		logger.info("=== STATION PULL START ===")
+
 		resp = requests.get(f"{CENTRAL_URL}/blockchain", timeout=15)
 		resp.raise_for_status()
 		chain = resp.json()
 
 		if isinstance(chain, list) and chain:
-			suffix = chain[-MAX_BLOCKS_STORED:]
-			pulled_blocks_stored = process_incoming_blocks(suffix)
+			logger.info("Central chain tip: %s", chain[-1]["block_index"])
+			logger.info("Station DB tip before pull: %s", db_get_block_hash(len(chain) - 1))
+
+			# Determine local tip
+			local_blocks = db_list_blocks(limit=1)
+			local_tip = local_blocks[-1] if local_blocks else None
+
+			if local_tip:
+				local_index = int(local_tip.get("block_index", -1))
+			else:
+				local_index = -1
+
+			# Pull ALL blocks newer than local tip
+			suffix = [
+				b for b in chain
+				if isinstance(b, dict)
+				and isinstance(b.get("block_index"), int)
+				and b["block_index"] > local_index
+			]
+
+			if suffix:
+				logger.info(f"Pulling {len(suffix)} missing blocks from HQ")
+				pulled_blocks_stored = process_incoming_blocks(suffix)
+			else:
+				pulled_blocks_stored = 0
+
+			logger.info("Central chain tip: %s", chain[-1]["block_index"])
+
+			with station_db() as conn:
+				rows = conn.execute(
+					"SELECT block_index FROM blocks ORDER BY block_index DESC LIMIT 5"
+				).fetchall()
+				logger.info("Station DB tip after pull: %s", [r["block_index"] for r in rows])
+
 		else:
 			pull_error = "Central /blockchain returned empty or invalid chain"
+
+		logger.info("=== STATION PULL END ===")
+
 	except Exception as e:
 		pull_error = str(e)
+		logger.error("Pull error: %s", pull_error)
 
 	# Record operational summary and send to HQ for general data to help with aid distribution and station state changes
 	record_station_event(
@@ -2625,13 +2688,14 @@ def _sync_note_work(did_work: bool) -> None:
 def perform_sync_attempt() -> bool:
 	update_station_mode()
 	mode = STATION_STATE.get("mode")
+	logger.info("MODE INSIDE perform_sync_attempt: %s", mode)
+
 	did_work = False
 
 	try:
 		# Station: flush (posts + pulls blocks)
 		if mode == "station":
 			result = flush_to_central_internal()
-
 			msg_ok = int(result.get("messages", {}).get("success") or 0) > 0
 			ci_ok = int(result.get("checkins", {}).get("success") or 0) > 0
 			blk_ok = int(result.get("pulled_blocks_stored") or 0) > 0
@@ -2711,7 +2775,11 @@ def background_loop():
 	last_online_state = get_last_online_state()		# Persisted metadata
 	last_mode_state = get_last_mode_state()			# Persisted metadata
 
+	SYNC_STATE["next_sync_at_ms"] = 0 	# ensures the first iteration runs immediately
 	logger.info(STOP_EVENT)
+	
+	RUNTIME_STATE["next_central_check_at_ms"] = 0
+	logger.info(RUNTIME_STATE.get("next_central_check_at_ms"))
 
 	while not STOP_EVENT.is_set():
 		now_ms = _now_ms()
@@ -2747,6 +2815,9 @@ def background_loop():
 		current_online = bool(RUNTIME_STATE.get("central_ok"))
 		current_mode = STATION_STATE.get("mode")
 
+		mode = current_mode
+		logger.info("MODE INSIDE background_loop(): %s", mode)
+
 		# ONLINE / OFFLINE TRANSITION DETECTION
 		if last_online_state is None:
 			if current_online:
@@ -2771,7 +2842,6 @@ def background_loop():
 				logger.warning("Station transitioned OFFLINE")
 
 			last_online_state = current_online
-
 
 		# MODE TRANSITION DETECTION (station ↔ relay)
 		if last_mode_state is None and current_mode:
@@ -2814,12 +2884,22 @@ def background_loop():
 			last_heartbeat_at = now_ms
 
 		# ---- SYNC ----
+		# logger.info(
+		# 	"SYNC DEBUG: now=%s next=%s online=%s",
+		# 	now_ms,
+		# 	SYNC_STATE.get("next_sync_at_ms"),
+		# 	current_online,
+		# )
 		with RUNTIME_STATE_LOCK:
 			if current_online:
 				if now_ms >= int(SYNC_STATE.get("next_sync_at_ms") or 0):
+					# Schedule next run FIRST (prevents burst triggers)
+					SYNC_STATE["next_sync_at_ms"] = now_ms + _sync_interval_ms()
+					
+					logger.info("DEBUGGING: ------------ SYNC TRIGGERED")
+
 					did_work = perform_sync_attempt()
 					_sync_note_work(did_work)
-					SYNC_STATE["next_sync_at_ms"] = now_ms + _sync_interval_ms()
 		
 		# ---- Peer Station Cooperation Loop ----
 		if current_mode == "station":
@@ -2951,7 +3031,7 @@ def background_loop():
 				# Schedule next peer sync attempt (e.g., every 60 seconds)
 				PEER_SYNC_STATE["next_peer_sync_at_ms"] = now_ms + 60_000
 
-		time.sleep(0.25)
+		time.sleep(0.75)
 
 
 # -----------------------

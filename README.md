@@ -577,6 +577,9 @@ Typical offline workflow tests:
 │   │   └── station_identity_HOSPITAL-SE-001.json (hardcoded dummy for devtools UI functionality)
 │   │   └── station_identity_STATION-001.json (hardcoded dummy for devtools UI functionality)
 │   │   └── station_identity_*.json (the persistent api keys for authorized stations in lieu of wallet passphrases)
+│   ├── rtc-host/ (Node WebRTC host to make a pool of many 1-1 webrtc client/station connections)
+│   │   ├── server.js
+│   │   └── package.json
 │   ├── app.py
 │   └── Dockerfile
 ├── blockchain.db

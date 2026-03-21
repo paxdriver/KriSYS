@@ -1,3 +1,4 @@
+// krisys-backend/device-offline-server/station-frontend/app/page.js
 'use client'
 
 import { useEffect, useState } from 'react'
@@ -8,7 +9,6 @@ import { StationProvider } from '../contexts/StationContext'
 export default function StationPage() {
 	const [profile, setProfile] = useState(null)
 
-	// Load station profile from backend
 	useEffect(() => {
 		async function loadProfile() {
 			const res = await fetch(
@@ -27,7 +27,6 @@ export default function StationPage() {
 		<StationProvider profile={profile}>
 			<div style={{ padding: 40 }}>
 				<h1>Station Host</h1>
-
 				<StationIdentity profile={profile} />
 				<StationPool />
 			</div>

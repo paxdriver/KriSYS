@@ -1,19 +1,32 @@
-# krisys-backend/device-offline-server/Dockerfile
 FROM python:3.11-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libsqlite3-0 \
-    && rm -rf /var/lib/apt/lists/*
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+	curl \
+	gnupg \
+	&& rm -rf /var/lib/apt/lists/*
+
+# Install Node.js (LTS)
+RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+	&& apt-get install -y nodejs
 
 WORKDIR /app
 
-# Reuse top-level requirements (same deps as central backend)
+# Install Python deps
 COPY ./requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy only the station app (and optionally shared modules later)
+# Copy station app
 COPY ./device-offline-server/ /app
 
-EXPOSE 5000
+# Install Node deps for RTC host
+WORKDIR /app/rtc-host
+RUN npm install
 
-CMD ["gunicorn", "-b", "0.0.0.0:5000", "app:app", "--workers", "1", "--reload"]
+WORKDIR /app
+
+EXPOSE 5000
+EXPOSE 7000
+
+# Start BOTH Flask and Node
+CMD bash -c "node rtc-host/server.js & gunicorn -b 0.0.0.0:5000 app:app --workers 1 --reload"
