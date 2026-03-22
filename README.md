@@ -386,6 +386,43 @@ Operational model for safety and privacy:
 
 ---
 
+Station Servers:
+- Transport Layer: Node RTC host
+- State Layer: Flask station app
+- UI Layer: StationContext + components
+- Consensus Layer: Blockchain + mesh sync
+
+Stations' statefulness and separation of duties:
+
+---
+
+## Station Architecture – Separation of Responsibilities for Pools aka Rooms
+Stations are trusted because they are activated by HQ via passphrase once and receive an api to post transactions to the blockchain. This means they can help load balance HQ by also serving as a connection hub for many users to help relieve pressure from the network using access point LAN or other short range communications like NFC or Bluetooth.
+
+Stations can display a QR code through their UI to facilitate offline message propagation, just like users can set up a room for their peers to join and sync while offline the station can coordinate many 1-1 connections as a room to sync a group of users; stations can also discover their peer stations on local network and assist distribution of room codes, discovery, message propagation, and rundundant check-ins to preserve offline station transactions even if the station never comes back online because one of its peers can post it's transactions on its behalf later on.
+
+Stations respond with inventory of hashes, each connection requests the relay_hashes they are missing by performing a diff on inventory responses, each connection is cycled through if list of relay_hashes is updated from another peer since the last sync to that same user.
+
+### 1. Node RTC Server (`device-offline-server/rtc-host`)
+Handles all WebRTC transport. Maintains active peer connections, generates and manages offer inventory, applies answers, and manages chunked data transfer between wallets and the station.
+
+---
+
+### 2. Flask Station Server (`device-offline-server/app.py`)
+Owns persistent state and canonical logic. Maintains the local SQLite database (blocks, queued transactions, check-ins, peer stations), performs HQ synchronization, verifies blocks, and coordinates LAN station replication.
+
+---
+
+### 3. Next.js / React Station Frontend
+Provides the station UI layer. Displays station identity, pool listings, connection status, and operational metrics; triggers connection requests to the Node RTC server but does not manage transport state.
+
+---
+
+### 4. Browser Compatibility Services (WebRTC + Mesh Utilities)
+Client-side services that allow wallet browsers to interoperate with the Node RTC server and other peers. Handle signaling requests, chunked payload reconstruction, inventory exchange, and mesh synchronization logic.
+
+---
+
 ## Check-in Stations (Authentication and Offline Behavior)
 
 **Definition:** Stations serve as trusted operational nodes during a crisis.
