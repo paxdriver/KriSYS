@@ -1,4 +1,4 @@
-# blockchain.py
+# krisys-backend/blockchain.py
 import hashlib
 import json
 import time

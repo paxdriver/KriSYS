@@ -1,3 +1,4 @@
+# krisys-backend/device-offline-server/Dockerfile
 FROM python:3.11-slim
 
 # Install system dependencies

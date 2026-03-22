@@ -1,4 +1,4 @@
-# database.py
+# krisys-backend/database.py
 import sqlite3
 import os
 from contextlib import contextmanager

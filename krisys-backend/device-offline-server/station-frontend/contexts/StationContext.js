@@ -6,6 +6,17 @@ import { createWebRTCRoomCode, parseWebRTCRoomCode } from '../services/webrtcRoo
 
 const StationContext = createContext(null)
 
+/* 
+StationContext should store:
+ - Station profile (station_id, fingerprint, etc.)
+ - Active pool listings (from Flask /station/pools)
+ - Active offer inventory metadata (NOT the full SDP)
+ - Connection status summary (from Node /health)
+ - Maybe peer count
+
+ DEV NOTE: It is UI coordination state, not transport state 
+ */
+
 export function StationProvider({ profile, children }) {
 	const currentPeerIdRef = useRef(null)
 

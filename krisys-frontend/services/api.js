@@ -1,4 +1,4 @@
-// services/api.js
+// krisys-frontend/services/api.js
 import axios from 'axios'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'
@@ -98,31 +98,3 @@ export const api = {
     },
 
 }
-
-
-
-
-
-// OLD VERSIONS - these don't get intercepted by the simulated offline. done testing them so probably no longer needed
-
-// Admin endpoints (you can add headers for admin token later)
-// adminMine: () => {
-//     return fetch(`${API_BASE}/admin/mine`, {
-//         method: 'POST',
-//         headers: {
-//             'Content-Type': 'application/json',
-//             'X-Admin-Token': ADMIN_TOKEN // DEV NOTE: You'll need to set this properly
-//         }
-//     }).then(res => res.json())
-// },
-
-// adminAlert: (message, priority) => {
-//     return fetch(`${API_BASE}/admin/alert`, {
-//         method: 'POST',
-//         headers: {
-//             'Content-Type': 'application/json',
-//             'X-Admin-Token': ADMIN_TOKEN // DEV NOTE: You'll need to set this properly
-//         },
-//         body: JSON.stringify({ message, priority })
-//     })
-// }

@@ -480,6 +480,11 @@ Station Responsibilities
 - Flush stored events to HQ when online
 - Emit periodic heartbeat while online
 
+**NOTE**: Browser no longer used as a station host (as of Phase 6), this is done through Node on the station's backend rtc-host/server.js
+- Flask station app → state + blockchain + LAN peer sync
+- Node rtc-host → WebRTC connection manager
+- Wallet browser → WebRTC client only
+
 HQ Responsibilities
 - Receive authenticated telemetry from stations
 - Store structured events in admin_events
@@ -585,18 +590,17 @@ Typical offline workflow tests:
 │   │   │	├── stationApi.js
 │   │   │	├── stationHandshake.js
 │   │   │	├── stationQr.js
-│   │   │	├── stationRtcHost.js (multiple pairwise webrtc connections)
-│   │   │	├── webrtcChunking.js
-│   │   │	└── webrtcRoomCode.js
+│   │   │	└── webrtcRoomCode.js (manual rtc connections, our UART equivalent in case needed)
 │   │   ├── package.json
 │   │   └── next.config.js
 │   ├── station-data  (simulating offline station persistent storage for blockchain and message queues when gathering offline unconfirmed transactions)
 │   │   ├── station.db
-│   │   └── station_identity_HOSPITAL-SE-001.json (hardcoded dummy for devtools UI functionality)
-│   │   └── station_identity_STATION-001.json (hardcoded dummy for devtools UI functionality)
+│   │   ├── station_identity_HOSPITAL-SE-001.json (hardcoded dummy for devtools UI functionality)
+│   │   ├── station_identity_STATION-001.json (hardcoded dummy for devtools UI functionality)
 │   │   └── station_identity_*.json (the persistent api keys for authorized stations in lieu of wallet passphrases)
 │   ├── rtc-host/ (Node WebRTC host to make a pool of many 1-1 webrtc client/station connections)
-│   │   ├── server.js
+│   │   ├── nodeRtcChunking.js
+│   │   ├── server.js		(node server offer/answer and state of pairwise webrtc connections)
 │   │   └── package.json
 │   ├── app.py
 │   └── Dockerfile
@@ -702,6 +706,7 @@ LOCAL PORTS (DEV)
 - station: `http://localhost:6001`	(foodtruck*, hospital, station_001) 
 - station: `http://localhost:6003`	(camp_central*)
 - station-frontend: `http://localhost:6600` (station frontend UI)
+- station rtchost: `http://localhost:7000`	(stations' node servers for webrtc)
 
 ***fake stations for devtools actions, NOT provisioned or conventional, dev only dummies**
 

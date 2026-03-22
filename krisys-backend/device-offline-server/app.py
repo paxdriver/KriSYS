@@ -114,7 +114,7 @@ RUNTIME_STATE_LOCK = threading.Lock()
 
 # Inventory protocol bounds (must match wallet + station-frontend limits)
 # DEV NOTE: see also ->
-# 	- device-offline-server/station-frontend/services/stationRtcHost.js
+# 	- device-offline-server/rtc-host/server.js (node server on station handles rtc layer)
 # 	- krisys-frontend/contexts/P2PContext.js
 MAX_QUEUED_PER_PAYLOAD = 100      # relay_hash cap per inventory exchange
 MAX_BLOCKS_PER_PAYLOAD = 10       # block suffix cap per payload
