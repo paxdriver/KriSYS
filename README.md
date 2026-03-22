@@ -153,6 +153,24 @@ during future events of crisis requiring deployment of aid and volunteers.
 ---
 
 ## Current Status: Phase 6 - Station/Peer Rendez-vous pools
+### Current Objective - Implement a **station offer inventory model** (instead of a single rolling WebRTC offer)
+
+Goals:
+1. Each station maintains an inventory of multiple pre-generated WebRTC offers (e.g., 10).
+2. Offers are:
+	- Unique
+	- Tracked (offer_id, created_at, consumed, etc.)
+	- Marked consumed when an answer is applied
+3. Station regenerates offers when inventory falls below threshold.
+4. Wallet “Connect” should:
+	- Automatically fetch an unused offer from station
+	- Not require manual copy/paste
+5. Multiple wallets must be able to connect concurrently.
+6. Peer stations on LAN should:
+	- Be able to advertise active pools
+	- Coordinate pool visibility
+	- Not require HQ for local convergence
+7. Admin UI should later show live connection count per station.
 
 ---
 

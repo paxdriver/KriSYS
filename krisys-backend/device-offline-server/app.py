@@ -739,16 +739,6 @@ def update_station_mode() -> None:
 		reload_station_identity_in_memory()
 		has_identity = _station_identity is not None
 
-	# DEV NOTE: DEBUGGING
-	logger.info(
-		"MODE CHECK identity=%s anchor=%s genesis=%s crisisId=%s block_pub=%s",
-		has_identity,
-		has_anchor,
-		has_genesis,
-		crisis_id,
-		bool(pub),
-	)
-
 	if has_identity and has_anchor and has_genesis:
 		STATION_STATE["mode"] = "station"
 	elif has_anchor and has_genesis:
@@ -846,22 +836,19 @@ def flush_station_events_to_hq():
 # Add guards on station automation to prevent undesired thrashing
 def require_station_mode() -> tuple[bool, str]:
 	update_station_mode()
+	mode = STATION_STATE.get("mode")
 
-	mode = STATION_STATE.get('mode')
-	logger.info("MODE INSIDE required_station_mode GUARD: %s", mode)
-
-	if STATION_STATE.get("mode") != "station":
-		return False, f"Station-only endpoint (mode={STATION_STATE.get('mode')})"
+	if mode != "station":
+		return False, f"Station-only endpoint (mode={mode})"
 
 	return True, ""
+
 def require_relay_or_station_mode() -> tuple[bool, str]:
 	update_station_mode()
-
 	mode = STATION_STATE.get('mode')
-	logger.info("MODE INSIDE require_relay_or_station_mode GUARD: %s", mode)
 
-	if STATION_STATE.get("mode") not in ("station", "relay"):
-		return False, f"Relay endpoint unavailable (mode={STATION_STATE.get('mode')})"
+	if mode not in ("station", "relay"):
+		return False, f"Relay endpoint unavailable (mode={mode})"
 
 	return True, ""
 
@@ -871,18 +858,15 @@ def has_usable_chain() -> bool:
 
 def require_usable_relay() -> tuple[bool, str]:
 	update_station_mode()
-
 	mode = STATION_STATE.get('mode')
-	logger.info("MODE INSIDE require_usable_relay GUARD: %s", mode)
 
-	if STATION_STATE.get("mode") not in ("station", "relay"):
-		return False, f"Relay unavailable (mode={STATION_STATE.get('mode')})"
+	if mode not in ("station", "relay"):
+		return False, f"Relay unavailable (mode={mode})"
 
 	if not has_usable_chain():
 		return False, "Relay unavailable (no verified blockchain)"
 
 	return True, ""
-
 
 # ----------------------------
 # DB helpers (queued + confirmed)
@@ -1780,9 +1764,6 @@ def export_station_payload() -> dict:
 	Clients use this to update their local caches.
 	"""
 
-	mode = STATION_STATE.get("mode")
-	logger.info("MODE INSIDE export_station_payload: %s", mode)
-
 	now_ms = int(time.time() * 1000)
 	STATION_STATE["crisisId"] = db_get_meta("crisisId")
 
@@ -1837,18 +1818,12 @@ except Exception as e:
 @app.route("/health", methods=["GET"])
 def health():
 	update_station_mode()
+	# logger.info(f"HEALTH ENDPOINT PID: {os.getpid()}")
 
-	logger.info("HEALTH ENDPOINT PID: %d", os.getpid())
-
-	# DEV TEST ----
 	refresh_peer_stations_from_hq() 
 	with station_db() as conn:
 		rows = conn.execute("SELECT station_id FROM station_peers").fetchall()
 		peer_ids = [r["station_id"] for r in rows]
-
-	mode = STATION_STATE.get("mode")
-	logger.info("MODE INSIDE /health: %s", mode)
-	# -------------
 
 	return jsonify({
 		"role": "station",
@@ -1935,9 +1910,6 @@ def station_profile():
 	identity = get_station_device_identity()
 	if not identity:
 		return jsonify({"error": "Station identity unavailable"}), 500
-	
-	mode = STATION_STATE.get("mode")
-	logger.info("MODE INSIDE station_profile(): %s", mode)
 
 	return jsonify({
 		"station_id": identity["station_id"],
@@ -2688,8 +2660,6 @@ def _sync_note_work(did_work: bool) -> None:
 def perform_sync_attempt() -> bool:
 	update_station_mode()
 	mode = STATION_STATE.get("mode")
-	logger.info("MODE INSIDE perform_sync_attempt: %s", mode)
-
 	did_work = False
 
 	try:
@@ -2716,7 +2686,7 @@ def perform_sync_attempt() -> bool:
 			did_work = False
 
 	except Exception as e:
-		logger.warning(f"Sync attempt failed: {e}")
+		logger.warning(f"Sync attempt failed: {e} with station mode=={mode}")
 		did_work = False
 
 	return bool(did_work)
@@ -2814,9 +2784,6 @@ def background_loop():
 
 		current_online = bool(RUNTIME_STATE.get("central_ok"))
 		current_mode = STATION_STATE.get("mode")
-
-		mode = current_mode
-		logger.info("MODE INSIDE background_loop(): %s", mode)
 
 		# ONLINE / OFFLINE TRANSITION DETECTION
 		if last_online_state is None:
