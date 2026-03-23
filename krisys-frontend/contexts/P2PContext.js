@@ -171,26 +171,23 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		}
 	}, [reset])
 
-	const attachCommonHandlers = useCallback(
-		(pc) => {
-			pc.onconnectionstatechange = () => {
-				log(`pc.connectionState=${pc.connectionState}`)
-				if (pc.connectionState === 'connected') setStatus('connected')
-				if (pc.connectionState === 'disconnected') setStatus('disconnected')
-				if (pc.connectionState === 'failed') setStatus('disconnected')
-				if (pc.connectionState === 'closed') setStatus('closed')
-			}
+	const attachCommonHandlers = useCallback( (pc) => {
+		pc.onconnectionstatechange = () => {
+			log(`pc.connectionState=${pc.connectionState}`)
+			if (pc.connectionState === 'connected') setStatus('connected')
+			if (pc.connectionState === 'disconnected') setStatus('disconnected')
+			if (pc.connectionState === 'failed') setStatus('disconnected')
+			if (pc.connectionState === 'closed') setStatus('closed')
+		}
 
-			pc.oniceconnectionstatechange = () => {
-				log(`pc.iceConnectionState=${pc.iceConnectionState}`)
-			}
+		pc.oniceconnectionstatechange = () => {
+			log(`pc.iceConnectionState=${pc.iceConnectionState}`)
+		}
 
-			pc.onicegatheringstatechange = () => {
-				log(`pc.iceGatheringState=${pc.iceGatheringState}`)
-			}
-		},
-		[log]
-	)
+		pc.onicegatheringstatechange = () => {
+			log(`pc.iceGatheringState=${pc.iceGatheringState}`)
+		}
+	},[log])
 
 	const sendJson = useCallback((obj) => {
 		const sender = senderRef.current

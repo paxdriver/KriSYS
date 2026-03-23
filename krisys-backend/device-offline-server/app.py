@@ -1498,6 +1498,133 @@ RUNTIME_STATE = {
 	"next_peer_refresh_at_ms": 0,
 }
 
+# In-memory pool coordination state. This controls batching behavior for WebRTC-connected wallet peers.
+# It is intentionally NOT persisted to SQLite because pool lifecycle is session-scoped and can reset on restart.
+POOL_COORDINATION_STATE = {
+	# Indicates that new data has been stored and a new inventory snapshot
+	# should be rebuilt on the next coordination tick.
+	"dirty": False,
+
+	# Cached snapshot returned to peers during /mesh/inventory and /mesh/sync.
+	# This avoids rebuilding identical inventory multiple times for concurrent peer requests.
+	"current_snapshot": None,
+
+	# Monotonic version number incremented whenever snapshot is rebuilt. Peers can optionally use this to ignore redundant updates.
+	"version": 0,
+
+	# Timestamp in milliseconds of last snapshot rebuild.
+	"last_snapshot_rebuild_at_ms": 0,
+
+	# Timestamp in milliseconds of last broadcast cycle.
+	# DEV NOTE: Broadcast logic will be added later.
+	"last_broadcast_at_ms": 0,
+}
+def mark_pool_dirty() -> None:
+	"""
+	Mark the pool coordination state as dirty. This does not rebuild the snapshot immediately. It simply signals that on the next coordination tick to batch them (as opposed to expensive live updates per request)
+	"""
+	POOL_COORDINATION_STATE["dirty"] = True
+
+def rebuild_pool_inventory_snapshot() -> None:
+	"""
+	Rebuild the cached inventory snapshot used by connected peers.
+
+	This function:
+		- Reads current station state (blocks, queued, confirmed)
+		- Builds a deterministic snapshot
+		- Stores it in POOL_COORDINATION_STATE
+		- Increments snapshot version
+	"""
+
+	now_ms = int(time.time() * 1000)
+
+	# Build block list using existing helper.
+	# We reuse existing export logic to avoid duplicating canonical behavior.
+	blocks = db_list_blocks(limit=MAX_BLOCKS_PER_PAYLOAD)
+
+	last_block = blocks[-1] if blocks else None
+
+	chain_tip = None
+	if isinstance(last_block, dict):
+		chain_tip = {
+			"block_index": last_block.get("block_index"),
+			"hash": last_block.get("hash"),
+			"previous_hash": last_block.get("previous_hash"),
+		}
+
+	# Gather queued items deterministically.
+	raw_queued = db_list_queued(limit=MAX_QUEUED_PER_PAYLOAD)
+	sorted_queued = _sort_queued_for_export(raw_queued)
+
+	# Snapshot structure mirrors what peers expect.
+	snapshot = {
+		"version": POOL_COORDINATION_STATE["version"] + 1,
+		"generatedAt": now_ms,
+		"crisisId": db_get_meta("crisisId"),
+		"chain_tip": chain_tip,
+		"blocks": blocks,
+		"queued": sorted_queued,
+		"confirmed": {},
+	}
+
+	POOL_COORDINATION_STATE["current_snapshot"] = snapshot
+	POOL_COORDINATION_STATE["version"] += 1		# DEV NOTE: FUTURE OPTIMIZATION to skip if versions match client's snapshot version, connection-scoped and volatile, never persistent.
+	POOL_COORDINATION_STATE["last_snapshot_rebuild_at_ms"] = now_ms
+	POOL_COORDINATION_STATE["dirty"] = False
+
+	relay_hash_count = len([
+		msg.get("relay_hash")
+		for msg in (snapshot.get("queued") or [])
+		if isinstance(msg, dict) and msg.get("relay_hash")
+	])
+	logger.info("-----------"	)
+	logger.info(f"Rebuilt pool snapshot v{POOL_COORDINATION_STATE['version']} ")
+	logger.info(f"with {relay_hash_count} relay_hashes"	)
+	logger.info("-----------"	)
+
+# Produce hash-only inventory for exchanging with pool peers 
+def get_pool_inventory_snapshot() -> dict:
+	"""
+	Return the current cached inventory snapshot.
+	If no snapshot exists yet, rebuild it once. This prevents rebuilding inventory for every peer request.
+	"""
+
+	# If snapshot does not exist yet, build it once.
+	if POOL_COORDINATION_STATE["current_snapshot"] is None or POOL_COORDINATION_STATE["dirty"]:
+		rebuild_pool_inventory_snapshot()
+
+	snapshot = POOL_COORDINATION_STATE["current_snapshot"]
+
+	# Build lightweight inventory using only relay_hash values.
+	relay_hashes = [msg.get("relay_hash")
+		for msg in (snapshot.get("queued") or [])
+		if isinstance(msg, dict) and msg.get("relay_hash")
+	]
+
+	return {
+		"version": snapshot.get("version"),
+		"generatedAt": snapshot.get("generatedAt"),
+		"crisisId": snapshot.get("crisisId"),
+		"chain_tip": snapshot.get("chain_tip"),
+		"relay_hashes": relay_hashes,
+	}
+# Produce full data snapshot as opposed to inventory which is just a list of relay_hashes and the chain_tip
+def get_full_pool_snapshot() -> dict:
+	"""
+	Return full cached snapshot including:
+		- blocks
+		- queued messages
+		- chain_tip
+
+	Rebuilds only if dirty or missing.
+	"""
+
+	if (POOL_COORDINATION_STATE["current_snapshot"] is None or POOL_COORDINATION_STATE["dirty"]):
+		rebuild_pool_inventory_snapshot()
+
+	return POOL_COORDINATION_STATE["current_snapshot"]
+
+
 # ----------------------------
 # Block verification + confirmations
 # ----------------------------
@@ -2210,24 +2337,21 @@ def station_provision():
 	), 200
 
 
+# Inventory is now prepared as a snapshot periodically generated, clients perform their own diff's to shift compute to edge devices
 @app.route("/mesh/inventory", methods=["POST"])
 def mesh_inventory():
 	"""
-	Inventory handshake:
-		Client sends relay_hashes only.
-		Station replies:
-			- missing_relay_hashes: which relay hashes the station does NOT know
-			- confirmed: confirmations for hashes the station knows as confirmed
+	Inventory handshake.
+
+	Client sends relay_hashes it currently has.
+	Station replies with:
+		- relay_hashes it currently has
+		- chain_tip
 	"""
+
 	incoming = request.get_json(force=True, silent=True) or {}
 
-	# First check if it has min requirements to serve as a relay (crisisID, local genesis block)
 	ok, err = require_usable_relay()
-	if not ok:
-		return jsonify({"error": err}), 403
-
-	# Since stations will fallback to relay nodes, we still want mesh to work even if station api key is missing or revoked
-	ok, err = require_relay_or_station_mode()
 	if not ok:
 		return jsonify({"error": err}), 403
 
@@ -2235,51 +2359,80 @@ def mesh_inventory():
 	if not ok:
 		return jsonify({"error": err}), 400
 
-	relay_hashes = incoming.get("relay_hashes") or []
-	if not isinstance(relay_hashes, list):
-		return jsonify({"error": "relay_hashes must be a list"}), 400
+	# Get cached inventory snapshot.
+	inventory = get_pool_inventory_snapshot()
 
-	relay_hashes = relay_hashes[:RELAY_HASH_CAP]
-	relay_hashes = [rh for rh in relay_hashes if isinstance(rh, str) and rh.strip()]
+	return jsonify(inventory), 200
+# @app.route("/mesh/inventory", methods=["POST"])
+# def mesh_inventory():
+# 	"""
+# 	Inventory handshake:
+# 		Client sends relay_hashes only.
+# 		Station replies:
+# 			- missing_relay_hashes: which relay hashes the station does NOT know
+# 			- confirmed: confirmations for hashes the station knows as confirmed
+# 	"""
+# 	incoming = request.get_json(force=True, silent=True) or {}
 
-	known = get_known_relay_hashes()
-	missing_relay_hashes = [rh for rh in relay_hashes if rh not in known]
+# 	# First check if it has min requirements to serve as a relay (crisisID, local genesis block)
+# 	ok, err = require_usable_relay()
+# 	if not ok:
+# 		return jsonify({"error": err}), 403
 
-	confirmed = db_get_confirmed_many(relay_hashes)
+# 	# Since stations will fallback to relay nodes, we still want mesh to work even if station api key is missing or revoked
+# 	ok, err = require_relay_or_station_mode()
+# 	if not ok:
+# 		return jsonify({"error": err}), 403
 
-	# Include check-in relay inventory as well as unconfirmed gossip
-	with station_db() as conn:
-		rows = conn.execute("SELECT relay_hash FROM checkins_queued").fetchall()
+# 	ok, err = ensure_crisis_id(incoming.get("crisisId"))
+# 	if not ok:
+# 		return jsonify({"error": err}), 400
 
-	local_checkin_hashes = [r["relay_hash"] for r in rows]
+# 	relay_hashes = incoming.get("relay_hashes") or []
+# 	if not isinstance(relay_hashes, list):
+# 		return jsonify({"error": "relay_hashes must be a list"}), 400
 
-	incoming_checkin_hashes = incoming.get("checkin_hashes") or []
-	if not isinstance(incoming_checkin_hashes, list):
-		incoming_checkin_hashes = []
+# 	relay_hashes = relay_hashes[:RELAY_HASH_CAP]
+# 	relay_hashes = [rh for rh in relay_hashes if isinstance(rh, str) and rh.strip()]
 
-	missing_checkin_hashes = [
-		rh for rh in incoming_checkin_hashes
-		if rh not in local_checkin_hashes
-	]
+# 	known = get_known_relay_hashes()
+# 	missing_relay_hashes = [rh for rh in relay_hashes if rh not in known]
+
+# 	confirmed = db_get_confirmed_many(relay_hashes)
+
+# 	# Include check-in relay inventory as well as unconfirmed gossip
+# 	with station_db() as conn:
+# 		rows = conn.execute("SELECT relay_hash FROM checkins_queued").fetchall()
+
+# 	local_checkin_hashes = [r["relay_hash"] for r in rows]
+
+# 	incoming_checkin_hashes = incoming.get("checkin_hashes") or []
+# 	if not isinstance(incoming_checkin_hashes, list):
+# 		incoming_checkin_hashes = []
+
+# 	missing_checkin_hashes = [
+# 		rh for rh in incoming_checkin_hashes
+# 		if rh not in local_checkin_hashes
+# 	]
 	
-	blocks = db_list_blocks(limit=1)
-	_chain_tip = blocks[-1] if blocks else None
-	chain_tip = None
-	if _chain_tip: 
-		chain_tip =  {
-			"block_index": _chain_tip["block_index"],
-			"hash": _chain_tip["hash"],
-		}
+# 	blocks = db_list_blocks(limit=1)
+# 	_chain_tip = blocks[-1] if blocks else None
+# 	chain_tip = None
+# 	if _chain_tip: 
+# 		chain_tip =  {
+# 			"block_index": _chain_tip["block_index"],
+# 			"hash": _chain_tip["hash"],
+# 		}
 
-	return jsonify(
-		{
-			"crisisId": STATION_STATE.get("crisisId"),
-			"missing_relay_hashes": missing_relay_hashes,
-			"missing_checking_hashes": missing_checkin_hashes,
-			"confirmed": confirmed,
-			"chain_tip": chain_tip,
-		}
-	), 200
+# 	return jsonify(
+# 		{
+# 			"crisisId": STATION_STATE.get("crisisId"),
+# 			"missing_relay_hashes": missing_relay_hashes,
+# 			"missing_checking_hashes": missing_checkin_hashes,
+# 			"confirmed": confirmed,
+# 			"chain_tip": chain_tip,
+# 		}
+# 	), 200
 
 
 @app.route("/mesh/sync", methods=["POST"])
@@ -2317,23 +2470,33 @@ def mesh_sync():
 			}),
 			507,
 		)
-
+	
 	incoming_queued, _ignored_confirmed = sanitize_sync_payload_server(incoming)
+	pool_updated = False
 
-	# Incoming gossip
+	# Optional version sent by peer to indicate last known snapshot. DEV NOTE: OPTIMIZATION
+	# peer_known_version = incoming.get("known_version")
+
+	# Store new unconfirmed messages
 	for msg in incoming_queued:
 		rh = msg.get("relay_hash")
 		if not rh:
 			continue
 		if db_is_confirmed(rh) or db_is_queued(rh):
 			continue
-		db_put_queued(msg)
+		inserted = db_put_queued(msg)
+		if inserted:
+			pool_updated = True
 
+	# Process incoming blocks
 	incoming_blocks = incoming.get("blocks") or []
 	if isinstance(incoming_blocks, list):
-		process_incoming_blocks(incoming_blocks)
+		stored_count = process_incoming_blocks(incoming_blocks)
+		if stored_count > 0:
+			logger.info(f"Stored {stored_count} new blocks from peer")
+			pool_updated = True
 
-	# Incoming check-in replication 
+	# Process replicated check-ins (station-to-station only)
 	incoming_checkins = incoming.get("checkins") or []
 	for chk in incoming_checkins:
 		if not isinstance(chk, dict):
@@ -2346,11 +2509,29 @@ def mesh_sync():
 		if db_is_checkin_queued(relay_hash):
 			continue
 
-		db_put_checkin_queued(chk)
+		inserted = db_put_checkin_queued(chk)
+		if inserted:
+			pool_updated = True
 
-	payload = export_station_payload()
+	# If any new data was stored, mark pool dirty
+	if pool_updated:
+		if not POOL_COORDINATION_STATE["dirty"]: # DEBUGGING LOG - only log once on toggle to dirty
+			logger.info("Pool marked dirty due to new data")
+		mark_pool_dirty()
 	
-	return jsonify(payload), 200
+	snapshot = get_full_pool_snapshot()
+
+	response_payload = {
+		"version": snapshot.get("version"),
+		"generatedAt": snapshot.get("generatedAt"),
+		"crisisId": snapshot.get("crisisId"),
+		"chain_tip": snapshot.get("chain_tip"),
+		"blocks": snapshot.get("blocks"),
+		"queued": snapshot.get("queued"),
+		"confirmed": {},
+	}
+
+	return jsonify(response_payload), 200
 
 
 def can_reach_central(timeout_sec: int = 3) -> tuple[bool, str | None]:

@@ -949,7 +949,7 @@ class DisasterStorage {
 		// 3) After merging blocks, treat any relay_hash found in those canonical
 		//    transactions as confirmed, and prune the local queue.
 		const blocks = this.getBlockchain({ crisisId }) || []
-		const recentBlocks = blocks.slice(-25) // small window; adjust later
+		const recentBlocks = blocks // DEV NOTE: optimize later
 		const recentTxs = recentBlocks.flatMap((b) => b.transactions || [])
 		this.syncConfirmedFromTransactions({
 			crisisId,
