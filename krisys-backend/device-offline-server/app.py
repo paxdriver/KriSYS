@@ -2475,7 +2475,7 @@ def mesh_sync():
 	pool_updated = False
 
 	# Optional version sent by peer to indicate last known snapshot. DEV NOTE: OPTIMIZATION
-	# peer_known_version = incoming.get("known_version")
+	peer_known_version = incoming.get("known_version")
 
 	# Store new unconfirmed messages
 	for msg in incoming_queued:
@@ -2490,6 +2490,7 @@ def mesh_sync():
 
 	# Process incoming blocks
 	incoming_blocks = incoming.get("blocks") or []
+
 	if isinstance(incoming_blocks, list):
 		stored_count = process_incoming_blocks(incoming_blocks)
 		if stored_count > 0:
@@ -2520,6 +2521,10 @@ def mesh_sync():
 		mark_pool_dirty()
 	
 	snapshot = get_full_pool_snapshot()
+	print(
+		"STATION SENDING BLOCKS:",
+		[b.get("block_index") for b in (snapshot.get("blocks") or []) if isinstance(b, dict)]
+	)	
 
 	response_payload = {
 		"version": snapshot.get("version"),
@@ -2700,6 +2705,11 @@ def flush_to_central_internal() -> dict:
 				pulled_blocks_stored = process_incoming_blocks(suffix)
 			else:
 				pulled_blocks_stored = 0
+			
+			if pulled_blocks_stored: 
+				logger.info("Pool marked dirty due to HQ pull")
+				mark_pool_dirty()
+
 
 			logger.info("Central chain tip: %s", chain[-1]["block_index"])
 

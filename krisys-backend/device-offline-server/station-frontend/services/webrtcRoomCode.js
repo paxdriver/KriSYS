@@ -35,18 +35,18 @@ function decodeJson(encoded) {
 }
 
 /* Room code schema (v1):
-    krisys:webrtc:v1:<base64url(JSON)>
-    JSON payload:
-    {
-    v: 1,
-    kind: "offer" | "answer",
-    createdAt: ms,
-    crisisId: string | null,
-    sdp: { type: "offer"|"answer", sdp: string }
-    }
-    Notes:
-    - This is only signaling. It does not convey trust.
-    - We include crisisId for a helpful mismatch warning.
+	krisys:webrtc:v1:<base64url(JSON)>
+	JSON payload:
+	{
+	v: 1,
+	kind: "offer" | "answer",
+	createdAt: ms,
+	crisisId: string | null,
+	sdp: { type: "offer"|"answer", sdp: string }
+	}
+	Notes:
+	- This is only signaling. It does not convey trust.
+	- We include crisisId for a helpful mismatch warning.
 */
 export function createWebRTCRoomCode({ kind, crisisId, sdp }) {
 	if (kind !== 'offer' && kind !== 'answer') {
@@ -90,7 +90,7 @@ export function parseWebRTCRoomCode(code) {
 		throw new Error('Invalid WebRTC code kind')
 	}
 
-	if ( !payload.sdp || typeof payload.sdp.type !== 'string' || typeof payload.sdp.sdp !== 'string' ) {
+	if (!payload.sdp || typeof payload.sdp.type !== 'string' || typeof payload.sdp.sdp !== 'string') {
 		throw new Error('Invalid WebRTC code SDP')
 	}
 

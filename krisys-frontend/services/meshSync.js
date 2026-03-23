@@ -120,6 +120,14 @@ export async function syncWithMeshHost({
 	}
 
 	const hostPayload = await postJson(`${base}/mesh/sync`, reducedPayload)
+	
+	console.log('--- HOST PAYLOAD RECEIVED ---')
+	console.log('Host chain_tip:', hostPayload?.chain_tip?.block_index)
+	console.log('Host blocks:', Array.isArray(hostPayload?.blocks)
+		? hostPayload.blocks.map(b => b.block_index)
+		: null)
+	console.log('-----------------------------')
+
 	if (walletFamilyId){	// relays can sync and propagate messages without logging in, that's the reason for the check
 		await disasterStorage.importSyncPayloadAsync({ crisisId, familyId: walletFamilyId, payload: hostPayload})
 	}

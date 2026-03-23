@@ -11,190 +11,208 @@ const app = express()
 app.use(cors())
 app.use(express.json())
 
-// In-memory peer map (persistent while Node process runs) 
-// Map<peerId, { pc, dc }>
-// This is the persistent runtime state. As long as this Node process runs, all active WebRTC connections live here.
-const peers = new Map()
-
-// Helper to wait for ICE gathering to complete
-async function waitForIceGatheringComplete(pc) {
-	return new Promise((resolve) => {
-		// If already complete, resolve immediately
-		if (pc.iceGatheringState === 'complete') {
-			return resolve()
-		}
-
-		// Otherwise wait for state change
-		pc.addEventListener('icegatheringstatechange', () => {
-			if (pc.iceGatheringState === 'complete') {
-				resolve()
-			}
-		})
+// ---------------------
+// OFFER POOL MANAGEMENT
+const OFFER_POOL_SIZE = 8
+const OFFER_REGEN_THRESHOLD = 4
+const OFFER_ALLOCATION_EXPIRY_SECONDS = 120
+const AVAILABLE_OFFERS = []
+const ALLOCATED_OFFERS = {}
+async function createNewOffer() {
+	// Create a new RTCPeerConnection
+	const pc = new RTCPeerConnection({
+		iceServers: []
 	})
+	
+	const peerId = crypto.randomUUID()
+	
+	// Create data channel immediately
+	const dc = pc.createDataChannel('krisys', { ordered: true })
+
+	// Attach chunk receiver + message handler
+	const receiver = createChunkReceiver({
+		onJson: async (obj) => {
+			await handleIncoming(peerId, obj)
+		}
+	})
+
+	dc.onopen = () => {
+		console.log(`DataChannel open for ${peerId}`)
+	}
+
+	dc.onclose = () => {
+		console.log(`DataChannel closed for ${peerId}`)
+		try { pc.close() } catch {}
+		delete ALLOCATED_OFFERS[peerId]
+	}
+
+	dc.onmessage = async (evt) => {
+		try {
+			if (typeof evt.data !== 'string') return
+			await receiver.handleText(evt.data)
+		} catch (err) {
+			console.error('DataChannel message error:', err)
+		}
+	}
+	
+	// Cleanup on close
+	pc.onconnectionstatechange = () => {
+		if (
+			pc.connectionState === 'failed' ||
+			pc.connectionState === 'disconnected' ||
+			pc.connectionState === 'closed'
+		) {
+			try { pc.close() } catch {}
+			delete ALLOCATED_OFFERS[peerId]
+		}
+	}
+	
+	const offer = await pc.createOffer()
+	await pc.setLocalDescription(offer)
+	
+	// Wait for ICE gathering
+	await new Promise((resolve) => {
+		if (pc.iceGatheringState === 'complete') return resolve()
+			pc.onicegatheringstatechange = () => {
+		if (pc.iceGatheringState === 'complete') resolve()
+		}
+})
+
+return {
+	peerId,
+	pc,
+	dc,
+	sdp: pc.localDescription,
+	createdAt: Date.now()
+}
 }
 
+async function ensureOfferPool() {
+	// If below threshold, generate new offers
+	while (AVAILABLE_OFFERS.length < OFFER_POOL_SIZE) {
+		const offerObj = await createNewOffer()
+		AVAILABLE_OFFERS.push(offerObj)
+	}
+}
+// ---------------------
+// Initialize pool at startup
+ensureOfferPool()
+
+
 // Create a NEW offer. Every wallet that connects calls this endpoint. Each call creates a brand new RTCPeerConnection. This is the key to supporting multiple wallets.
-app.post('/offer', async (req, res) => {
-	try {
-		// Create a brand new peer connection
-		const pc = new RTCPeerConnection({
-			iceServers: [] // LAN only for now
-		})
-
-		// DEV - debuggin
-		console.log("Current peers:", peers.size)
-
-		// Generate unique peer ID
-		const peerId = crypto.randomUUID()
-
-		// Track connection state for cleanup
-		pc.onconnectionstatechange = () => {
-			console.log(`Peer ${peerId} state:`, pc.connectionState)
-
-			// If connection dies, clean up
-			if (
-				pc.connectionState === 'failed' ||
-				pc.connectionState === 'disconnected' ||
-				pc.connectionState === 'closed'
-			) {
-				try {
-					pc.close()
-				} catch {}
-				peers.delete(peerId)
-				console.log(`Peer ${peerId} removed`)
-			}
-		}
-
-		// Create a data channel
-		// Wallet will attach to this
-		const dc = pc.createDataChannel('krisys', {
-			ordered: true
-		})
-
-		// Optional: log when data channel opens
-		dc.onopen = () => {
-			console.log(`DataChannel open for peer ${peerId}`)
-		}
-
-		dc.onclose = () => {
-			console.log(`DataChannel closed for peer ${peerId}`)
-		}
-
-		const receiver = createChunkReceiver({
-			onJson: async (obj) => {
-				await handleIncoming(peerId, obj)
-			}
-		})
-
-		async function handleIncoming(peerId, msg) {
-		console.log("=== NODE RECEIVED MESSAGE ===")
-		console.log("From peer:", peerId)
-		console.log("Message type:", msg?.t)
-		console.log("Message keys:", Object.keys(msg || {}))
-		console.log("=============================")
-
-		if (msg?.t === 'krisys_mesh_sync_req_v1') {
-			console.log("=== NODE FORWARDING TO FLASK ===")
-			console.log("Payload keys:", Object.keys(msg.payload || {}))
-			console.log("Wallet chain_tip:", msg.payload?.chain_tip?.block_index)
-			console.log("Wallet blocks length:", msg.payload?.blocks?.length)
-			console.log("================================")
-
-			const resp = await fetch('http://localhost:5000/mesh/sync', {
+async function handleIncoming(peerId, msg) {
+	console.log("NODE RECEIVED:", msg?.t)
+	if (msg?.t === 'krisys_mesh_sync_req_v1') {
+		const resp = await fetch('http://localhost:5000/mesh/sync', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify(msg.payload)
-			})
+		})
 
-			console.log("=== NODE GOT FLASK RESPONSE ===")
-			console.log("Status:", resp.status)
+		const payload = await resp.json()
 
-			const payload = await resp.json()
+		console.log("Sending blocks:", payload.blocks?.map(b => b.block_index))
 
-			console.log("Returned chain_tip:", payload.chain_tip?.block_index)
-			console.log("Returned blocks:", payload.blocks?.map(b => b.block_index))
-			console.log("Returned blocks length:", payload.blocks?.length)
-			console.log("================================")
+		const offerObj = ALLOCATED_OFFERS[peerId]
+		if (!offerObj) return
 
-			const peer = peers.get(peerId)
-			if (!peer) return
+		const sender = createChunkSender({ dc: offerObj.dc })
 
-			const sender = createChunkSender({ dc: peer.dc })
+		sender.sendJson({
+			t: 'krisys_mesh_sync_res_v1',
+			id: msg.id,
+			sentAt: Date.now(),
+			payload
+		})
+	}
 
-			try {
-			sender.sendJson({
-				t: 'krisys_mesh_sync_res_v1',
-				id: msg.id,
-				sentAt: Date.now(),
-				payload
-			})
-			console.log("=== NODE SENT RESPONSE BACK TO WALLET ===")
-			} catch (e) {
-			console.error("Send failed:", e)
-			}
-		}
+	if (msg?.t === 'krisys_p2p_ping') {
+		const offerObj = ALLOCATED_OFFERS[peerId]
+		if (!offerObj) return
 
-		if (msg?.t === 'krisys_p2p_ping') {
-			const peer = peers.get(peerId)
-			if (!peer) return
-			peer.dc.send(JSON.stringify({
+		offerObj.dc.send(JSON.stringify({
 			t: 'krisys_p2p_pong',
 			at: Date.now()
-			}))
-		}
-		}
-		dc.onmessage = async (evt) => {
-			try {
-				if (typeof evt.data !== 'string') return
-				await receiver.handleText(evt.data)
-
-			} catch (err) {
-				console.error('DataChannel message error:', err)
-			}
-		}
-
-		// Create SDP offer
-		const offer = await pc.createOffer()
-
-		// Set as local description
-		await pc.setLocalDescription(offer)
-
-		// Wait until ICE candidates are gathered
-		await waitForIceGatheringComplete(pc)
-
-		// Store peer in memory
-		peers.set(peerId, {
-			pc,
-			dc
-		})
-
-		// Return peerId + SDP offer to wallet
-		res.json({
-			peerId,
-			offer: pc.localDescription
-		})
-
-	} catch (err) {
-		console.error(err)
-		res.status(500).json({ error: 'Failed to create offer' })
+		}))
 	}
-})
+}
 
-// Accept an answer: Wallet sends answer after generating it locally. We attach it to the coorect peer.
+
+// Accept an offer's answer: Wallet sends answer after generating it locally (only works with offers that were allocated)
 app.post('/answer', async (req, res) => {
 	const { peerId, answer } = req.body
 
-	const peer = peers.get(peerId)
-	if (!peer) {
-		return res.status(404).json({ error: 'Peer not found' })
+	if (!peerId || !answer) {
+		return res.status(400).json({ error: 'Missing peerId or answer' })
+	}
+
+	const offerObj = ALLOCATED_OFFERS[peerId] // active connections remain until closed
+
+	if (!offerObj) {
+		return res.status(404).json({ error: 'Offer not found or expired' })
 	}
 
 	try {
-		await peer.pc.setRemoteDescription(answer)
-		res.json({ status: 'connected' })
+		await offerObj.pc.setRemoteDescription(answer)
+		// Once answer applied successfully, connection lifecycle now managed by pc.onconnectionstatechange
+		// DEV NOTE: We DO NOT delete from ALLOCATED_OFFERS yet — it will be removed automatically on close/failure.
+		if (offerObj.expiryTimer) { 
+			clearTimeout(offerObj.expiryTimer)	// Guardrail from funky javascript timing issues since timers run off the event loop thread
+			delete offerObj.expiryTimer			// Prevents edge case where timer already fired
+		}
+		return res.json({ status: 'connected' })
+
+	} 
+	catch (err) {
+		// Clean up on failure
+		console.error('Failed to apply answer:', err)
+		try { offerObj.pc.close() } 
+		catch { 
+			// ignore for now 
+		}
+		delete ALLOCATED_OFFERS[peerId]
+		return res.status(500).json({ error: 'Failed to apply answer' })
+	}
+})
+
+// ALLOCATE ATOMIC OFFER
+app.post('/allocate-offer', async (req, res) => {
+	try {
+		// Ensure pool is filled
+		await ensureOfferPool()
+
+		if (AVAILABLE_OFFERS.length === 0) {
+			return res.status(503).json({ error: 'No offers available' })
+		}
+
+		// Atomic pop
+		const offerObj = AVAILABLE_OFFERS.shift()
+		const peerId = offerObj.peerId
+
+		// Move to allocated map
+		ALLOCATED_OFFERS[peerId] = offerObj
+
+		// Start expiry timer
+		ALLOCATED_OFFERS[peerId].expiryTimer = setTimeout(() => {
+			if (ALLOCATED_OFFERS[peerId]) {
+				try { ALLOCATED_OFFERS[peerId].pc.close() } catch {}
+				delete ALLOCATED_OFFERS[peerId]
+			}
+		}, OFFER_ALLOCATION_EXPIRY_SECONDS * 1000)
+
+		// Refill pool if needed
+		if (AVAILABLE_OFFERS.length < OFFER_REGEN_THRESHOLD) {
+			ensureOfferPool()
+		}
+
+		return res.json({
+			peerId: peerId,
+			offer: ALLOCATED_OFFERS[peerId].sdp
+		})
+
 	} catch (err) {
-		console.error(err)
-		res.status(500).json({ error: 'Failed to apply answer' })
+		console.error('Allocate offer failed:', err)
+		return res.status(500).json({ error: 'Allocation failed' })
 	}
 })
 
@@ -202,7 +220,7 @@ app.post('/answer', async (req, res) => {
 app.get('/health', (req, res) => {
 	res.json({
 		status: 'ok',
-		activePeers: peers.size
+		activePeers: Object.keys(ALLOCATED_OFFERS).length
 	})
 })
 

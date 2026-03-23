@@ -213,11 +213,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 					crisisId,
 					familyId,
 				})
-				const localRelayHashes = new Set(
-					(localPayload.queued || [])
-						.map(m => m?.relay_hash)
-						.filter(Boolean)
-				)
+				const localRelayHashes = new Set( (localPayload.queued || []).map(m => m?.relay_hash).filter(Boolean) )
 
 				// 2. Determine missing relay hashes
 				const remoteRelayHashes = Array.isArray(obj.relay_hashes) ? 
@@ -498,7 +494,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 
 		try {
 			// 1. Ask station Node for a new offer
-			const offerResp = await fetch(`${STATION_SIGNAL_URL}/offer`, {
+			const offerResp = await fetch(`${STATION_SIGNAL_URL}/allocate-offer`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' }
 			})
@@ -526,7 +522,8 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			}
 
 			// 4. Apply station's offer
-			await pc.setRemoteDescription(offer)
+			// await pc.setRemoteDescription(offer)
+			await pc.setRemoteDescription(new RTCSessionDescription(offer)) // browser compat. 
 
 			// 5. Generate answer
 			const answer = await pc.createAnswer()
@@ -545,9 +542,9 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			})
 
 			if (!answerResp.ok) {
+				log(`Answer in P2PContext provider failed! Response object:\n\n${answerResp}\n------------------`)
 				throw new Error(`Answer POST failed: ${answerResp.status}`)
 			}
-
 			log('Answer sent to station')
 
 		} catch (e) {
@@ -560,8 +557,6 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		attachCommonHandlers,
 		attachDataChannelHandlers
 	])
-
-
 
 	const createHostOffer = useCallback(async () => {
 		setError(null)

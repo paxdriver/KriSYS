@@ -940,6 +940,9 @@ class DisasterStorage {
 			- “If any of these on-chain transactions contain `relay_hash` values that match queued messages, those queued messages are now confirmed and can be pruned.”
 		*/
 
+		console.log('Wallet importing blocks:',
+			Array.isArray(payload?.blocks) ? payload.blocks.map(b => b.block_index) : null)
+
 		// 1) Merge queued + confirmed using your existing safe logic
 		this.importSyncPayload({ crisisId, familyId, payload })
 
@@ -1021,9 +1024,11 @@ class DisasterStorage {
 						continue
 					}
 					accepted.push(block)
+					console.log('Accepted block:', block.block_index)
 				}
 				catch (e) {
 					console.error('Error verifying incoming block signature:', e)
+					console.log('REJECTED block:', block.block_index)
 				}
 			}
 
