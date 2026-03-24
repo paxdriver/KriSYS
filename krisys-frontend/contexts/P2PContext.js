@@ -7,6 +7,7 @@ import { createWebRTCRoomCode, parseWebRTCRoomCode } from '@/services/webrtcRoom
 import { createChunkReceiver, createChunkSender, makeId } from '@/services/webrtcChunking'
 const INVENTORY_MAX_RELAY_HASHES = 100	// DEV NOTE: Set this by env var when building policy wizard
 const INVENTORY_MAX_BLOCKS = 10			// DEV NOTE: Set this by env var when building policy wizard
+const STATION_API_URL = 'http://localhost:6001'
 const STATION_SIGNAL_URL = 'http://localhost:7000'
 const P2PContext = createContext(null)
 
@@ -478,7 +479,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 	}, [handleIncomingJson, log])
 
 
-	// Connect to Station Node WebRTC host
+	// Connect to Station's Node WebRTC host via Flask endpoint
 	const connectToStation = useCallback(async () => {
 		setError(null)
 
@@ -494,7 +495,8 @@ export function P2PProvider({ children, crisisId, familyId }) {
 
 		try {
 			// 1. Ask station Node for a new offer
-			const offerResp = await fetch(`${STATION_SIGNAL_URL}/allocate-offer`, {
+			const offerResp = await fetch(`${STATION_API_URL}/station/allocate-offer`, {
+			// const offerResp = await fetch(`${STATION_SIGNAL_URL}/allocate-offer`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' }
 			})
@@ -532,6 +534,13 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			await waitForIceGatheringComplete(pc)
 
 			// 6. Send answer back to station Node
+				// DEV NOTE: /answer is part of RTC signaling (Node on port 7000, not Flask on 6001)
+				// - It is not policy-sensitive
+				// - It attaches to in-memory RTCPeerConnection
+				// - Proxying through Flask would add complexity without benefit
+				
+				// Allocation is policy-sensitive
+				// Answer is transport-level
 			const answerResp = await fetch(`${STATION_SIGNAL_URL}/answer`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },

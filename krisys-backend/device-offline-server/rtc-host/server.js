@@ -11,7 +11,6 @@ const app = express()
 app.use(cors())
 app.use(express.json())
 
-// ---------------------
 // OFFER POOL MANAGEMENT
 const OFFER_POOL_SIZE = 8
 const OFFER_REGEN_THRESHOLD = 4
@@ -94,7 +93,6 @@ async function ensureOfferPool() {
 		AVAILABLE_OFFERS.push(offerObj)
 	}
 }
-// ---------------------
 // Initialize pool at startup
 ensureOfferPool()
 

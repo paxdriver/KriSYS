@@ -43,10 +43,10 @@ function getLocalCounts({ crisisId, familyId }) {
 export default function ConnectionsPage({ onRefresh, walletData }) {
 	const [hostUrl, setHostUrl] = useState(() => {
 		try {
-			return localStorage.getItem(STORAGE_LAST_HOST_URL) || DEFAULT_RELAY_URL
+			return localStorage.getItem(STORAGE_LAST_HOST_URL) || DEFAULT_STATION_URL
 		}
 		catch {
-			return DEFAULT_RELAY_URL
+			return DEFAULT_STATION_URL
 		}
 	})
 
@@ -76,7 +76,7 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 	const [selectedStationId, setSelectedStationId] = useState(null)
 
 	const { joinWithOffer, p2pStationInventoryNow, status, connectToStation } = useP2P()
-	const [stationPools, setStationPools] = useState([])
+	const [stationPools, setStationPools] = useState({})
 	const [loadingPools, setLoadingPools] = useState(false)
 	const [selectedOffer, setSelectedOffer] = useState('')
 
@@ -92,8 +92,10 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 		setHostLabel(nextLabel)
 
 		try {
+			// DEV NOTE: TODO - THESE MUST BE SCOPED AND WRAPPED IN disasterStorage CLASS IN services/localStorage.js!!!!
 			localStorage.setItem(STORAGE_LAST_HOST_URL, nextUrl)
 			localStorage.setItem(STORAGE_LAST_HOST_LABEL, nextLabel)
+			// DEV NOTE: TODO - THESE MUST BE SCOPED AND WRAPPED IN disasterStorage CLASS IN services/localStorage.js!!!!
 		}
 		catch {
 			// ignore
@@ -102,18 +104,22 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 
 	// Fetch station pools
 	useEffect(() => {
+		if (status !== 'connected') return
 		async function loadPools() {
 			try {
-				const res = await fetch(`${hostUrl}/station/pools`)	// DEV NOTE: later users will connect to pool to get baseurl for this
+				const res = await fetch(`${hostUrl}/station/peers`)	// DEV NOTE: later users will connect to pool to get baseurl for this
+				// const res = await fetch(`${hostUrl}/station/pools`)	// DEV NOTE: later users will connect to pool to get baseurl for this
 				const data = await res.json()
-				setStationPools(data.pools || [])
+				if (data) setStationPools(data || {})
+				// setStationPools(data.pools || [])
 			} catch (e) {
 				console.warn('Failed to load station pools', e)
 			}
 		}
 
 		loadPools()
-	}, [])
+	}, [status, hostUrl])
+
 
 	// ------------------------------
 	// DEV NOTE: Button for convenience will change to "scan station qr code"
@@ -158,10 +164,13 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 
 		try {
 			const station = trustedStations[selectedStationId]
-			const res = await fetch(`${hostUrl}/station/pools`)
-			if (!res.ok) throw new Error('Failed to fetch pools')
+			// const res = await fetch(`${hostUrl}/station/pools`)
+			const res = await fetch(`${hostUrl}/station/peers`)
+			if (!res.ok) throw new Error("Failed to fetch station's known trusted peers (on same LAN)")
+			// if (!res.ok) throw new Error('Failed to fetch pools')
 			const data = await res.json()
-			setStationPools(data.pools || [])
+			// setStationPools(data.pools || [])
+			setStationPools(data || {})
 		} 
 		catch (e) {
 			setError(e?.message || String(e))
@@ -762,21 +771,27 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 					</div>
 
 					<h3>Available Station Pools</h3>
-					{stationPools.length === 0 && (
+					{Array.isArray(stationPools?.peers) && stationPools.peers.length === 0 && (
 						<p>No station pools found.</p>
 					)}
-
-					{stationPools.map((pool) => (
-						<div key={pool.pool_id} style={{ marginBottom: 12 }}>
-							<strong>{pool.label || 'Station Pool'}</strong>
+					Active connections: {stationPools?.activePeers ?? 'unknown'}
+					<hr />
+					<br />
+					{Array.isArray(stationPools?.peers) && stationPools.peers.map((peer) => (
+						<div key={peer.station_id} style={{ marginBottom: 12 }}>
+							<strong>{peer.name || 'Station Pool'}</strong>
 							<br />
-							Pool ID: {pool.pool_id}
+							Peer Pool ID: {peer.station_id}
 							<br />
+							Active connections: {peer.activePeers ?? 'unknown'}
+							<hr />
 							<button
-								onClick={() => {
-									const offer = prompt('Paste station offer code:')
-									if (!offer) return
-									joinWithOffer(offer)
+								onClick={async () => {
+									setHostUrl(peer.base_url)
+									setHostLabel(peer.station_id)
+									setSelectedStationId(peer.station_id)
+
+									await connectToStation()
 								}}
 							>
 								Connect

@@ -162,12 +162,6 @@ CONFIRMED_MAX_ROWS = 20
 FLUSH_INTERVAL_SECONDS = 15  	# event loop for station to check every 15s if it is online and has messages to flush to HQ
 ####### THESE VALUES ARE FOR DEVELOPMENT ONLY, WILL BE SET BY POLICY IN PROD
 
-# --------------------
-# POOL LISTING LIMITS
-# --------------------
-POOL_DEFAULT_TTL_SECONDS = 300      # 5 minutes
-POOL_MAX_ENTRIES = 50               # hard cap
-
 
 #               IMPORTANT                   #
 STATION_ID = os.environ.get("STATION_ID")  # can be None
@@ -330,18 +324,6 @@ def init_station_db():
 				type TEXT,
 				location TEXT,
 				last_seen_at INTEGER
-			)
-			"""
-		)
-		# STATION POOLS - Bulletin Board for WebRTC Rooms
-		conn.execute(
-			"""
-			CREATE TABLE IF NOT EXISTS station_pools (
-				pool_id TEXT PRIMARY KEY,
-				host_device_id TEXT NOT NULL,
-				label TEXT,
-				created_at INTEGER NOT NULL,
-				expires_at INTEGER NOT NULL
 			)
 			"""
 		)
@@ -666,39 +648,6 @@ def db_list_blocks(limit: int) -> list[dict]:
 	
 def db_get_block_public_key() -> str | None:
 	return db_get_meta("block_public_key")
-
-
-# STATION POOL MANAGEMENT
-def prune_station_pools():
-	"""
-	Remove expired pools and enforce max cap.
-	Called before returning pool list or after insert.
-	"""
-
-	now_s = int(time.time())
-
-	with station_db() as conn:
-		# Remove expired entries
-		conn.execute(
-			"DELETE FROM station_pools WHERE expires_at <= ?",
-			(now_s,),
-		)
-
-		# Enforce max entries (oldest first eviction)
-		rows = conn.execute(
-			"SELECT pool_id FROM station_pools ORDER BY created_at ASC"
-		).fetchall()
-
-		if len(rows) > POOL_MAX_ENTRIES:
-			excess = len(rows) - POOL_MAX_ENTRIES
-			to_delete = rows[:excess]
-			for r in to_delete:
-				conn.execute(
-					"DELETE FROM station_pools WHERE pool_id = ?",
-					(r["pool_id"],),
-				)
-
-		conn.commit()
 
 
 # ----------------------------
@@ -3192,129 +3141,112 @@ def background_loop():
 		time.sleep(0.75)
 
 
-# -----------------------
-# Active pools aka rooms listings (for P2P)
-# -----------------------
-@app.route("/station/pools", methods=["GET"])
-def list_station_pools():
+# TODO - Display number of connections in each peer station so users can select one that is not as busy
+# STATION PEER DISCOVERY (stations that know other stations on the same LAN published to help users connect)
+@app.route("/station/peers", methods=["GET"])
+def station_peers():
 	"""
-	Return active pool listings.
-
-	Response:
-	{
-		"pools": [
-			{
-				"pool_id": "...",
-				"host_device_id": "...",
-				"label": "...",
-				"created_at": ...,
-				"expires_at": ...
-			}
-		]
-	}
+	Return list of known peer stations for this crisis.
+	Wallet uses this to discover additional stations.
 	"""
 
-	prune_station_pools()
+	ok, err = require_station_mode()
+	if not ok:
+		return jsonify({"error": err}), 403
+
+	crisis_id = db_get_meta("crisisId")
+	if not crisis_id:
+		return jsonify({"error": "No crisis pinned"}), 400
+
+	# Health check to NODE server that hosts RTC connections
+	try:
+		node_health = requests.get("http://localhost:7000/health", timeout=2).json()
+		active_peers = node_health.get("activePeers", 0)
+	except Exception:
+		active_peers = None
 
 	with station_db() as conn:
 		rows = conn.execute(
 			"""
-			SELECT pool_id, host_device_id, label, created_at, expires_at
-			FROM station_pools
-			ORDER BY created_at DESC
+			SELECT station_id, name, type, location
+			FROM station_peers
+			ORDER BY station_id ASC
 			"""
 		).fetchall()
 
-	pools = [
-		{
-			"pool_id": r["pool_id"],
-			"host_device_id": r["host_device_id"],
-			"label": r["label"],
-			"created_at": r["created_at"],
-			"expires_at": r["expires_at"],
-		}
-		for r in rows
-	]
-
-	return jsonify({"pools": pools}), 200
-# Register or refresh a pool listing
-@app.route("/station/pools", methods=["POST"])
-def register_station_pool():
-	"""
-	Register a WebRTC pool listing with this station.
-
-	Request JSON:
-	{
-		"pool_id": "uuid",
-		"host_device_id": "device_x",
-		"label": "Family Sync",
-		"ttl_seconds": 300   # optional
-	}
-
-	Station:
-		- Applies TTL
-		- Upserts listing
-		- Prunes expired / overflow
-	"""
-
-	data = request.get_json(force=True, silent=True) or {}
-
-	pool_id = data.get("pool_id")
-	host_device_id = data.get("host_device_id")
-	label = data.get("label")
-	ttl_seconds = data.get("ttl_seconds")
-
-	if not isinstance(pool_id, str) or not pool_id.strip():
-		return jsonify({"error": "Missing pool_id"}), 400
-
-	if not isinstance(host_device_id, str) or not host_device_id.strip():
-		return jsonify({"error": "Missing host_device_id"}), 400
-
-	now_s = int(time.time())
-
-	try:
-		ttl_seconds = int(ttl_seconds)
-	except Exception:
-		ttl_seconds = POOL_DEFAULT_TTL_SECONDS
-
-	if ttl_seconds <= 0:
-		ttl_seconds = POOL_DEFAULT_TTL_SECONDS
-
-	expires_at = now_s + ttl_seconds
-
-	with station_db() as conn:
-		conn.execute(
-			"""
-			INSERT INTO station_pools (
-				pool_id,
-				host_device_id,
-				label,
-				created_at,
-				expires_at
-			)
-			VALUES (?, ?, ?, ?, ?)
-			ON CONFLICT(pool_id) DO UPDATE SET
-				host_device_id=excluded.host_device_id,
-				label=excluded.label,
-				expires_at=excluded.expires_at
-			""",
-			(
-				pool_id.strip(),
-				host_device_id.strip(),
-				label.strip() if isinstance(label, str) else None,
-				now_s,
-				expires_at,
-			),
-		)
-		conn.commit()
-
-	prune_station_pools()
+	peers = []
+	for r in rows:
+		active = None
+		base_url = f"http://{r['station_id'].lower()}:5000"
+		# DEV NOTE: Temporary hack for manually mapping different devices sharing a LAN. Ports are acting like separate ip addresses on a network the client and frontend are already connected to. Browser can only reach exposed ports on localhost in docker-compose development environment.
+		# TODO: refine rules for populating from HQ/station instead of deriving from station_id ~ PHASE 7+ implementation
+		# In dev (docker-compose), map station_id to host ports manually
+		if r["station_id"] == "CAMP_CENTRAL":
+			base_url = "http://localhost:6003"
+		elif r["station_id"] == "FOODTRUCK_001":
+			base_url = "http://localhost:6001"
+		else:
+			base_url = "http://localhost:6001"  # fallback
+		try:
+			health = requests.get(f"{base_url}/health", timeout=1).json()
+			active = health.get("activePeers", None)
+		except Exception:
+			active = None
+		
+		peers.append({
+			"station_id": r["station_id"],
+			"name": r["name"],
+			"type": r["type"],
+			"location": r["location"],
+			"activePeers": active,		
+			# For now assume same LAN base URL pattern
+			"base_url": base_url
+		})
 
 	return jsonify({
-		"status": "registered",
-		"pool_id": pool_id,
-		"expires_at": expires_at,
+		"station_id": STATION_ID,
+		"crisisId": crisis_id,
+		"activePeers": active_peers,
+		"peers": peers,
 	}), 200
+
+
+# STATION → NODE OFFER BROKER (gap layer between user and node rtc connection coordination)
+@app.route("/station/allocate-offer", methods=["POST"])
+def station_allocate_offer():
+	"""
+	Allocate a WebRTC offer from the station pool.
+
+	Wallet calls this endpoint.
+	Flask validates station mode.
+	Flask forwards request to Node RTC host.
+	"""
+
+	# Ensure this device is operating as a station
+	ok, err = require_station_mode()
+	if not ok:
+		return jsonify({"error": err}), 403
+
+	try:
+		# Forward to internal RTC host
+		resp = requests.post(
+			"http://localhost:7000/allocate-offer",
+			timeout=5,
+		)
+
+	except Exception as e:
+		logger.error(f"RTC host unreachable: {e}")
+		return jsonify({"error": "RTC host unavailable"}), 502
+
+	if resp.status_code != 200:
+		try:
+			return jsonify(resp.json()), resp.status_code
+		except Exception:
+			return jsonify({"error": resp.text}), resp.status_code
+
+	# Return offer as-is (do NOT inspect SDP)
+	return jsonify(resp.json()), 200
+
 
 def event_flush_loop():
 	"""
