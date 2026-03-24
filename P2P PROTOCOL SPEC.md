@@ -113,6 +113,37 @@ Stations operate two independent loops:
 - Bounded payload per sync
 - Safe to abort mid-cycle
 
+## JARGON - POOL vs ROOM
+### POOL is:
+- Trusted station hosting several p2p connections and coordinates data distribution
+
+### ROOM is:
+- Individual user hosts an untrusted room, same as pools but user-initiated
+- User-initiated, untrusted WebRTC session (direct peer connection).
+- Functionally similar transport layer, but without trusted station coordination.
+
+### RELAY is a an untrusted peer, functionally acts like a room
+
+```
+[ Station Connect ]
+   - Select Station
+   - Allocate Offer (POST /station/allocate-offer)
+   - Connect
+
+[ Discover Stations on same LAN as connected station ]
+   - GET /station/peers
+   - Save stations
+
+[ Direct Room (Manual) ]
+   - Create Offer (client-side)
+   - Paste Offer / Scan QR
+   - POST /answer (Node on port 7000)
+```
+
+Stations on same LAN can discover one another and present them to a connected user for alternative connections and to save adjascent stations to local storage. This is ```localhost:6001/station/peers``` in dev.
+
+Stations independent who broadcast an AP can be connected to manually by QR presented at the station. This is ```localhost:6003/station/allocate-offer``` in dev.
+
 ---
 
 ## 5. Bilateral Station Sync Protocol
