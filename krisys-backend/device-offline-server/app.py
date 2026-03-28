@@ -72,6 +72,8 @@ import pgpy
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import threading
+from blockchain import Block, Transaction
+from reconcile_local_chain import validate_local_chain_segment, repair_local_chain_from
 # --- Station device identity (self-signed keypair)
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
@@ -649,6 +651,239 @@ def db_list_blocks(limit: int) -> list[dict]:
 def db_get_block_public_key() -> str | None:
 	return db_get_meta("block_public_key")
 
+
+# STATION LOCAL CHAIN ADAPTERS FOR RECONCILIATION
+def _station_get_block_by_index(index: int):
+	with station_db() as conn:
+		row = conn.execute(
+			"SELECT json FROM blocks WHERE block_index = ?",
+			(index,),
+		).fetchone()
+		if not row:
+			return None
+		return json.loads(row["json"])
+
+def _station_get_local_tip_index() -> int:
+	with station_db() as conn:
+		row = conn.execute(
+			"SELECT MAX(block_index) AS tip FROM blocks"
+		).fetchone()
+		if row and row["tip"] is not None:
+			return int(row["tip"])
+		return -1
+
+def _station_recompute_block_hash(block: dict):
+	txs = []
+	for tx in block.get("transactions") or []:
+		txs.append(
+			Transaction(
+				timestamp_created=int(tx["timestamp_created"]),
+				station_address=tx["station_address"],
+				message_data=tx["message_data"],
+				related_addresses=tx.get("related_addresses") or [],
+				type_field=tx["type_field"],
+				priority_level=int(tx["priority_level"]),
+				transaction_id=tx["transaction_id"],
+				relay_hash=tx.get("relay_hash") or "",
+				posted_id=tx.get("posted_id") or "",
+				timestamp_posted=int(tx["timestamp_posted"]),
+			)
+		)
+
+	reconstructed = Block(
+		block_index=int(block["block_index"]),
+		timestamp=int(block["timestamp"]),
+		transactions=txs,
+		previous_hash=block["previous_hash"],
+		nonce=int(block.get("nonce") or 0),
+		signature=block.get("signature"),
+	)
+
+	return reconstructed.calculate_hash()
+
+def _station_verify_block_signature(block: dict) -> bool:
+	try:
+		block_public_key = db_get_block_public_key()
+		if not block_public_key:
+			return False
+
+		import pgpy
+		import json
+
+		pub = pgpy.PGPKey()
+		pub.parse(block_public_key)
+
+		sig = pgpy.PGPSignature.from_blob(block["signature"])
+
+		header = json.dumps(
+			{
+				"block_index": int(block["block_index"]),
+				"previous_hash": str(block["previous_hash"]),
+				"hash": str(block["hash"]),
+			},
+			sort_keys=True,
+			separators=(",", ":"),
+			ensure_ascii=False,
+		)
+
+		result = pub.verify(header.encode("utf-8"), sig)
+		return bool(result)
+
+	except Exception:
+		return False
+
+def _station_delete_blocks_from_index(index: int):
+	with station_db() as conn:
+		conn.execute(
+			"DELETE FROM blocks WHERE block_index >= ?",
+			(index,),
+		)
+		conn.commit()
+
+def _station_fetch_blocks_from_hq(start_index: int, count: int):
+	try:
+		resp = requests.get(f"{CENTRAL_URL}/blockchain", timeout=15)
+		if not resp.ok:
+			return []
+		chain = resp.json()
+		return [
+			b for b in chain
+			if isinstance(b, dict)
+			and b.get("block_index") is not None
+			and b["block_index"] >= start_index
+		][:count]
+	except Exception:
+		return []
+
+def _station_store_block(block: dict):
+	db_put_block_verified(block)
+
+
+# STATION LOCAL CHAIN SELF-VALIDATION + AUTO-REPAIR
+def run_local_blockchain_self_validation_and_repair():
+	_validation = validate_local_chain_segment(
+		get_block_by_index=_station_get_block_by_index,
+		get_local_tip_index=_station_get_local_tip_index,
+		recompute_block_hash=_station_recompute_block_hash,
+		verify_block_signature=_station_verify_block_signature,
+		start_index=0,
+	)
+
+	# Cry to HQ if station is behaving wonky
+	def emit_station_telemetry(event_type: str, severity: str, context: dict):
+		api_key = get_station_api_key()
+		if not api_key:
+			return
+
+		try:
+			requests.post(
+				f"{CENTRAL_URL}/admin/telemetry",
+				json={
+					"source": "station",
+					"event_type": event_type,
+					"severity": severity,
+					"context": context,
+					"node_id": STATION_ID,
+				},
+				headers={"X-Station-API-Key": api_key},
+				timeout=15,
+			)
+		except Exception:
+			pass  # do not block station execution
+
+	# CASE 1 — No usable chain present
+	if _validation.get("no_chain"):
+		logger.warning("Station has no usable local chain. Attempting full pull from HQ.")
+
+		# Attempt full chain pull from HQ
+		try:
+			resp = requests.get(f"{CENTRAL_URL}/blockchain", timeout=15)
+			if resp.ok:
+				chain = resp.json()
+				for block in chain:
+					if isinstance(block, dict):
+						db_put_block_verified(block)
+			else:
+				logger.error("Failed to fetch blockchain from HQ.")
+		except Exception as e:
+			logger.error(f"HQ fetch failed during no_chain recovery: {e}")
+
+		# Re-run validation after pull
+		_validation = validate_local_chain_segment(
+			get_block_by_index=_station_get_block_by_index,
+			get_local_tip_index=_station_get_local_tip_index,
+			recompute_block_hash=_station_recompute_block_hash,
+			verify_block_signature=_station_verify_block_signature,
+			start_index=0,
+		)
+		_first_invalid_index = _validation.get('first_invalid_index')
+
+		if _validation.get("no_chain") or not _validation.get("valid"):
+			logger.warning("Station chain missing and full HQ pull failed.")
+			logger.warning("Manual intervention required.")
+			
+			# Tell HQ local device is not functioning correctly so they can choose to coordinate with staff to reboot the device or allow it to fall back to relay mode, disabling check-ins and trusted pool hosting features.
+			emit_station_telemetry(
+				"db",
+				"warning",
+				{"message": "NO CHAIN on device found!. Self-validation failed for this station's local data and was not able to self-correct or be restored on its own. Please advise on-site maintenance this device needs to be restarted, and re-provisioned if problem persists.",
+					"action_taken": "downgrading station to relay",
+					"first_invalid_index": _first_invalid_index
+				},
+			)
+			STATION_STATE["mode"] = "relay"
+			return
+
+		logger.info(f"Station chain restored successfully.")
+		logger.info(f"Tip index: {_validation.get('local_tip')}")
+		return
+
+
+	# CASE 2 — Corruption detected
+	_first_invalid_index = _validation.get('first_invalid_index')
+	if not _validation['valid']:
+		if _first_invalid_index is None:	# Still broken even after retrying,
+			logger.warning("Validation failed but no invalid index returned!")
+			
+			# Tell HQ local device is not functioning correctly so they can choose to coordinate with staff to reboot the device or allow it to fall back to relay mode, disabling check-ins and trusted pool hosting features.
+			emit_station_telemetry(
+				"db",
+				"warning",
+				{"message": "NO INVALID INDEX specified for self-validation audit! That means this station failed to repair local data and was not able to self-correct or be restored on its own. Please advise on-site maintenance this device needs to be restarted, and re-provisioned if problem persists.",
+					"first_invalid_index": _first_invalid_index,
+					"action_taken": "downgrading station to relay",
+				},
+			)
+			STATION_STATE["mode"] = "relay"
+			return
+
+		# Station validation check provided the broken index, so let's rebuild from n-3 to compare hashes thoroughly...
+		logger.warning(f"Station chain corrupted at index {_first_invalid_index}.\n Attempting repair...")
+		repair_result = repair_local_chain_from(
+			first_invalid_index=_first_invalid_index,
+			get_block_by_index=_station_get_block_by_index,
+			get_local_tip_index=_station_get_local_tip_index,
+			recompute_block_hash=_station_recompute_block_hash,
+			verify_block_signature=_station_verify_block_signature,
+			delete_blocks_from_index=_station_delete_blocks_from_index,
+			fetch_blocks_from_source=_station_fetch_blocks_from_hq,
+			store_block=_station_store_block,
+		)
+
+		if not repair_result.get("repaired"): # ON FAIL - Downgrade station to relay
+			logger.warning("Station auto-repair failed. Manual intervention required.")
+			STATION_STATE["mode"] = "relay"
+			return
+		else: # ON SUCCESS - Station blockchain was broken but self-repaired
+			logger.info(f"Station chain repaired successfully.")
+			logger.info(f"New tip: {repair_result.get('new_tip')}")
+			return
+
+	# CASE 3 — Station blockchain had no issues validating
+	else:
+		logger.info(f"Station chain validated successfully.")
+		logger.info(f"Tip index: {_validation.get('local_tip')}")
+		return
 
 # ----------------------------
 # STATION helpers
@@ -1887,6 +2122,8 @@ try:
 	init_station_db()
 	# Ensure crisis trust anchor + genesis exist
 	bootstrap_station_or_die()
+	# Ensure station runs self check on locally stored blockchain
+	run_local_blockchain_self_validation_and_repair()
 except Exception as e:
 	logger.warning(f"Station bootstrap failed; continuing unbootstrapped (relay or dud): {e}")
 

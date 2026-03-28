@@ -66,6 +66,16 @@ def validate_local_chain_segment(
 	"""
 
 	local_tip = get_local_tip_index()
+
+	# No usable chain (no genesis / empty DB)
+	if local_tip < 0:
+		return {
+			"valid": False,
+			"first_invalid_index": None,
+			"local_tip": -1,
+			"no_chain": True,
+		}
+
 	previous_hash: Optional[str] = None
 
 	for index in range(start_index, local_tip + 1):
@@ -76,6 +86,7 @@ def validate_local_chain_segment(
 				"valid": False,
 				"first_invalid_index": index,
 				"local_tip": local_tip,
+				"no_chain": False,
 			}
 
 		# Recompute hash(body)
@@ -85,6 +96,7 @@ def validate_local_chain_segment(
 				"valid": False,
 				"first_invalid_index": index,
 				"local_tip": local_tip,
+				"no_chain": False,
 			}
 
 		# Verify signature(header)
@@ -93,6 +105,7 @@ def validate_local_chain_segment(
 				"valid": False,
 				"first_invalid_index": index,
 				"local_tip": local_tip,
+				"no_chain": False,
 			}
 
 		# Verify linkage
@@ -102,6 +115,7 @@ def validate_local_chain_segment(
 					"valid": False,
 					"first_invalid_index": index,
 					"local_tip": local_tip,
+					"no_chain": False,
 				}
 
 		previous_hash = block.get("hash")
@@ -110,6 +124,7 @@ def validate_local_chain_segment(
 		"valid": True,
 		"first_invalid_index": None,
 		"local_tip": local_tip,
+		"no_chain": False,
 	}
 
 

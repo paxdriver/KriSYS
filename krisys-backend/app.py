@@ -481,8 +481,8 @@ def _hq_verify_block_signature(block: dict) -> bool:
 	except Exception:
 		return False
 
+# Perform full deterministic validation of canonical chain
 def perform_full_canonical_chain_validation_on_boot():
-	# Perform full deterministic validation of canonical chain
 	_validation_result = validate_local_chain_segment(
 		get_block_by_index=_hq_get_block_by_index,
 		get_local_tip_index=_hq_get_local_tip_index,
@@ -491,21 +491,22 @@ def perform_full_canonical_chain_validation_on_boot():
 		start_index=0,
 	)
 
-	if not _validation_result["valid"]:
-		logger.critical(
-			f"HQ CANONICAL CHAIN CORRUPTED at index "
-			f"{_validation_result['first_invalid_index']}. "
-			f"Refusing to start."
-		)
-		raise RuntimeError(
-			f"HQ canonical chain invalid at index "
-			f"{_validation_result['first_invalid_index']}"
-		)
+	# NO CANONICAL CHAIN DETECTED
+	if _validation_result.get("no_chain"):
+		logger.critical("HQ CANONICAL CHAIN MISSING. No usable chain present. ")
+		logger.critical("Refusing to start.")
+		raise RuntimeError("HQ canonical chain missing!!!")
 
-	logger.info(
-		f"HQ canonical chain validated successfully. "
-		f"Tip index: {_validation_result['local_tip']}"
-	)
+	# CHAIN CORRUPTION DETECTED
+	if not _validation_result.get("valid") and _validation_result.get('first_invalid_index'):
+		logger.critical(f"HQ CANONICAL CHAIN CORRUPTED at index {_validation_result.get('first_invalid_index')}.")
+		logger.critical(f"Refusing to start.")
+		raise RuntimeError(f"HQ canonical chain invalid at index {_validation_result.get('first_invalid_index')}")
+	
+	# SUCCESS
+	logger.info(f"HQ canonical chain validated successfully.")
+	logger.info(f"Tip index: {_validation_result.get('local_tip')}")
+
 
 ########### TESTING IN DEV MODE ###############
 def DEV_POLICY_CHECK():
