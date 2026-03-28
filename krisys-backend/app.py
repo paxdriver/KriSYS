@@ -3,7 +3,7 @@ import hashlib
 import uuid
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
-from blockchain import Blockchain, Transaction, PolicySystem
+from blockchain import Blockchain, Transaction, PolicySystem, Block
 import time
 import json
 import fcntl
@@ -17,6 +17,7 @@ import hmac
 import secrets
 import qrcode
 from io import BytesIO
+from reconcile_local_chain import validate_local_chain_segment
 
 # DEV NOTE: logging for development only
 import logging
@@ -125,8 +126,6 @@ app = Flask(__name__, static_folder='static')
 is_dev = os.environ.get("FLASK_ENV") == "development"
 # Individual containers intended to simulate real network, using webserver, linode, and separate devices
 dev_remote = os.environ.get("FLASK_ENV") == "dev_remote"
-
-
 
 def _admin_token_state_dir() -> str:
 	# In dev_remote, persist under the HQ state dir; otherwise under ./blockchain
@@ -410,6 +409,104 @@ policy_system.current_policy = hurricane_policy_id
 # Create the blockchain
 blockchain = Blockchain(policy_system)
 
+
+# -------------------
+# HQ CANONICAL CHAIN SELF-VALIDATION (Full Scan on Startup)
+# -------------------
+
+# Return block dict by index from in-memory canonical chain
+def _hq_get_block_by_index(index: int):
+	if 0 <= index < len(blockchain.chain):
+		return blockchain.chain[index].to_dict()
+	return None
+
+# Return highest canonical block index
+def _hq_get_local_tip_index() -> int:
+	return len(blockchain.chain) - 1
+
+# Recompute canonical block hash(body). Uses same deterministic rules as Block.calculate_hash()
+def _hq_recompute_block_hash(block: dict):
+
+	# Rebuild Transaction objects for deterministic hashing
+	txs = []
+	for tx in block.get("transactions") or []:
+		txs.append(
+			Transaction(
+				timestamp_created=int(tx["timestamp_created"]),
+				station_address=tx["station_address"],
+				message_data=tx["message_data"],
+				related_addresses=tx.get("related_addresses") or [],
+				type_field=tx["type_field"],
+				priority_level=int(tx["priority_level"]),
+				transaction_id=tx["transaction_id"],
+				relay_hash=tx.get("relay_hash") or "",
+				posted_id=tx.get("posted_id") or "",
+				timestamp_posted=int(tx["timestamp_posted"]),
+			)
+		)
+
+	reconstructed = Block(
+		block_index=int(block["block_index"]),
+		timestamp=int(block["timestamp"]),
+		transactions=txs,
+		previous_hash=block["previous_hash"],
+		nonce=int(block.get("nonce") or 0),
+		signature=block.get("signature"),
+	)
+
+	return reconstructed.calculate_hash()
+
+# Verify detached PGP signature over canonical header
+def _hq_verify_block_signature(block: dict) -> bool:
+	try:
+		pub = pgpy.PGPKey()
+		pub.parse(blockchain.master_public_key)
+
+		sig = pgpy.PGPSignature.from_blob(block["signature"])
+
+		header = json.dumps(
+			{
+				"block_index": int(block["block_index"]),
+				"previous_hash": str(block["previous_hash"]),
+				"hash": str(block["hash"]),
+			},
+			sort_keys=True,
+			separators=(",", ":"),
+			ensure_ascii=False,
+		)
+
+		result = pub.verify(header.encode("utf-8"), sig)
+		return bool(result)
+
+	except Exception:
+		return False
+
+def perform_full_canonical_chain_validation_on_boot():
+	# Perform full deterministic validation of canonical chain
+	_validation_result = validate_local_chain_segment(
+		get_block_by_index=_hq_get_block_by_index,
+		get_local_tip_index=_hq_get_local_tip_index,
+		recompute_block_hash=_hq_recompute_block_hash,
+		verify_block_signature=_hq_verify_block_signature,
+		start_index=0,
+	)
+
+	if not _validation_result["valid"]:
+		logger.critical(
+			f"HQ CANONICAL CHAIN CORRUPTED at index "
+			f"{_validation_result['first_invalid_index']}. "
+			f"Refusing to start."
+		)
+		raise RuntimeError(
+			f"HQ canonical chain invalid at index "
+			f"{_validation_result['first_invalid_index']}"
+		)
+
+	logger.info(
+		f"HQ canonical chain validated successfully. "
+		f"Tip index: {_validation_result['local_tip']}"
+	)
+
 ########### TESTING IN DEV MODE ###############
 def DEV_POLICY_CHECK():
 	# Get current policy information
@@ -623,6 +720,8 @@ if not os.path.exists(private_key_file):
 	sys.exit(1)
 with open(private_key_file, 'r') as f:
 	ADMIN_TOKEN = f.read()
+
+perform_full_canonical_chain_validation_on_boot()
 
 # Admin authentication decorator
 def admin_required(f):
@@ -870,17 +969,17 @@ def create_wallet():
 # TODO: create proper frontend panel with proper auth using JWT
 @app.route("/admin", methods=["GET"])
 def admin_panel():
-    return render_template("admin.html",
-        admin_token_b64=base64.b64encode(
+	return render_template("admin.html",
+		admin_token_b64=base64.b64encode(
 			ADMIN_TOKEN.encode("utf-8")
 		).decode("utf-8")
-    )
+	)
 
 @app.route("/debug/stations")
 def debug_stations():
-    with db_connection() as conn:
-        rows = conn.execute("SELECT * FROM stations").fetchall()
-        return jsonify([dict(r) for r in rows])
+	with db_connection() as conn:
+		rows = conn.execute("SELECT * FROM stations").fetchall()
+		return jsonify([dict(r) for r in rows])
 
 # HQ Telemetry ingestion endpoint
 @app.route("/admin/telemetry", methods=["POST"])

@@ -649,6 +649,7 @@ Typical offline workflow tests:
 │   │   └── station_identity_CAMP_CENTRAL.json
 ├── database.py
 ├── Dockerfile
+├── reconcile_local_chain.py
 ├── relay-offline-server 
 │   ├── relay-data  (simulating offline dumb relay with persistent storage to help propagate offline messages)
 │   │   └── relay.db
