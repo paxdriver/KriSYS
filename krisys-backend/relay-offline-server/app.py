@@ -42,13 +42,14 @@ import os
 import sqlite3
 import requests
 import threading
+from reconcile_local_chain import validate_local_chain_segment, repair_local_chain_from
+from canonical_block import canonical_block_hash
 import time
 from contextlib import contextmanager
 import pgpy
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import logging
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -187,7 +188,7 @@ def relay_try_autopin_from_central(timeout_sec: int = 8) -> tuple[bool, str | No
 		return True, None
 	except Exception as e:
 		return False, str(e)
-
+	
 @contextmanager
 def relay_db():
 	"""
@@ -797,6 +798,143 @@ def db_list_blocks(limit: int) -> list[dict]:
 		blocks.reverse()
 		return blocks
 
+# ----------------------------
+# RELAY LOCAL CHAIN ADAPTERS FOR RECONCILIATION
+# ----------------------------
+def _relay_get_block_by_index(index: int):
+	with relay_db() as conn:
+		row = conn.execute(
+			"SELECT json FROM blocks WHERE block_index = ?",
+			(index,),
+		).fetchone()
+		if not row:
+			return None
+		return json.loads(row["json"])
+
+
+def _relay_get_local_tip_index() -> int:
+	with relay_db() as conn:
+		row = conn.execute(
+			"SELECT MAX(block_index) AS tip FROM blocks"
+		).fetchone()
+		if row and row["tip"] is not None:
+			return int(row["tip"])
+		return -1
+
+
+def _relay_verify_block_signature(block: dict) -> bool:
+	try:
+		block_public_key = db_get_meta("block_public_key")
+		if not block_public_key:
+			return False
+
+		pub = pgpy.PGPKey()
+		pub.parse(block_public_key)
+		sig = pgpy.PGPSignature.from_blob(block["signature"])
+
+		header = json.dumps(
+			{
+				"block_index": int(block["block_index"]),
+				"previous_hash": str(block["previous_hash"]),
+				"hash": str(block["hash"]),
+			},
+			sort_keys=True,
+			separators=(",", ":"),
+			ensure_ascii=False,
+		)
+
+		result = pub.verify(header.encode("utf-8"), sig)
+		return bool(result)
+
+	except Exception:
+		return False
+
+
+def _relay_delete_blocks_from_index(index: int):
+	with relay_db() as conn:
+		conn.execute(
+			"DELETE FROM blocks WHERE block_index >= ?",
+			(index,),
+		)
+		conn.commit()
+
+
+def _relay_fetch_blocks_from_hq(start_index: int, count: int):
+	try:
+		resp = requests.get(f"{CENTRAL_URL}/blockchain", timeout=15)
+		if not resp.ok:
+			return []
+		chain = resp.json()
+		return [
+			b for b in chain
+			if isinstance(b, dict)
+			and b.get("block_index") is not None
+			and b["block_index"] >= start_index
+		][:count]
+	except Exception:
+		return []
+
+
+def _relay_store_block(block: dict):
+	db_put_block_verified(block)
+
+
+def _relay_get_first_stored_index() -> int:
+	with relay_db() as conn:
+		row = conn.execute(
+			"""
+			SELECT block_index
+			FROM blocks
+			WHERE block_index != 0
+			ORDER BY block_index ASC
+			LIMIT 1
+			"""
+		).fetchone()
+
+		if row:
+			return int(row["block_index"])
+		return 0
+
+# RELAY LOCAL CHAIN SELF-VALIDATION + AUTO-REPAIR
+def perform_full_canonical_chain_validation_on_boot():
+	_validation = validate_local_chain_segment(
+		get_block_by_index=_relay_get_block_by_index,
+		get_local_tip_index=_relay_get_local_tip_index,
+		verify_block_signature=_relay_verify_block_signature,
+		start_index=_relay_get_first_stored_index(),
+	)
+
+	# DEBUGGING
+	logger.info("RELAY BOOT VALIDATION VERSION 2")
+
+	if _validation.get("no_chain"):  # guard missing chain
+		logger.warning("Relay has no chain; skipping repair on boot.")  # log
+		return  # exit early
+	
+	elif not _validation["valid"]:
+		logger.warning(f"Relay chain corrupted at index {_validation['first_invalid_index']}. Attempting repair.")
+
+		repair_result = repair_local_chain_from(
+			first_invalid_index=_validation["first_invalid_index"],  # start repair here
+			get_block_by_index=_relay_get_block_by_index,  # fetch block by index
+			get_local_tip_index=_relay_get_local_tip_index,  # read local tip
+			anchor_floor=_relay_get_first_stored_index(),  # NEW: pruned floor
+			verify_block_signature=_relay_verify_block_signature,  # signature check
+			delete_blocks_from_index=_relay_delete_blocks_from_index,  # rollback
+			fetch_blocks_from_source=_relay_fetch_blocks_from_hq,  # pull from HQ
+			store_block=_relay_store_block,  # store verified blocks
+		)
+
+		if not repair_result["repaired"]:
+			logger.critical("Relay auto-repair failed. Manual intervention required.")
+			raise RuntimeError("Relay chain unrecoverable")
+
+		logger.info(f"Relay chain repaired successfully. New tip: {repair_result['new_tip']}")
+
+	else:
+		logger.info(f"Relay chain validated successfully. Tip index: {_validation['local_tip']}")
+
+
 
 # ----------------------------
 # Crisis pinning (trust anchor)
@@ -856,34 +994,35 @@ def ensure_crisis_pin(
 # ----------------------------
 # Block verification + confirmations
 # ----------------------------
+def compute_block_hash(block: dict) -> str | None:  # wrapper for legacy calls
+    return canonical_block_hash(block)  # use shared canonical hash
+# def compute_block_hash(block: dict) -> str | None:
+# 	"""
+# 	Recompute block hash(body) using canonical JSON rules:
+# 	- sorted keys
+# 	- separators=(",", ":")
+# 	- ensure_ascii=False
+# 	- UTF-8 bytes hashed with SHA-256
+# 	"""
+# 	try:
+# 		body = {
+# 			"block_index": int(block["block_index"]),
+# 			"timestamp": int(block["timestamp"]),
+# 			"transactions": block.get("transactions") or [],
+# 			"previous_hash": str(block["previous_hash"]),
+# 			"nonce": int(block.get("nonce") or 0),
+# 		}
 
-def compute_block_hash(block: dict) -> str | None:
-	"""
-	Recompute block hash(body) using canonical JSON rules:
-	- sorted keys
-	- separators=(",", ":")
-	- ensure_ascii=False
-	- UTF-8 bytes hashed with SHA-256
-	"""
-	try:
-		body = {
-			"block_index": int(block["block_index"]),
-			"timestamp": int(block["timestamp"]),
-			"transactions": block.get("transactions") or [],
-			"previous_hash": str(block["previous_hash"]),
-			"nonce": int(block.get("nonce") or 0),
-		}
+# 		blob = json.dumps(
+# 			body,
+# 			sort_keys=True,
+# 			separators=(",", ":"),
+# 			ensure_ascii=False,
+# 		).encode("utf-8")
 
-		blob = json.dumps(
-			body,
-			sort_keys=True,
-			separators=(",", ":"),
-			ensure_ascii=False,
-		).encode("utf-8")
-
-		return hashlib.sha256(blob).hexdigest()
-	except Exception:
-		return None
+# 		return hashlib.sha256(blob).hexdigest()
+# 	except Exception:
+# 		return None
 
 
 def verify_block_signature(block: dict, block_public_key: str) -> bool:
@@ -1208,12 +1347,12 @@ def export_relay_payload() -> dict:
 	}
 
 
+init_relay_db()
+perform_full_canonical_chain_validation_on_boot()
+
 # ----------------------------
 # Routes
 # ----------------------------
-
-init_relay_db()
-
 
 @app.route("/health", methods=["GET"])
 def health():

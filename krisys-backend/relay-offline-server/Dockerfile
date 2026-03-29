@@ -16,6 +16,9 @@ ENV RELAY_AUTO_PULL=1
 
 # Copy only the relay app
 COPY ./relay-offline-server/ /app
+# Copy the shared utility function for relay's local blockchain validation/reconciliation
+COPY canonical_block.py /app/
+COPY reconcile_local_chain.py /app/
 
 EXPOSE 5000
 

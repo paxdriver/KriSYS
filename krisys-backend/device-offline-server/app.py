@@ -72,8 +72,8 @@ import pgpy
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import threading
-from blockchain import Block, Transaction
 from reconcile_local_chain import validate_local_chain_segment, repair_local_chain_from
+from canonical_block import canonical_block_hash
 # --- Station device identity (self-signed keypair)
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
@@ -672,35 +672,6 @@ def _station_get_local_tip_index() -> int:
 			return int(row["tip"])
 		return -1
 
-def _station_recompute_block_hash(block: dict):
-	txs = []
-	for tx in block.get("transactions") or []:
-		txs.append(
-			Transaction(
-				timestamp_created=int(tx["timestamp_created"]),
-				station_address=tx["station_address"],
-				message_data=tx["message_data"],
-				related_addresses=tx.get("related_addresses") or [],
-				type_field=tx["type_field"],
-				priority_level=int(tx["priority_level"]),
-				transaction_id=tx["transaction_id"],
-				relay_hash=tx.get("relay_hash") or "",
-				posted_id=tx.get("posted_id") or "",
-				timestamp_posted=int(tx["timestamp_posted"]),
-			)
-		)
-
-	reconstructed = Block(
-		block_index=int(block["block_index"]),
-		timestamp=int(block["timestamp"]),
-		transactions=txs,
-		previous_hash=block["previous_hash"],
-		nonce=int(block.get("nonce") or 0),
-		signature=block.get("signature"),
-	)
-
-	return reconstructed.calculate_hash()
-
 def _station_verify_block_signature(block: dict) -> bool:
 	try:
 		block_public_key = db_get_block_public_key()
@@ -758,15 +729,32 @@ def _station_fetch_blocks_from_hq(start_index: int, count: int):
 def _station_store_block(block: dict):
 	db_put_block_verified(block)
 
+def _station_get_first_stored_index():
+	with station_db() as conn:
+		row = conn.execute(
+			"""
+			SELECT block_index
+			FROM blocks
+			WHERE block_index != 0
+			ORDER BY block_index ASC
+			LIMIT 1
+			"""
+		).fetchone()
+
+		if row:
+			return int(row["block_index"])
+
+		# fallback if only genesis exists
+		return 0
+
 
 # STATION LOCAL CHAIN SELF-VALIDATION + AUTO-REPAIR
 def run_local_blockchain_self_validation_and_repair():
 	_validation = validate_local_chain_segment(
 		get_block_by_index=_station_get_block_by_index,
 		get_local_tip_index=_station_get_local_tip_index,
-		recompute_block_hash=_station_recompute_block_hash,
 		verify_block_signature=_station_verify_block_signature,
-		start_index=0,
+		start_index=_station_get_first_stored_index(),
 	)
 
 	# Cry to HQ if station is behaving wonky
@@ -812,9 +800,8 @@ def run_local_blockchain_self_validation_and_repair():
 		_validation = validate_local_chain_segment(
 			get_block_by_index=_station_get_block_by_index,
 			get_local_tip_index=_station_get_local_tip_index,
-			recompute_block_hash=_station_recompute_block_hash,
 			verify_block_signature=_station_verify_block_signature,
-			start_index=0,
+			start_index=_station_get_first_stored_index(),
 		)
 		_first_invalid_index = _validation.get('first_invalid_index')
 
@@ -860,14 +847,14 @@ def run_local_blockchain_self_validation_and_repair():
 		# Station validation check provided the broken index, so let's rebuild from n-3 to compare hashes thoroughly...
 		logger.warning(f"Station chain corrupted at index {_first_invalid_index}.\n Attempting repair...")
 		repair_result = repair_local_chain_from(
-			first_invalid_index=_first_invalid_index,
-			get_block_by_index=_station_get_block_by_index,
-			get_local_tip_index=_station_get_local_tip_index,
-			recompute_block_hash=_station_recompute_block_hash,
-			verify_block_signature=_station_verify_block_signature,
-			delete_blocks_from_index=_station_delete_blocks_from_index,
-			fetch_blocks_from_source=_station_fetch_blocks_from_hq,
-			store_block=_station_store_block,
+			first_invalid_index=_first_invalid_index,  # start repair here
+			get_block_by_index=_station_get_block_by_index,  # fetch block by index
+			get_local_tip_index=_station_get_local_tip_index,  # read local tip
+			anchor_floor=_station_get_first_stored_index(),  # NEW: pruned floor
+			verify_block_signature=_station_verify_block_signature,  # signature check
+			delete_blocks_from_index=_station_delete_blocks_from_index,  # rollback
+			fetch_blocks_from_source=_station_fetch_blocks_from_hq,  # pull from HQ
+			store_block=_station_store_block,  # store verified blocks
 		)
 
 		if not repair_result.get("repaired"): # ON FAIL - Downgrade station to relay
@@ -1761,10 +1748,7 @@ def rebuild_pool_inventory_snapshot() -> None:
 		for msg in (snapshot.get("queued") or [])
 		if isinstance(msg, dict) and msg.get("relay_hash")
 	])
-	logger.info("-----------"	)
-	logger.info(f"Rebuilt pool snapshot v{POOL_COORDINATION_STATE['version']} ")
-	logger.info(f"with {relay_hash_count} relay_hashes"	)
-	logger.info("-----------"	)
+	logger.info(f"Rebuilt pool snapshot v{POOL_COORDINATION_STATE['version']} with {relay_hash_count} relay_hashes")
 
 # Produce hash-only inventory for exchanging with pool peers 
 def get_pool_inventory_snapshot() -> dict:
@@ -1812,30 +1796,32 @@ def get_full_pool_snapshot() -> dict:
 # ----------------------------
 # Block verification + confirmations
 # ----------------------------
-def compute_block_hash(block: dict) -> str | None:
-	"""
-	Recompute block hash(body) using the exact canonical JSON rules used by
-	your central backend Block.calculate_hash().
-	"""
-	try:
-		body = {
-			"block_index": int(block["block_index"]),
-			"timestamp": int(block["timestamp"]),
-			"transactions": block.get("transactions") or [],
-			"previous_hash": str(block["previous_hash"]),
-			"nonce": int(block.get("nonce") or 0),
-		}
+def compute_block_hash(block: dict) -> str | None:  # wrapper for legacy calls
+    return canonical_block_hash(block)  # use shared canonical hash
+# def compute_block_hash(block: dict) -> str | None:
+# 	"""
+# 	Recompute block hash(body) using the exact canonical JSON rules used by
+# 	your central backend Block.calculate_hash().
+# 	"""
+# 	try:
+# 		body = {
+# 			"block_index": int(block["block_index"]),
+# 			"timestamp": int(block["timestamp"]),
+# 			"transactions": block.get("transactions") or [],
+# 			"previous_hash": str(block["previous_hash"]),
+# 			"nonce": int(block.get("nonce") or 0),
+# 		}
 
-		blob = json.dumps(
-			body,
-			sort_keys=True,
-			separators=(",", ":"),
-			ensure_ascii=False,
-		).encode("utf-8")
+# 		blob = json.dumps(
+# 			body,
+# 			sort_keys=True,
+# 			separators=(",", ":"),
+# 			ensure_ascii=False,
+# 		).encode("utf-8")
 
-		return hashlib.sha256(blob).hexdigest()
-	except Exception:
-		return None
+# 		return hashlib.sha256(blob).hexdigest()
+# 	except Exception:
+# 		return None
 
 
 def verify_block_signature(block: dict, block_public_key: str) -> bool:
@@ -2867,7 +2853,6 @@ def flush_to_central_internal() -> dict:
 
 		if isinstance(chain, list) and chain:
 			logger.info("Central chain tip: %s", chain[-1]["block_index"])
-			logger.info("Station DB tip before pull: %s", db_get_block_hash(len(chain) - 1))
 
 			# Determine local tip
 			local_blocks = db_list_blocks(limit=1)
@@ -2877,6 +2862,8 @@ def flush_to_central_internal() -> dict:
 				local_index = int(local_tip.get("block_index", -1))
 			else:
 				local_index = -1
+
+			logger.info("Station DB local tip index before pull: %s", local_index)
 
 			# Pull ALL blocks newer than local tip
 			suffix = [

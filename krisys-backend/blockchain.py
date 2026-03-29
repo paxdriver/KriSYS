@@ -3,6 +3,7 @@ import hashlib
 import json
 import time
 from datetime import datetime, timedelta
+from canonical_block import canonical_block_dict, canonical_block_hash
 import os
 import uuid
 import copy
@@ -225,7 +226,7 @@ class Block:
 		previous_hash: str,
 		nonce: int = 0,
 			# NOTE: blockchain's public key is also the signature for signing blocks! If compromised, terminate entire blockchain and start a new one, freezing the old blockchain entirely.
-		signature: Optional[str] = None     
+		signature: Optional[str] = None
 	):
 		"""
 		Represents a block in the blockchain
@@ -239,34 +240,63 @@ class Block:
 		self.transactions = transactions
 		self.previous_hash = previous_hash
 		self.nonce = nonce
-		self.hash = self.calculate_hash()
 		self.signature = signature  # Server PGP signing of blocks so users can validate blocks relayed from other users. 
+		self.hash = self.calculate_hash() # signature must be set before computing the hash
 
 	def calculate_hash(self) -> str:
-		block_data = json.dumps({
-			"block_index": self.block_index,
-			"timestamp": self.timestamp,
-			"transactions": [tx.to_dict() for tx in self.transactions],
-			"previous_hash": self.previous_hash,
-			"nonce": self.nonce
-			}, 
-			sort_keys=True, 
-			separators=(",", ":"),  # no spaces so that json from ES6 matches dict in python
-									# match JS JSON.stringify unicode behavior)
-			ensure_ascii=False,         # make sure utf characters aren't escaped because that would distort any deterministic hash
+		"""
+		Canonical block hash using shared deterministic helper.
+		"""
+		block_dict = canonical_block_dict(  # build canonical dict
+			block_index=self.block_index,  # pass index
+			timestamp=self.timestamp,  # pass timestamp
+			transactions=[tx.to_dict() for tx in self.transactions],  # tx dicts
+			previous_hash=self.previous_hash,  # previous hash
+			nonce=self.nonce,  # nonce
+			block_hash='',  # placeholder; hash computed from body only
+			signature=self.signature,  # signature not used in hash
 		)
-		return hashlib.sha256(block_data.encode()).hexdigest()
+		return canonical_block_hash(block_dict)  # compute canonical hash
 
 	def to_dict(self) -> Dict:
-		return {
-			"block_index": self.block_index,
-			"timestamp": self.timestamp,
-			"transactions": [tx.to_dict() for tx in self.transactions],
-			"previous_hash": self.previous_hash,
-			"hash": self.hash,
-			"nonce": self.nonce,
-			"signature": self.signature,
-		}
+		"""
+		Canonical block dict using shared serializer.
+		"""
+		return canonical_block_dict(  # build canonical dict
+			block_index=self.block_index,  # pass index
+			timestamp=self.timestamp,  # pass timestamp
+			transactions=[tx.to_dict() for tx in self.transactions],  # tx dicts
+			previous_hash=self.previous_hash,  # previous hash
+			nonce=self.nonce,  # nonce
+			block_hash=self.hash,  # stored hash
+			signature=self.signature,  # signature
+		)
+
+	# def calculate_hash(self) -> str:
+	# 	block_data = json.dumps({
+	# 		"block_index": self.block_index,
+	# 		"timestamp": self.timestamp,
+	# 		"transactions": [tx.to_dict() for tx in self.transactions],
+	# 		"previous_hash": self.previous_hash,
+	# 		"nonce": self.nonce
+	# 		}, 
+	# 		sort_keys=True, 
+	# 		separators=(",", ":"),  # no spaces so that json from ES6 matches dict in python
+	# 								# match JS JSON.stringify unicode behavior)
+	# 		ensure_ascii=False,         # make sure utf characters aren't escaped because that would distort any deterministic hash
+	# 	)
+	# 	return hashlib.sha256(block_data.encode()).hexdigest()
+
+	# def to_dict(self) -> Dict:
+	# 	return {
+	# 		"block_index": self.block_index,
+	# 		"timestamp": self.timestamp,
+	# 		"transactions": [tx.to_dict() for tx in self.transactions],
+	# 		"previous_hash": self.previous_hash,
+	# 		"hash": self.hash,
+	# 		"nonce": self.nonce,
+	# 		"signature": self.signature,
+	# 	}
 		
 class Wallet:
 	def __init__(self, family_id, crisis_id):

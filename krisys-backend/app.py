@@ -3,7 +3,7 @@ import hashlib
 import uuid
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
-from blockchain import Blockchain, Transaction, PolicySystem, Block
+from blockchain import Block, Blockchain, Transaction, PolicySystem
 import time
 import json
 import fcntl
@@ -409,7 +409,6 @@ policy_system.current_policy = hurricane_policy_id
 # Create the blockchain
 blockchain = Blockchain(policy_system)
 
-
 # -------------------
 # HQ CANONICAL CHAIN SELF-VALIDATION (Full Scan on Startup)
 # -------------------
@@ -423,38 +422,6 @@ def _hq_get_block_by_index(index: int):
 # Return highest canonical block index
 def _hq_get_local_tip_index() -> int:
 	return len(blockchain.chain) - 1
-
-# Recompute canonical block hash(body). Uses same deterministic rules as Block.calculate_hash()
-def _hq_recompute_block_hash(block: dict):
-
-	# Rebuild Transaction objects for deterministic hashing
-	txs = []
-	for tx in block.get("transactions") or []:
-		txs.append(
-			Transaction(
-				timestamp_created=int(tx["timestamp_created"]),
-				station_address=tx["station_address"],
-				message_data=tx["message_data"],
-				related_addresses=tx.get("related_addresses") or [],
-				type_field=tx["type_field"],
-				priority_level=int(tx["priority_level"]),
-				transaction_id=tx["transaction_id"],
-				relay_hash=tx.get("relay_hash") or "",
-				posted_id=tx.get("posted_id") or "",
-				timestamp_posted=int(tx["timestamp_posted"]),
-			)
-		)
-
-	reconstructed = Block(
-		block_index=int(block["block_index"]),
-		timestamp=int(block["timestamp"]),
-		transactions=txs,
-		previous_hash=block["previous_hash"],
-		nonce=int(block.get("nonce") or 0),
-		signature=block.get("signature"),
-	)
-
-	return reconstructed.calculate_hash()
 
 # Verify detached PGP signature over canonical header
 def _hq_verify_block_signature(block: dict) -> bool:
@@ -486,7 +453,6 @@ def perform_full_canonical_chain_validation_on_boot():
 	_validation_result = validate_local_chain_segment(
 		get_block_by_index=_hq_get_block_by_index,
 		get_local_tip_index=_hq_get_local_tip_index,
-		recompute_block_hash=_hq_recompute_block_hash,
 		verify_block_signature=_hq_verify_block_signature,
 		start_index=0,
 	)
@@ -717,7 +683,6 @@ if not os.path.exists(private_key_file):
 		context={"message": "Master private key file not found! Shutting down."}
 	)
 	logger.critical("MASTER PRIVATE KEY FILE NOT FOUND. SHUTTING DOWN.")
-	import sys
 	sys.exit(1)
 with open(private_key_file, 'r') as f:
 	ADMIN_TOKEN = f.read()

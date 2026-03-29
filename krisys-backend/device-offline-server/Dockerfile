@@ -19,6 +19,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy station app
 COPY ./device-offline-server/ /app
+# Copy the shared utility function for station's local blockchain validation/reconciliation
+COPY canonical_block.py /app/
+COPY reconcile_local_chain.py /app/
 
 # Install Node deps for RTC host
 WORKDIR /app/rtc-host
