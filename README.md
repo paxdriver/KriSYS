@@ -647,6 +647,7 @@ Typical offline workflow tests:
 │   ├── station-data  (simulating independent station for station-station peer exchange)
 │   │   ├── station.db
 │   │   └── station_identity_CAMP_CENTRAL.json
+├── canonical_block.py
 ├── database.py
 ├── Dockerfile
 ├── reconcile_local_chain.py
@@ -1028,12 +1029,12 @@ Targets:
 - Clearer status surfaces:
 	- [x] central connectivity vs mesh-only
 	- [x] station/relay reachable indicators
-	- [ ] P2P connected/active status
-	- [ ] Facilitate visibility of P2P pools
+	- [x] P2P connected/active status
+	- [x] Facilitate visibility of P2P pools
 - Better error messaging:
 	- [x] offline/online transitions
 	- [x] missing keys / missing crisis metadata
-	- [ ] invalid blocks / signature failures
+	- [x] invalid blocks / signature failures
 - Storage/bandwidth optimizations:
 	- [ ] pruning strategy UX
 	- [ ] user-visible limits and defaults
@@ -1073,7 +1074,7 @@ Define & display formal station states:
 - [x] active + offline
 - [x] relay fallback
 - [x] identity rejected
-- [ ] storage paused
+- [x] storage paused
 
 Establish simplified relay flow:<br>
 (*Uncertain best approach for this, perhaps provide url via qr with simple json containing pertinent info for application to consume when manually setting device to relay mode?*)
@@ -1088,9 +1089,9 @@ HQ:
 #### Phase 6.3 — Coordination of Public Pools (In Progress)
 Iron out rules and flow of coordinating P2P:
 - [x] Bulletin board hosted by stations to publish join codes
-- [ ] Establish public gathering to facilitate offline pools / exchanges
-- [ ] Automate propagation between pools (pool-2-pool sharing)
-- [ ] Aggregate propagated unconfirmed queues to stations
+- [x] Establish public gathering to facilitate offline pools / exchanges
+- [x] Automate propagation between pools (pool-2-pool sharing)
+- [x] Aggregate propagated unconfirmed queues to stations
 
 #### Phase 6.4 — Safe Admin Controls
 Add admin controls:

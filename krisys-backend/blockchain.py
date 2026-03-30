@@ -271,32 +271,6 @@ class Block:
 			block_hash=self.hash,  # stored hash
 			signature=self.signature,  # signature
 		)
-
-	# def calculate_hash(self) -> str:
-	# 	block_data = json.dumps({
-	# 		"block_index": self.block_index,
-	# 		"timestamp": self.timestamp,
-	# 		"transactions": [tx.to_dict() for tx in self.transactions],
-	# 		"previous_hash": self.previous_hash,
-	# 		"nonce": self.nonce
-	# 		}, 
-	# 		sort_keys=True, 
-	# 		separators=(",", ":"),  # no spaces so that json from ES6 matches dict in python
-	# 								# match JS JSON.stringify unicode behavior)
-	# 		ensure_ascii=False,         # make sure utf characters aren't escaped because that would distort any deterministic hash
-	# 	)
-	# 	return hashlib.sha256(block_data.encode()).hexdigest()
-
-	# def to_dict(self) -> Dict:
-	# 	return {
-	# 		"block_index": self.block_index,
-	# 		"timestamp": self.timestamp,
-	# 		"transactions": [tx.to_dict() for tx in self.transactions],
-	# 		"previous_hash": self.previous_hash,
-	# 		"hash": self.hash,
-	# 		"nonce": self.nonce,
-	# 		"signature": self.signature,
-	# 	}
 		
 class Wallet:
 	def __init__(self, family_id, crisis_id):
