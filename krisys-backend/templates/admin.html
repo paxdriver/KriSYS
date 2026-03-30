@@ -52,6 +52,22 @@
 				</div>
 			</div>
 
+			<!-- Create Station -->
+			<div class="card">
+				<div class="card-title">Create Station (Pending)</div>
+
+				<div style="display:flex; gap:12px; flex-wrap:wrap;">
+					<input id="create-station-id" placeholder="station_id" />
+					<input id="create-station-name" placeholder="name" />
+					<input id="create-station-type" placeholder="type (hospital, camp...)" />
+					<input id="create-station-location" placeholder="location (optional)" />
+					<input id="create-station-passphrase" placeholder="activation passphrase" />
+					<button onclick="createStation()">Create</button>
+				</div>
+
+				<div id="create-station-status" class="small"></div>
+			</div>
+
 			<!-- Station Filters -->
 			<div class="card">
 				<div class="card-title">Filter Stations</div>
@@ -133,11 +149,6 @@
 	</div>
 
 	<script>
-		// DEV NOTE: injected admin token from template served by app.py/admin endpoint
-		window.ADMIN_TOKEN_B64 = "{{ admin_token_b64 }}"
-	</script>
-
-	<script>
 		const ADMIN_TOKEN_KEY = 'krisys_admin_token_b64'
 
 		/**
@@ -145,17 +156,27 @@
 		* (base64(master_private_key.asc)) so this UI can keep working without an
 		* extra fetch. Later we can swap this helper to read from an env or config.
 		*/
-		function seedAdminTokenFromTemplate() {
-			const embedded = window.ADMIN_TOKEN_B64 ?? ''
-			if (!embedded) {
-				throw new Error('Admin token is missing from the template context')
+		function getAdminToken() {
+			//return sessionStorage.getItem(ADMIN_TOKEN_KEY) || ''
+			const token = sessionStorage.getItem(ADMIN_TOKEN_KEY)
+			if (!token) {
+				throw new Error('Admin token not set')
 			}
-			sessionStorage.setItem(ADMIN_TOKEN_KEY, embedded)
-			return embedded
+			return token
 		}
 
-		function getAdminToken() {
-			return sessionStorage.getItem(ADMIN_TOKEN_KEY) || ''
+		function saveAdminToken() {
+
+			const input = document.getElementById('admin-token-input')
+			const value = input?.value?.trim()
+
+			if (!value) {
+				setTokenStatus('Token cannot be empty', true)
+				return
+			}
+
+			sessionStorage.setItem(ADMIN_TOKEN_KEY, value)
+			setTokenStatus('Token saved to session', false)
 		}
 
 		function setTokenStatus(msg, isError) {
@@ -287,10 +308,12 @@
 
 		async function initializeStationTable() {
 			try {
-				const token = seedAdminTokenFromTemplate()
-				const input = document.getElementById('admin-token-input')
-				if (input) input.value = token
-				setTokenStatus('Token loaded from server', false)
+				const existing = getAdminToken()
+				if (existing) {
+					const input = document.getElementById('admin-token-input')
+					if (input) input.value = existing
+					setTokenStatus('Token loaded from session', false)
+				}
 				
 				await loadStations()
 				await loadTelemetry()
@@ -375,6 +398,67 @@
 
 			await loadStations()
 			await loadTelemetry()
+		}
+
+		async function createStation() {
+
+			const token = getAdminToken()
+			const statusEl = document.getElementById('create-station-status')
+
+			const stationId = document.getElementById('create-station-id').value
+			const name = document.getElementById('create-station-name').value
+			const type = document.getElementById('create-station-type').value
+			const location = document.getElementById('create-station-location').value
+			const passphrase = document.getElementById('create-station-passphrase').value
+
+			if (!stationId || !name || !type || !passphrase) {
+				statusEl.textContent = 'Missing required fields'
+				statusEl.style.color = '#b91c1c'
+				return
+			}
+
+			try {
+
+				const res = await fetch('/admin/station/create', {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+						'X-Admin-Token': token
+					},
+					body: JSON.stringify({
+						station_id: stationId,
+						name: name,
+						stype: type,
+						location: location,
+						passphrase: passphrase
+					})
+				})
+
+				const data = await res.json()
+
+				if (!res.ok) {
+					statusEl.textContent = data.error || 'Creation failed'
+					statusEl.style.color = '#b91c1c'
+					return
+				}
+
+				statusEl.textContent = `Station ${stationId} created (pending)`
+				statusEl.style.color = '#065f46'
+
+				// Clear inputs
+				document.getElementById('create-station-id').value = ''
+				document.getElementById('create-station-name').value = ''
+				document.getElementById('create-station-type').value = ''
+				document.getElementById('create-station-location').value = ''
+				document.getElementById('create-station-passphrase').value = ''
+
+				await loadStations()
+				await loadTelemetry()
+
+			} catch (error) {
+				statusEl.textContent = error.message
+				statusEl.style.color = '#b91c1c'
+			}
 		}
 	</script>
 	

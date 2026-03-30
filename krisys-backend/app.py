@@ -1040,7 +1040,7 @@ def _safe_parse_context_json(raw: str | None) -> dict | None:
 
 
 @app.route("/admin/stations/status", methods=["GET"])
-# @admin_required
+@admin_required
 def admin_station_status():
 	"""
 	Aggregate station operational state for the HQ panel.
@@ -1952,7 +1952,8 @@ def unlock_wallet_endpoint():
 
 # DEV NOTE: move to admin UI in production, requiring admin key to access internally, not exposed by default
 @app.route("/admin/station/create", methods=["POST"])
-@station_admin_required
+@admin_required
+# @station_admin_required # convenience, uses txt file in dev - DEV NOTE: REMOVE THIS
 def admin_station_create():
 	"""
 	DEV / DEV-REMOTE ONLY CAN ACCESS WITHOUT AUTH
@@ -2061,6 +2062,7 @@ def admin_station_create():
 
 # ADMIN: Revoke Station (DEV NOTE: dev control only)
 @app.route("/admin/station/revoke", methods=["POST"])
+@admin_required
 def admin_station_revoke():
 	"""
 	Set station status to 'revoked'.
@@ -2105,6 +2107,7 @@ def admin_station_revoke():
 
 # ADMIN: Reactivate Station
 @app.route("/admin/station/reactivate", methods=["POST"])
+@admin_required
 def admin_station_reactivate():
 	"""
 	Set station status back to 'active'.
