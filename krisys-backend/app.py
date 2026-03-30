@@ -2058,6 +2058,93 @@ def admin_station_create():
 		"station_id": station_id,
 	}), 201
 
+
+# ADMIN: Revoke Station (DEV NOTE: dev control only)
+@app.route("/admin/station/revoke", methods=["POST"])
+def admin_station_revoke():
+	"""
+	Set station status to 'revoked'.
+
+	This:
+	- Does NOT delete station
+	- Does NOT modify blockchain
+	- Forces station to fall back to relay mode on next sync
+	"""
+
+	data = request.get_json(force=True, silent=True) or {}
+	station_id = data.get("station_id")
+
+	if not isinstance(station_id, str) or not station_id.strip():
+		return jsonify({"error": "Missing station_id"}), 400
+
+	with db_connection() as conn:
+		conn.execute(
+			"""
+			UPDATE stations
+			SET status = 'revoked'
+			WHERE station_id = ?
+			""",
+			(station_id.strip(),),
+		)
+		conn.commit()
+
+	# Log admin action
+	emit_telemetry_event(
+		source="HQ",
+		severity="warning",
+		event_type="admin_action",
+		context={
+			"action": "revoke_station",
+			"station_id": station_id.strip(),
+		},
+		node_id=station_id.strip(),
+	)
+
+	return jsonify({"status": "revoked", "station_id": station_id.strip()}), 200
+
+
+# ADMIN: Reactivate Station
+@app.route("/admin/station/reactivate", methods=["POST"])
+def admin_station_reactivate():
+	"""
+	Set station status back to 'active'.
+
+	This:
+	- Does NOT regenerate API key
+	- Restores station behavior on next flush
+	"""
+
+	data = request.get_json(force=True, silent=True) or {}
+	station_id = data.get("station_id")
+
+	if not isinstance(station_id, str) or not station_id.strip():
+		return jsonify({"error": "Missing station_id"}), 400
+
+	with db_connection() as conn:
+		conn.execute(
+			"""
+			UPDATE stations
+			SET status = 'active'
+			WHERE station_id = ?
+			""",
+			(station_id.strip(),),
+		)
+		conn.commit()
+
+	emit_telemetry_event(
+		source="HQ",
+		severity="info",
+		event_type="admin_action",
+		context={
+			"action": "reactivate_station",
+			"station_id": station_id.strip(),
+		},
+		node_id=station_id.strip(),
+	)
+
+	return jsonify({"status": "active", "station_id": station_id.strip()}), 200
+
+
 # Debug endpoints
 @app.route('/debug/wallet/<family_id>')
 def debug_wallet(family_id):

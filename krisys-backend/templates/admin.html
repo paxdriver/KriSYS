@@ -99,6 +99,7 @@
 							<th>Mode</th>
 							<th>Last Seen (HQ)</th>
 							<th>Last Summary</th>
+							<th>Actions</th>
 						</tr>
 					</thead>
 					<tbody id="station-table-body">
@@ -252,6 +253,11 @@
 				}
 
 				const tr = document.createElement('tr')
+				const actionButtons = `
+					<button onclick="revokeStation('${escapeHtml(s.station_id)}')">Revoke</button>
+					<button onclick="reactivateStation('${escapeHtml(s.station_id)}')">Activate</button>
+				`
+
 				tr.innerHTML = `
 					<td>${escapeHtml(s.station_id)}</td>
 					<td>${escapeHtml(s.name || '-')}</td>
@@ -261,6 +267,7 @@
 					<td>${escapeHtml(s.lifecycle?.mode || '-')}</td>
 					<td>${formatTime(s.last_seen_at)}</td>
 					<td>${escapeHtml(summary)}</td>
+					<td>${actionButtons}</td>
 				`
 				tbody.appendChild(tr)
 			}
@@ -336,6 +343,38 @@
 		function loadMoreTelemetry() {
 			telemetryLimit += 20
 			loadTelemetry()
+		}
+
+		async function revokeStation(stationId) {
+			const token = getAdminToken()
+
+			await fetch('/admin/station/revoke', {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'X-Admin-Token': token
+				},
+				body: JSON.stringify({ station_id: stationId })
+			})
+
+			await loadStations()
+			await loadTelemetry()
+		}
+
+		async function reactivateStation(stationId) {
+			const token = getAdminToken()
+
+			await fetch('/admin/station/reactivate', {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'X-Admin-Token': token
+				},
+				body: JSON.stringify({ station_id: stationId })
+			})
+
+			await loadStations()
+			await loadTelemetry()
 		}
 	</script>
 	
