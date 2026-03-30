@@ -2,22 +2,26 @@
 ---
 
 ## Relay Mode Matrix v1
-
-| Property | Static Infrastructure Relay | Mobile Ferry Relay | Station Fallback Relay | Volunteer (Wallet) Relay |
-|-----------|---------------------------|-------------------|------------------------|--------------------------|
-| Intended Use | Extend range on LAN | Physically move data between clusters | Degraded station mode | User volunteer mesh |
-| Trust Level | Untrusted | Untrusted | Operationally trusted (identity exists but degraded) | Untrusted |
-| Provisioning | Scan station QR | Scan station QR or manual crisis pin | Automatic (station loses credentials) | Toggle in app |
-| Crisis Pin | Persistent | Ephemeral | Persistent | Ephemeral |
-| Reset Behavior | Rare | Easy wipe/reset | Only via reprovision | Stop toggle |
-| HQ Connectivity | Low-frequency | Very low-frequency | Normal station cadence (if restored) | Optional |
-| Preferred Upstream | Station | Station (always prefer local) | HQ (when station restored) | Any |
-| Auto-Connect | No | Yes (aggressive) | No | No |
-| Auto-Broadcast | No | Yes (beacon-like during window) | No | No |
-| Storage TTL | Normal | Shorter TTL | Normal | Short |
-| Persistence Priority | High | Low | High | Low |
-| Deployment Skill Required | Minimal (QR scan) | Minimal (QR scan + reset awareness) | None | None |
-| Docker Container | Dedicated relay container | Separate “ferry” container | Station container | Inside wallet app |
+| Property | `LAN_amplifier` | `delivery_facilitation` | Volunteer Relay (Wallet) |
+|------------|----------------|-------------------------|--------------------------|
+| Deployment Context | Static infrastructure (camp LAN, hospital LAN, shelter router) | Mobile aid vehicle, helicopter, roaming logistics unit | User-enabled temporary relay |
+| Container Type | Dedicated relay container | Dedicated relay container | Frontend (React) |
+| Operational Intent | Extend LAN range and host public rooms | Physically move canonical data between disconnected clusters | Increase mesh density temporarily |
+| Trust Level | Untrusted | Untrusted | Untrusted |
+| Crisis Pin | Persistent | Ephemeral / easily resettable | Ephemeral (session-scoped) |
+| Provisioning Method | Scan station QR | Scan station QR (preferred) | User toggle |
+| HQ Provisioning Required | No | No | No |
+| Reset / Wipe | Rare | Expected to be easy and frequent | Stop toggle |
+| Upstream Preference | Station → HQ → Mesh | Station → HQ → Mesh | Station → Relay → Mesh (no HQ) |
+| HQ Pull Behavior | Low-frequency fallback only | Only when isolated from stations | None |
+| HQ Push Behavior | None (cannot originate transactions) | None | None |
+| Block Retention | Full blockchain (if storage permits) | Full blockchain (strongly preferred) | Full blockchain while active |
+| Queue Retention | Standard | Extended (to maximize ferry usefulness) | Standard |
+| Auto-Connect | No | Yes (aggressive while active) | Manual |
+| Auto-Broadcast / Discovery | Passive | Active discovery window | Passive |
+| LAN Room Hosting | Yes | Yes | Yes |
+| Telemetry Tagging | relay_role=LAN_amplifier | relay_role=delivery_facilitation | volunteer |
+| Intended Lifespan | Long-term | Short-term / mission-based | Short session |
 
 ---
 
