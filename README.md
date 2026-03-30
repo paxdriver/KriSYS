@@ -1043,6 +1043,16 @@ Targets:
 	- [ ] move dev-only tools behind explicit dev gates
 	- [ ] unify “Connections” UX for station/relay/P2P
 - [ ] Accessibility and mobile-friendly layout improvements
+- Relay Role Clarification & Topology:
+	- [x] Define relay role taxonomy (static, ferry, fallback, volunteer)
+	- [x] Formalize upstream selection hierarchy (Station > HQ > Mesh)
+	- [ ] Define crisis pin lifetime rules per relay mode
+	- [ ] Define HQ sync cadence tiers per node role
+	- [ ] Document relay reset/wipe procedures
+	- [ ] Define relay storage TTL profiles per role
+	- [ ] Separate ferry container from static relay container
+	- [ ] Add relay role indicator in `/health` endpoint
+	- [ ] Add relay role indicator in admin telemetry panel
 
 #### Phase 6.1 — Visibility MVP
 Add structured log emitter utility in:
@@ -1106,13 +1116,57 @@ On state change actions:
 - [x] Does not alter historical blocks
 - [x] Does not break determinism
 
-#### Phase 6.5+ Extra considerations
+#### Phase 6.5 Relay Modes
+Relay Role Architecture
+- [ ] Define `mode` enum: station | relay | uninitialized
+- [ ] Define `relay_role` enum: LAN_amplifier | delivery_facilitation | user_volunteer
+- [ ] Add role-specific startup behavior
+- [ ] Add role-specific pin persistence model
+- [ ] Add role-specific HQ cadence config
+- [ ] Add role-specific storage TTL defaults
+- [ ] Add role-specific auto-connect logic (ferry only)
+
+Static Infrastructure Relay (relay_role="LAN_amplifier")
+- [ ] QR-based provisioning from station
+- [ ] Prefer station over HQ
+- [ ] Low-frequency HQ polling fallback
+- [ ] Stable LAN room hosting
+
+Mobile Ferry Relay (relay_role="delivery_facilitation")
+- [ ] Dedicated ferry container
+- [ ] Ephemeral crisis pin support
+- [ ] Easy wipe/reset command
+- [ ] Aggressive peer discovery / broadcast
+- [ ] Prefer station over HQ
+- [ ] Longer queue TTL
+- [ ] Ferry activity indicator in telemetry
+
+Station Fallback (mode="relay", internally configured and NOT a relay_role)
+- [x] Ensure automatic downgrade when identity invalid
+- [x] Prevent /checkin while in fallback
+- [x] Preserve mesh capability
+- [x] Telemetry event on downgrade
+
+Volunteer Relay ("user_volunteer")
+- [ ] Define volunteer relay behavior (no HQ default)
+- [ ] Add time-bound toggle
+- [ ] Add battery-safe safeguards
+- [ ] Add clear UI indicator
+
+#### Phase 6.6+ Extra considerations
 Storage & Abuse Monitoring:
 - [ ] Storage trend graph (queued growth over time)
 - [ ] Repeated identity rejection alerts
 - [ ] Excessive relay input detection
 - [ ] Abnormal block rejection rates
 - [ ] Admin controls to replace DevTools UI
+- [ ] Role-aware storage pressure telemetry (relay vs ferry vs station)
+- [ ] Per-role adaptive sync backoff logic
+- [ ] Relay mesh connection cap (max concurrent peers)
+- [ ] Ferry activity window logging (movement inference detection)
+- [ ] Relay input rate limiting (anti-spam threshold)
+- [ ] Peer connection throttling to prevent swarm DoS
+- [ ] Cross-role performance metrics (HQ vs Station vs Relay load comparison)
 
 Execution Order:
 - [x] Structured logs (foundation)
