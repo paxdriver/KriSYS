@@ -52,6 +52,38 @@
 				</div>
 			</div>
 
+			<!-- Station Filters -->
+			<div class="card">
+				<div class="card-title">Filter Stations</div>
+
+				<div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
+					<input id="filter-station-id" placeholder="Station ID" />
+					
+					<select id="filter-status">
+						<option value="">Status (any)</option>
+						<option value="active">active</option>
+						<option value="pending">pending</option>
+						<option value="revoked">revoked</option>
+					</select>
+
+					<select id="filter-connectivity">
+						<option value="">Connectivity (any)</option>
+						<option value="online">online</option>
+						<option value="offline">offline</option>
+					</select>
+
+					<select id="filter-identity">
+						<option value="">Identity (any)</option>
+						<option value="verified">verified</option>
+						<option value="rejected">rejected</option>
+						<option value="unknown">unknown</option>
+					</select>
+
+					<button onclick="applyStationFilters()">Apply</button>
+					<button onclick="resetStationFilters()">Reset</button>
+				</div>
+			</div>
+
 			<!-- Station status table -->
 			<div class="card">
 				<div class="card-title">Stations</div>
@@ -155,16 +187,32 @@
 		}
 
 		async function loadStations() {
+
 			const token = getAdminToken()
 			const errorEl = document.getElementById('station-error')
-			
+
 			if (!token) {
 				setTokenStatus('Missing admin token', true)
 				return
 			}
-			
-			// DEV NOTE: injected by /admin where /admin/* require token
-			const res = await fetch('/admin/stations/status', {
+
+			// Read filter values
+			const stationId = document.getElementById('filter-station-id')?.value || ''
+			const status = document.getElementById('filter-status')?.value || ''
+			const connectivity = document.getElementById('filter-connectivity')?.value || ''
+			const identity = document.getElementById('filter-identity')?.value || ''
+
+			// Build query string
+			const params = new URLSearchParams()
+
+			if (stationId) params.append('station_id', stationId)
+			if (status) params.append('status', status)
+			if (connectivity) params.append('connectivity', connectivity)
+			if (identity) params.append('identity_state', identity)
+
+			const url = '/admin/stations/status' + (params.toString() ? `?${params.toString()}` : '')
+
+			const res = await fetch(url, {
 				headers: { 'X-Admin-Token': token }
 			})
 
@@ -174,79 +222,34 @@
 			}
 
 			const data = await res.json()
-			console.log(data)
 			const rows = Array.isArray(data.stations) ? data.stations : []
-			console.log("Stations in loadStations():", rows)
-			
+
 			const tbody = document.getElementById('station-table-body')
 			tbody.innerHTML = ''
 
-			// -------------------------------
-			// STATUS BADGE (expanded logic)
-			// -------------------------------
-			
-			let statusBadge
-			
 			for (const s of rows) {
-			// Log which station is being processed
-			//console.log("Processing station:", s.station_id, "with status:", s.status)
 
-			// If station status is exactly 'active'
-			if (s.status === 'active') {
-				statusBadge = badge('active', 'green')
-			}
-			// If station status is exactly 'pending'
-			else if (s.status === 'pending') {
-				statusBadge = badge('pending', 'yellow')
-			}
-			// Any other status (including null/undefined)
-			else {
-				statusBadge = badge(s.status || 'unknown', '')
-			}
+				// STATUS BADGE
+				let statusBadge
+				if (s.status === 'active') statusBadge = badge('active', 'green')
+				else if (s.status === 'pending') statusBadge = badge('pending', 'yellow')
+				else statusBadge = badge(s.status || 'unknown', '')
 
-			// -------------------------------
-			// CONNECTIVITY BADGE (expanded logic)
-			// -------------------------------
+				// CONNECTIVITY BADGE
+				let connBadge
+				const connectivity = s.lifecycle?.connectivity
+				if (connectivity === 'online') connBadge = badge('online', 'green')
+				else if (connectivity === 'offline') connBadge = badge('offline', 'red')
+				else connBadge = badge('-', '')
 
-			let connBadge
-			// Extract connectivity safely
-			const connectivity = s.lifecycle?.connectivity
-
-			// If connectivity is 'online'
-			if (connectivity === 'online') {
-				connBadge = badge('online', 'green')
-			}
-			// If connectivity is 'offline'
-			else if (connectivity === 'offline') {
-				connBadge = badge('offline', 'red')
-			}
-			// Any other state (null / undefined)
-			else {
-				connBadge = badge('-', '')
-			}
-
-			// -------------------------------
-			// SUMMARY FIELD (expanded logic)
-			// -------------------------------
-
-			let summary
-
-			// Check if summary object exists and is truthy
-			if (s.summary) {
-				console.log("→ Summary branch: HAS SUMMARY", s.summary)
-
-				// Build summary string explicitly
-				const msgCount = summarySafe(s.summary.messages_sent)
-				const chkCount = summarySafe(s.summary.checkins_sent)
-				const blkCount = summarySafe(s.summary.blocks_pulled)
-
-				summary = `msg=${msgCount}, chk=${chkCount}, blk=${blkCount}`
-			}
-			// No summary object
-			else {
-				console.log("→ Summary branch: NO SUMMARY")
-				summary = '-'
-			}
+				// SUMMARY
+				let summary = '-'
+				if (s.summary) {
+					const msgCount = summarySafe(s.summary.messages_sent)
+					const chkCount = summarySafe(s.summary.checkins_sent)
+					const blkCount = summarySafe(s.summary.blocks_pulled)
+					summary = `msg=${msgCount}, chk=${chkCount}, blk=${blkCount}`
+				}
 
 				const tr = document.createElement('tr')
 				tr.innerHTML = `
@@ -261,6 +264,18 @@
 				`
 				tbody.appendChild(tr)
 			}
+		}
+
+		function applyStationFilters() {
+			loadStations()
+		}
+
+		function resetStationFilters() {
+			document.getElementById('filter-station-id').value = ''
+			document.getElementById('filter-status').value = ''
+			document.getElementById('filter-connectivity').value = ''
+			document.getElementById('filter-identity').value = ''
+			loadStations()
 		}
 
 		async function initializeStationTable() {
