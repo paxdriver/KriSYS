@@ -545,7 +545,7 @@ def ensure_station(crisis_id: str, station_id: str, name: str, stype: str, locat
 		emit_telemetry_event(
 			source="HQ",
 			severity="info",
-			event_type="DB",
+			event_type="db",
 			context={"station_created": station_id}
 		)
 		logger.info(f"Created station {station_id} ({name}) for crisis {crisis_id}")
@@ -924,7 +924,7 @@ def create_wallet():
 		emit_telemetry_event(
 			source="HQ",
 			severity="critical",
-			event_type="DB",
+			event_type="db",
 			context={"wallet_creation_error": str(e)}
 		)
 		logger.error(f"Wallet creation error: {str(e)}")
@@ -1294,6 +1294,7 @@ def get_admin_events():
 	severity = request.args.get("severity")
 	event_type = request.args.get("event_type")
 	limit = request.args.get("limit", 100)
+	node_id = request.args.get("node_id")
 
 	try:
 		limit = int(limit)
@@ -1303,13 +1304,20 @@ def get_admin_events():
 	query = "SELECT * FROM admin_events WHERE 1=1"
 	params = []
 
+	# Filter by severity (info, warning, critical)
 	if severity:
 		query += " AND severity = ?"
 		params.append(severity)
 
+	# Filter by event_type (lifecycle, summary, policy, blockchain, db)
 	if event_type:
 		query += " AND event_type = ?"
 		params.append(event_type)
+
+	# Filter by node_id (case-insensitive substring match)
+	if node_id:
+		query += " AND LOWER(node_id) LIKE ?"
+		params.append(f"%{node_id.lower()}%")
 
 	query += " ORDER BY created_at DESC LIMIT ?"
 	params.append(limit)
@@ -1343,8 +1351,8 @@ def mine_block():
 		emit_telemetry_event(
 			source="HQ",
 			severity="info",
-			event_type="DB",
-			context={"DB_size": f"{get_db_size_kb()}kb" }
+			event_type="db",
+			context={"db_size": f"{get_db_size_kb()}kb" }
 		)
 		logger.info(f'DB SIZE: {get_db_size_kb()}kb')
 
@@ -1389,7 +1397,7 @@ def admin_alert():
 		emit_telemetry_event(
 			source="HQ",
 			severity="critical",
-			event_type="DB",
+			event_type="db",
 			context={"admin_alert_error": str(e)}
 		)
 		logger.error(f"Admin alert error: {str(e)}")
@@ -2184,7 +2192,7 @@ def get_wallet_public_key(family_id):
 		emit_telemetry_event(
 			source="HQ",
 			severity="critical",
-			event_type="DB",
+			event_type="db",
 			context={"wallet_pub_key_error": f"get_wallet_public_key failed: {str(e)}"}
 		)
 		logger.error(f"Error getting public key: {str(e)}")

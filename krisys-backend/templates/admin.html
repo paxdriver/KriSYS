@@ -127,8 +127,26 @@
 			<!-- Telemetry section -->
 			<div class="card">
 				<div class="card-title">Telemetry (Most Recent)</div>
-				<div id="telemetry-error" class="small"></div>
+					<!-- Telemetry Filters -->
+					<div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:12px;">
+						
+						<input id="filter-telemetry-node" placeholder="Node ID (station_id)" />
 
+						<select id="filter-telemetry-severity">
+							<option value="">Severity (any)</option>
+							<option value="info">info</option>
+							<option value="warning">warning</option>
+							<option value="error">error</option>
+							<option value="critical">critical</option>
+						</select>
+
+						<input id="filter-telemetry-type" placeholder="Event Type" />
+
+						<button onclick="applyTelemetryFilters()">Apply</button>
+						<button onclick="resetTelemetryFilters()">Reset</button>
+					</div>
+				
+				<div id="telemetry-error" class="small"></div>
 				<table>
 					<thead>
 						<tr>
@@ -306,6 +324,19 @@
 			loadStations()
 		}
 
+		function applyTelemetryFilters() {
+			telemetryLimit = 20
+			loadTelemetry()
+		}
+
+		function resetTelemetryFilters() {
+			document.getElementById('filter-telemetry-node').value = ''
+			document.getElementById('filter-telemetry-severity').value = ''
+			document.getElementById('filter-telemetry-type').value = ''
+			telemetryLimit = 20
+			loadTelemetry()
+		}
+
 		async function initializeStationTable() {
 			try {
 				const existing = getAdminToken()
@@ -331,12 +362,23 @@
 			const token = getAdminToken()
 			const errorEl = document.getElementById('telemetry-error')
 
-			if (!token) {
-				errorEl.textContent = 'Missing admin token'
-				return
-			}
+			// Read filter inputs
+			const nodeId = document.getElementById('filter-telemetry-node')?.value || ''
+			const severity = document.getElementById('filter-telemetry-severity')?.value || ''
+			const eventType = document.getElementById('filter-telemetry-type')?.value || ''
 
-			const res = await fetch(`/admin/events?limit=${telemetryLimit}`, {
+			// Build query parameters
+			const params = new URLSearchParams()
+			params.append('limit', telemetryLimit)
+
+			if (severity) params.append('severity', severity)
+			if (eventType) params.append('event_type', eventType)
+			if (nodeId) params.append('node_id', nodeId)
+
+			
+			const url = `/admin/events?${params.toString()}`
+
+			const res = await fetch(url, {
 				headers: { 'X-Admin-Token': token }
 			})
 
@@ -350,7 +392,9 @@
 			tbody.innerHTML = ''
 
 			for (const e of events) {
+
 				const tr = document.createElement('tr')
+
 				tr.innerHTML = `
 					<td>${formatTime(e.created_at)}</td>
 					<td>${escapeHtml(e.source)}</td>
@@ -359,6 +403,7 @@
 					<td>${escapeHtml(e.event_type)}</td>
 					<td>${escapeHtml(e.context || '-')}</td>
 				`
+
 				tbody.appendChild(tr)
 			}
 		}
