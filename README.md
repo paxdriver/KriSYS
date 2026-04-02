@@ -1119,16 +1119,15 @@ On state change actions:
 
 #### Phase 6.5 Relay Modes
 Relay Role Architecture
-- [ ] Define `mode` enum: station | relay | uninitialized
-- [ ] Define `relay_role` enum: LAN_amplifier | delivery_facilitation | user_volunteer
-- [ ] Add role-specific startup behavior
-- [ ] Add role-specific pin persistence model
+- [x] Define `mode` enum: station | relay | uninitialized
+- [x] Define `relay_role` enum: LAN_amplifier | delivery_facilitation | user_volunteer
+- [x] Add role-specific startup behavior
+- [x] Add role-specific pin persistence model
 - [ ] Add role-specific HQ cadence config
 - [ ] Add role-specific storage TTL defaults
 - [ ] Add role-specific auto-connect logic (ferry only)
 
 Static Infrastructure Relay (relay_role="LAN_amplifier")
-- [ ] QR-based provisioning from station
 - [ ] Prefer station over HQ
 - [ ] Low-frequency HQ polling fallback
 - [ ] Stable LAN room hosting
@@ -1400,3 +1399,31 @@ Current design scales well because:
 
 ### Even with 1,000 stations, 1,000 stale checks per request is trivial CPU cost. Logs are sparse summaries prepared by station nodes in advance, and HQ can selectively batch updates in larger deployments as needed. This is push-based telemetry with derived liveness inference.
 
+## Relay Initialization (Dev Behavior)
+When a relay boots in UNINITIALIZED state:
+
+- If `CENTRAL_API_URL` is configured:
+  - It auto-provisions from HQ.
+- Otherwise:
+  - It attempts to bootstrap from known peer services (docker-compose network).
+
+Provisioning requires:
+
+- Valid signed genesis block
+- Verified `block_public_key`
+- Matching `crisis_id`
+
+Once successfully pinned:
+
+- The relay becomes immutable to that crisis.
+- It will reject any future provisioning attempts.
+- It begins serving `/mesh/*` endpoints.
+
+If provisioning fails:
+
+- The relay remains UNINITIALIZED.
+- Retry requires restart or manual provisioning.
+
+To reset a relay:
+
+- Wipe its data directory and restart.

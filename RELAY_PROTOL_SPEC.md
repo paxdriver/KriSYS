@@ -151,6 +151,101 @@ No runtime crisis switching is allowed.
 
 ---
 
+
+## 3.3 Relay Initialization Procedure
+
+Relay initialization is the deterministic process by which an UNINITIALIZED relay transitions to PINNED.
+
+Initialization occurs exactly once per device lifecycle unless the device is manually wiped.
+
+---
+
+### Initialization Conditions
+
+A relay is considered UNINITIALIZED if:
+
+- `crisis_id` is not stored
+- `block_public_key` is not stored
+- No verified genesis block exists locally
+
+Initialization must complete before the relay will serve `/mesh/*` endpoints.
+
+---
+
+### Initialization Paths
+
+Relays support two provisioning paths:
+
+#### Path A — Central Auto-Provision (Optional)
+
+If `CENTRAL_API_URL` is configured:
+
+1. Relay queries `/crisis`
+2. Relay retrieves:
+   - `crisis_id`
+   - `block_public_key`
+3. Relay retrieves `/blockchain`
+4. Relay verifies:
+   - Genesis block hash(body)
+   - Genesis block signature(header)
+5. Relay stores:
+   - `crisis_id`
+   - `block_public_key`
+   - Verified canonical block suffix
+6. Relay transitions to PINNED
+
+This path is intended for bulk deployment and development workflows.
+
+---
+
+#### Path B — Peer Bootstrap (Dev / Controlled Network)
+
+If `CENTRAL_API_URL` is not configured:
+
+1. Relay attempts provisioning from known peer targets.
+2. For each candidate target:
+   - Query `/crisis`
+   - Query `/blockchain`
+   - Validate genesis hash and signature
+3. If validation succeeds:
+   - Persist `crisis_id`
+   - Persist `block_public_key`
+   - Store verified canonical block suffix
+4. Relay transitions to PINNED
+5. Bootstrap attempts stop immediately upon success
+
+Bootstrap attempts are bounded and retried a limited number of times to tolerate container startup race conditions.
+
+---
+
+### Initialization Invariants
+
+During initialization:
+
+- Only verified genesis blocks are accepted.
+- Genesis signature must match supplied `block_public_key`.
+- Relay never pins from unsigned data.
+- Relay never switches crisis once PINNED.
+
+---
+
+### Post-Initialization Behavior
+
+Once PINNED:
+
+- Relay rejects all further provisioning attempts.
+- Relay rejects mismatched `crisis_id`.
+- Relay participates in mesh transport.
+- Relay may optionally pull canonical blocks from central if configured.
+
+Returning to UNINITIALIZED requires:
+
+- Explicit device wipe
+- Database reset
+- Manual operator action
+
+---
+
 # 4. Relay Provisioning
 
 ## 4.1 Provisioning Authority

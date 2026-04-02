@@ -1,6 +1,5 @@
 # KriSYS — Station Cooperation Protocol v1.1  
 *(Authoritative Station Behavior + Relay Interaction Context)*
-
 ---
 
 ## 1. Purpose
