@@ -738,6 +738,8 @@ Typical offline workflow tests:
 │   ├── index.css
 │   ├── landing.css
 │   └── wallet_dashboard.css
+├── STATION_PROTOCOL_SPEC.md
+└── RELAY_PROTOCOL_SPEC.md
 ```
 LOCAL PORTS (DEV)
 - backend: `http://localhost:5000`
@@ -1062,20 +1064,19 @@ Add structured log emitter utility in:
 - [x] Add admin telemetry endpoint on HQ
 
 Add admin UI panel:
-- [ ] Recent warnings/errors
+- [x] Recent warnings/errors
 - [ ] Replace with proper JWT/session-based auth
-- [ ] Remove token injection from template
 - [x] Station list with:
 	- [x] mode
 	- [x] online/offline
 	- [x] identity state
 
 Add simple filters:
-- [ ] station_id (search/lookup)
-- [ ] connection status
-- [ ] activation status
-- [ ] event severity
-- [ ] event type
+- [x] station_id (search/lookup)
+- [x] connection status
+- [x] activation status
+- [x] event severity
+- [x] event type
 
 
 #### Phase 6.2 — Health Model
