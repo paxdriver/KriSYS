@@ -80,7 +80,7 @@ app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("RELAY_MAX_CONTENT_LENGTH"
 # ----------------------------
 # Relay auto-pull (defaults on, env to toggle off)
 # ----------------------------
-RELAY_AUTO_PULL = os.environ.get("RELAY_AUTO_PULL", "1") == "1"
+RELAY_AUTO_PULL = os.environ.get("RELAY_AUTO_PULL", "1") == "1" # Optional provisioning path for bulk deployment
 # DEV NOTE: If CENTRAL_URL is unset, auto‑pull simply won’t run. That’s intentional.
 CENTRAL_URL = os.environ.get("CENTRAL_API_URL")  # optional; auto-pull disabled if missing
 RELAY_PULL_INTERVAL_MS = int(os.environ.get("RELAY_PULL_INTERVAL_MS", "60000"))
@@ -158,36 +158,6 @@ def relay_pull_from_central() -> int:
 
 	return process_incoming_blocks(chain[-MAX_BLOCKS_STORED:])
 
-# ENV var set in dockerfile should use HQ's /crisis endpoint to get the crisis_id and public key
-# if the relay doesn't have one pinned yet (initialization state, basically)
-def relay_try_autopin_from_central(timeout_sec: int = 8) -> tuple[bool, str | None]:
-	if not CENTRAL_URL:
-		return False, "CENTRAL_URL not set"
-
-	# Only pin if currently unpinned (never overwrite)
-	if db_get_crisis_id() and db_get_block_public_key():
-		return True, None
-
-	try:
-		resp = requests.get(f"{CENTRAL_URL}/crisis", timeout=timeout_sec)
-		resp.raise_for_status()
-		obj = resp.json() or {}
-
-		crisis_id = obj.get("id") or obj.get("crisis_id")
-		pub = obj.get("block_public_key") or obj.get("public_key")
-
-		if not isinstance(crisis_id, str) or not crisis_id.strip():
-			return False, "Central /crisis missing id"
-		if not isinstance(pub, str) or not pub.strip():
-			return False, "Central /crisis missing block_public_key"
-
-		db_set_meta("crisisId", crisis_id.strip())
-		db_set_meta("block_public_key", pub)
-
-		logger.warning("Relay auto-pinned from central crisisId=%s", crisis_id)
-		return True, None
-	except Exception as e:
-		return False, str(e)
 	
 @contextmanager
 def relay_db():
@@ -720,9 +690,172 @@ def db_prune_confirmed() -> dict:
 	}
 
 # ----------------------------
-# DB helpers (blocks)
+# Relay State Helpers
+# ----------------------------
+def relay_is_pinned() -> bool:
+	crisis_id = db_get_crisis_id()
+	pub = db_get_block_public_key()
+	return isinstance(crisis_id, str) and bool(crisis_id) and isinstance(pub, str) and bool(pub)
+
+def require_pinned() -> tuple[bool, str]:
+	if not relay_is_pinned():
+		return False, f"Relay state: {relay_state()}. Provisioning required."
+	return True, ""
+
+def relay_state() -> str:
+	# Returns: "UNINITIALIZED" or "PINNED"
+	return "PINNED" if relay_is_pinned() else "UNINITIALIZED"
+
+# ----------------------------
+# Relay Bootstrap From Known Candidates (DEV)
 # ----------------------------
 
+# Purpose: In docker-compose and controlled dev environments, automatically provision the relay from any known peer if CENTRAL_API_URL is not set.
+
+# Behavior:
+#	- Only runs if relay is UNINITIALIZED
+#	- Only runs if CENTRAL_API_URL is NOT set
+#	- Tries a small list of known service names
+#	- Retries a few times to survive container race conditions
+#	- Stops permanently once pinned
+
+# DEV NOTE: TODO -> Replace `bootstrap_targets` list with dynamic LAN discovery in future production refinement
+#	Example future sources:
+#		- mDNS discovery
+#		- UDP broadcast beacon
+#		- Subnet scanning
+#		- Saved provisioning file
+#	For now we hardcode docker-compose service names.
+# ----------------------------
+
+RELAY_BOOTSTRAP_MAX_ATTEMPTS = 3
+RELAY_BOOTSTRAP_SLEEP_SECONDS = 3
+
+def relay_bootstrap_from_candidates():
+	"""
+	Unified bootstrap logic. Tries CENTRAL_API_URL first (if set), known peer targets (docker-compose).
+	"""
+
+	if relay_is_pinned():
+		return
+
+	bootstrap_targets = []
+
+	# Include CENTRAL_URL if defined
+	if CENTRAL_URL:
+		bootstrap_targets.append(CENTRAL_URL)
+
+	# DEV NOTE: TODO -> Replace this static list with LAN discovery
+	bootstrap_targets.extend([
+		"http://backend:5000",
+		"http://station:5000",
+		"http://station_camp:5000",
+	])
+
+	for attempt in range(RELAY_BOOTSTRAP_MAX_ATTEMPTS):
+
+		if relay_is_pinned():
+			return
+
+		logger.info(
+			"Relay bootstrap attempt %d/%d",
+			attempt + 1,
+			RELAY_BOOTSTRAP_MAX_ATTEMPTS,
+		)
+
+		for target in bootstrap_targets:
+
+			try:
+				logger.info("Trying bootstrap target: %s", target)
+
+				crisis_resp = requests.get(f"{target}/crisis", timeout=5)
+				if not crisis_resp.ok:
+					continue
+
+				crisis_obj = crisis_resp.json() or {}
+				crisis_id = crisis_obj.get("id")
+				block_public_key = crisis_obj.get("block_public_key")
+
+				if not crisis_id or not block_public_key:
+					continue
+
+				chain_resp = requests.get(f"{target}/blockchain", timeout=10)
+				if not chain_resp.ok:
+					continue
+
+				chain = chain_resp.json()
+				if not isinstance(chain, list) or not chain:
+					continue
+
+				genesis = None
+				for block in chain:
+					if block.get("block_index") == 0:
+						genesis = block
+						break
+
+				if not genesis:
+					continue
+
+				expected_hash = compute_block_hash(genesis)
+				if not expected_hash or expected_hash != genesis.get("hash"):
+					continue
+
+				if not verify_block_signature(genesis, block_public_key):
+					continue
+
+				# PIN RELAY
+				db_set_meta("crisisId", crisis_id)
+				db_set_meta("block_public_key", block_public_key)
+
+				# Determine provisioning target label
+				provisioned_target = None
+
+				try:
+					profile_resp = requests.get(f"{target}/station/profile", timeout=3)
+					if profile_resp.ok:
+						profile = profile_resp.json()
+						if isinstance(profile.get("station_id"), str):
+							provisioned_target = profile["station_id"]
+				except Exception:
+					pass
+
+				if not provisioned_target:
+					provisioned_target = target
+
+				db_set_meta("provisioned_target", provisioned_target)
+				db_set_meta("provisioned_at", str(int(time.time())))
+
+				db_put_block_verified(genesis)
+				process_incoming_blocks(chain[-MAX_BLOCKS_STORED:])
+
+				logger.warning(
+					"Relay bootstrapped from %s (crisisId=%s)",
+					provisioned_target,
+					crisis_id,
+				)
+
+				logger.info(
+					"Provision metadata: target=%s at=%s",
+					db_get_meta("provisioned_target"),
+					db_get_meta("provisioned_at"),
+				)
+
+				return
+
+			except Exception as e:
+				logger.warning(
+					"Bootstrap attempt failed for %s: %s",
+					target,
+					e,
+				)
+
+		time.sleep(RELAY_BOOTSTRAP_SLEEP_SECONDS)
+
+	logger.warning("Relay bootstrap attempts exhausted; remaining UNINITIALIZED.")
+
+# ----------------------------
+# DB helpers (blocks)
+# ----------------------------
 def db_get_tip() -> dict | None:
 	with relay_db() as conn:
 		row = conn.execute(
@@ -935,94 +1068,11 @@ def perform_full_canonical_chain_validation_on_boot():
 		logger.info(f"Relay chain validated successfully. Tip index: {_validation['local_tip']}")
 
 
-
-# ----------------------------
-# Crisis pinning (trust anchor)
-# ----------------------------
-
-def ensure_crisis_pin(
-	incoming_crisis_id: str | None,
-	incoming_block_public_key: str | None,
-) -> tuple[bool, str]:
-	"""
-	This relay is untrusted and boots empty. It must be "pinned" to a single
-	crisis before it can safely verify/store blocks.
-
-	Rule:
-	- If relay is unpinned:
-		- require both crisisId + block_public_key
-		- store them in meta
-	- If relay is pinned:
-		- crisisId must match
-		- if block_public_key is provided, it must match too
-	"""
-	if not incoming_crisis_id or not isinstance(incoming_crisis_id, str):
-		return False, "Missing or invalid crisisId"
-
-	stored_crisis_id = db_get_crisis_id()
-	stored_pubkey = db_get_block_public_key()
-
-	# First-contact pin
-	if not stored_crisis_id or not stored_pubkey:
-		# If caller didn’t provide a key, try to pin from CENTRAL_URL (Phase 5 behavior)
-		if not incoming_block_public_key:
-			ok, err = relay_try_autopin_from_central()
-			if ok:
-				stored_crisis_id = db_get_crisis_id()
-				stored_pubkey = db_get_block_public_key()
-				if stored_crisis_id == incoming_crisis_id and stored_pubkey:
-					return True, ""
-				return False, "Relay pinned to different crisisId than request"
-			return False, f"Relay is unpinned; provide block_public_key to pin it ({err})"
-
-		db_set_meta("crisisId", incoming_crisis_id)
-		db_set_meta("block_public_key", incoming_block_public_key)
-		logger.info("Pinned relay to crisisId=%s", incoming_crisis_id)
-		return True, ""
-
-	# Already pinned
-	if stored_crisis_id != incoming_crisis_id:
-		return False, "Relay crisisId mismatch"
-
-	if incoming_block_public_key and isinstance(incoming_block_public_key, str):
-		if incoming_block_public_key != stored_pubkey:
-			return False, "Relay block_public_key mismatch"
-
-	return True, ""
-
-
 # ----------------------------
 # Block verification + confirmations
 # ----------------------------
 def compute_block_hash(block: dict) -> str | None:  # wrapper for legacy calls
     return canonical_block_hash(block)  # use shared canonical hash
-# def compute_block_hash(block: dict) -> str | None:
-# 	"""
-# 	Recompute block hash(body) using canonical JSON rules:
-# 	- sorted keys
-# 	- separators=(",", ":")
-# 	- ensure_ascii=False
-# 	- UTF-8 bytes hashed with SHA-256
-# 	"""
-# 	try:
-# 		body = {
-# 			"block_index": int(block["block_index"]),
-# 			"timestamp": int(block["timestamp"]),
-# 			"transactions": block.get("transactions") or [],
-# 			"previous_hash": str(block["previous_hash"]),
-# 			"nonce": int(block.get("nonce") or 0),
-# 		}
-
-# 		blob = json.dumps(
-# 			body,
-# 			sort_keys=True,
-# 			separators=(",", ":"),
-# 			ensure_ascii=False,
-# 		).encode("utf-8")
-
-# 		return hashlib.sha256(blob).hexdigest()
-# 	except Exception:
-# 		return None
 
 
 def verify_block_signature(block: dict, block_public_key: str) -> bool:
@@ -1348,16 +1398,117 @@ def export_relay_payload() -> dict:
 
 
 init_relay_db()
+logger.info("Relay DB initialized")
+logger.info("Initial relay state: %s", relay_state())
+
 perform_full_canonical_chain_validation_on_boot()
+
+relay_bootstrap_from_candidates()
+
 
 # ----------------------------
 # Routes
 # ----------------------------
-
 @app.route("/health", methods=["GET"])
 def health():
-	return jsonify({"role": "relay", "status": "ok"}), 200
+	state = relay_state()
+	return jsonify({
+		"role": "relay",
+		"status": "ok",
+		"state": state,
+		"crisisId": db_get_crisis_id(),
+		"provisioned_target": db_get_meta("provisioned_target"),
+		"provisioned_at": db_get_meta("provisioned_at"),
+	}), 200
 
+
+
+@app.route("/relay/provision", methods=["POST"])
+def relay_provision():
+	"""
+	Station-mediated provisioning. Can only run if relay is UNINITIALIZED.
+
+	Example /relay/provision POST payload structure:
+	{
+		...GET /crisis,
+		"genesis_block": GET /blockchain[0],
+		"blocks": GET /blockchain[-N:],
+		"station_id": "optional"
+	}
+
+	Notes:
+	- genesis_block MUST be verified (hash + signature) before pinning.
+	- block_public_key MUST match genesis signature.
+	- blocks array is optional but recommended (recent suffix).
+	- station_id is optional; used only for provisioned_target metadata
+
+	Relay Provisioning Endpoint (EXPLICITLY pin a crisisID if automatic discovery doesn't work)
+	"""
+
+	logger.info("Received explicit relay provisioning request from %s", request.remote_addr,)
+
+	if relay_is_pinned():
+		return jsonify({"error": "Relay already PINNED. Reset required to reprovision."}), 409
+
+	incoming = request.get_json(force=True, silent=True) or {}
+
+	crisis_id = incoming.get("crisis_id")
+	block_public_key = incoming.get("block_public_key")
+	genesis_block = incoming.get("genesis_block")
+	suffix_blocks = incoming.get("blocks") or []
+
+	if not isinstance(crisis_id, str) or not crisis_id.strip():
+		logger.warning("Provision failed: missing crisis_id")
+		return jsonify({"error": "Missing crisis_id"}), 400
+
+	if not isinstance(block_public_key, str) or not block_public_key.strip():
+		logger.warning("Provision failed: missing block_public_key")
+		return jsonify({"error": "Missing block_public_key"}), 400
+
+	if not isinstance(genesis_block, dict):
+		logger.warning("Provision failed: missing genesis_block")
+		return jsonify({"error": "Missing genesis_block"}), 400
+
+	# Verify genesis integrity
+	expected_hash = compute_block_hash(genesis_block)
+	if not expected_hash or expected_hash != genesis_block.get("hash"):
+		logger.warning("Provision failed: missing expected_hash")
+		return jsonify({"error": "Genesis hash invalid"}), 400
+
+	if not verify_block_signature(genesis_block, block_public_key):
+		logger.warning("Provision failed: missing block signature verification")
+		return jsonify({"error": "Genesis signature invalid"}), 400
+
+	# Store crisis pin
+	db_set_meta("crisisId", crisis_id.strip())
+	db_set_meta("block_public_key", block_public_key.strip())
+
+	# Determine provisioning target label if request included station_id, prefer that
+	station_id = incoming.get("station_id")
+
+	if isinstance(station_id, str) and station_id.strip():
+		provisioned_target = station_id.strip()
+	else:
+		# Fallback to request remote address
+		provisioned_target = request.remote_addr or "unknown"
+
+	db_set_meta("provisioned_target", provisioned_target)
+	db_set_meta("provisioned_at", str(int(time.time())))
+
+	# Store verified genesis
+	db_put_block_verified(genesis_block)
+
+	# Process suffix blocks
+	if isinstance(suffix_blocks, list):
+		process_incoming_blocks(suffix_blocks)
+
+	logger.warning(
+		"Relay successfully PINNED to crisisId=%s (source=%s)",
+		crisis_id,
+		provisioned_target,
+	)
+
+	return jsonify({"status": "PINNED", "crisis_id": crisis_id}), 200
 
 @app.route("/mesh/inventory", methods=["POST"])
 def mesh_inventory():
@@ -1375,15 +1526,19 @@ def mesh_inventory():
 	"""
 	incoming = request.get_json(force=True, silent=True) or {}
 
-	ok, err = ensure_crisis_pin(
-		incoming.get("crisisId"),
-		incoming.get("block_public_key"),
-	)
+	ok, err = require_pinned()
 	if not ok:
-		return jsonify({"error": err}), 400
+		logger.warning("Mesh request rejected: %s", err)
+		return jsonify({"error": err}), 403
+
+	# Enforce crisis match
+	if incoming.get("crisisId") != db_get_crisis_id():
+		logger.warning("Mesh request rejected: %s", err)
+		return jsonify({"error": "Crisis mismatch"}), 400
 
 	relay_hashes = incoming.get("relay_hashes") or []
 	if not isinstance(relay_hashes, list):
+		logger.warning("Mesh request rejected: %s", err)
 		return jsonify({"error": "relay_hashes must be a list"}), 400
 
 	relay_hashes = relay_hashes[:RELAY_HASH_CAP]
@@ -1413,12 +1568,13 @@ def mesh_sync():
 	"""
 	incoming = request.get_json(force=True, silent=True) or {}
 
-	ok, err = ensure_crisis_pin(
-		incoming.get("crisisId"),
-		incoming.get("block_public_key"),
-	)
+	ok, err = require_pinned()
 	if not ok:
-		return jsonify({"error": err}), 400
+		return jsonify({"error": err}), 403
+
+	# Enforce crisis match
+	if incoming.get("crisisId") != db_get_crisis_id():
+		return jsonify({"error": "Crisis mismatch"}), 400
 	
 	# Hard stop: refuse new queued intake when storage is full
 	if db_get_intake_paused():
@@ -1480,6 +1636,9 @@ _relay_bg_started = False
 
 def start_relay_background_once():
 	global _relay_bg_started
+
+	logger.info(f'RELAY STATE IS: {relay_state()}')
+
 	if _relay_bg_started:
 		return
 	_relay_bg_started = True
