@@ -104,6 +104,21 @@ during future events of crisis requiring deployment of aid and volunteers.
 	- Station backend (local station instance)
 	- Station frontend (station UI)
 	- Relay backend
+---
+**NOTE** on first boot we'll need to create some stations for the containers to run.
+<br>
+a) Restart the docker-compose setup on first boot
+- `docker-compose down` since the stations needed some files created on first bootstrap
+- `docker-compose up` so that backend can seed some test stations
+
+b) Run the bash scripts from project root to quickly create some stations and provion 2 of them for us to play with
+- `bash krisys-backend/dev_seed_stations.sh`
+- `bash krisys-backend/dev_provision_foodtruck.sh`
+
+c) Restart the docker setup again so that stations can boot with their identities
+- `docker-compose down` since the stations needed some files created on first bootstrap
+- `docker-compose up` so that backend can seed some test stations
+---
 
 3. Verify core services are running
 - HQ backend: http://localhost:5000
@@ -1048,10 +1063,8 @@ Targets:
 - Relay Role Clarification & Topology:
 	- [x] Define relay role taxonomy (static, ferry, fallback, volunteer)
 	- [x] Formalize upstream selection hierarchy (Station > HQ > Mesh)
-	- [ ] Define crisis pin lifetime rules per relay mode
 	- [ ] Define HQ sync cadence tiers per node role
 	- [ ] Document relay reset/wipe procedures
-	- [ ] Define relay storage TTL profiles per role
 	- [ ] Separate ferry container from static relay container
 	- [ ] Add relay role indicator in `/health` endpoint
 	- [ ] Add relay role indicator in admin telemetry panel
@@ -1088,8 +1101,7 @@ Define & display formal station states:
 - [x] storage paused
 
 Establish simplified relay flow:<br>
-(*Uncertain best approach for this, perhaps provide url via qr with simple json containing pertinent info for application to consume when manually setting device to relay mode?*)
-- [ ] pinning device to crisis_id
+- [x] pinning device to crisis_id
 
 HQ:
 - [ ] mining active
