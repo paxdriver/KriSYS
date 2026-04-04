@@ -103,6 +103,8 @@ during future events of crisis requiring deployment of aid and volunteers.
 - `mkdir ../station-data` is required to exist for the docker-compose volume mount later on.
 - `cd ../../..` to get back to the project root for the rest of these commands.
 
+**note** npm install commands are due to volume mounted hot reloading, this is not going to be required in the production version it's just for speedy iteration with the docker-compose setup described here.
+
 2. Start the full development environment
 - From the project root, run: `docker-compose up --build`
 - This spins up:
