@@ -92,9 +92,16 @@ during future events of crisis requiring deployment of aid and volunteers.
 ---
 ## Quick Start
 
+### For the purposes of quick testing and bootstrapping, in krisys-backend/blockchain create sym-link to master_private_key.asc and master_public_key.asc to /blockchain/master_private_key.asc and /blockchain/master_public_key.asc since backend has to contain references to the database being stored on HQ. This is a convenience to keep the development stage and Dockerfiles neater with a simpler `COPY . .` type of command. In production, of course, containers will be built individually so this won't really apply but it's too cumbersome to do this every time a blockchain is re-initialized.
+
 1. Clone the repository
 - Use the latest branch (e.g. `phase-six-react` if applicable).
 - Use the latest commit with a `CP` or `CHECKPOINT` prefix to ensure a stable state.
+- `npm install` for the main project's frontend.
+- `cd krisys-backend/device-offline-server/station-frontend`.
+- `npm install` for the station's UI on the backend.
+- `mkdir ../station-data` is required to exist for the docker-compose volume mount later on.
+- `cd ../../..` to get back to the project root for the rest of these commands.
 
 2. Start the full development environment
 - From the project root, run: `docker-compose up --build`
@@ -122,6 +129,7 @@ c) Restart the docker setup again so that stations can boot with their identitie
 
 3. Verify core services are running
 - HQ backend: http://localhost:5000
+- HQ admin panel: http://localhost:5000/admin
 - Wallet frontend: http://localhost:3000
 - Station backend API: http://localhost:6001
 - Station frontend UI: http://localhost:6600
@@ -147,7 +155,9 @@ c) Restart the docker setup again so that stations can boot with their identitie
 	- Station identity and fingerprint are displayed.
 	- WebRTC offer is generated.
 	- Pools are registered via `/station/pools`.
-- Connect a wallet to the station using manual offer/answer exchange.
+- Connect one or many wallets to the station using auto offer/answer exchange.
+- Station should see and sync many peers using its own backend Node server
+- Wallet dashboard ConnectionsPage will show active connections and available peer stations
 
 8. Monitor station and system state  
 - Visit http://localhost:5000/admin to view the admin panel.
@@ -163,6 +173,7 @@ c) Restart the docker setup again so that stations can boot with their identitie
 	- Master keys
 	- Station data
 	- Relay data
+	- admin_token.txt
 - Restart with `docker-compose up --build` for a clean slate then restart again with `docker-compose down; docker-compose up;` so that containers run with bootstrappings initialized.
 
 ---
