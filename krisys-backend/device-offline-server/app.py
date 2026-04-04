@@ -997,6 +997,11 @@ def flush_station_events_to_hq():
 						(r["id"],),
 					)
 					conn.commit()
+			elif resp.status_code in (401, 403):
+				logger.error("Station identity rejected by HQ (revoked). Downgrading.")
+				set_identity_rejected_at_ms(_now_ms())
+				purge_station_identity()
+				break  # Stop sending further telemetry when station's api key has been revoked
 
 		except Exception:
 			break  # retry later
@@ -1038,6 +1043,31 @@ def require_usable_relay() -> tuple[bool, str]:
 		return False, "Relay unavailable (no verified blockchain)"
 
 	return True, ""
+
+
+# Station Identity Cleanup (Revocation Handling)
+def purge_station_identity():
+	"""
+	Delete local station identity and downgrade to relay mode. This is called when HQ explicitly rejects station credentials.
+	"""
+	global _station_identity
+	global STATION_ID
+
+	try:
+		identity_path = _identity_path_for_write()
+		if os.path.exists(identity_path):
+			os.remove(identity_path)
+			logger.warning("Station identity file deleted due to revocation.")
+	except Exception as e:
+		logger.error(f"Failed to delete station identity file: {e}")
+
+	_station_identity = None
+	STATION_ID = None
+
+	with RUNTIME_STATE_LOCK:
+		STATION_STATE["mode"] = "relay"
+
+	logger.warning("Station downgraded to RELAY mode due to revocation.")
 
 # ----------------------------
 # DB helpers (queued + confirmed)
@@ -2535,76 +2565,7 @@ def mesh_inventory():
 	inventory = get_pool_inventory_snapshot()
 
 	return jsonify(inventory), 200
-# @app.route("/mesh/inventory", methods=["POST"])
-# def mesh_inventory():
-# 	"""
-# 	Inventory handshake:
-# 		Client sends relay_hashes only.
-# 		Station replies:
-# 			- missing_relay_hashes: which relay hashes the station does NOT know
-# 			- confirmed: confirmations for hashes the station knows as confirmed
-# 	"""
-# 	incoming = request.get_json(force=True, silent=True) or {}
 
-# 	# First check if it has min requirements to serve as a relay (crisisID, local genesis block)
-# 	ok, err = require_usable_relay()
-# 	if not ok:
-# 		return jsonify({"error": err}), 403
-
-# 	# Since stations will fallback to relay nodes, we still want mesh to work even if station api key is missing or revoked
-# 	ok, err = require_relay_or_station_mode()
-# 	if not ok:
-# 		return jsonify({"error": err}), 403
-
-# 	ok, err = ensure_crisis_id(incoming.get("crisisId"))
-# 	if not ok:
-# 		return jsonify({"error": err}), 400
-
-# 	relay_hashes = incoming.get("relay_hashes") or []
-# 	if not isinstance(relay_hashes, list):
-# 		return jsonify({"error": "relay_hashes must be a list"}), 400
-
-# 	relay_hashes = relay_hashes[:RELAY_HASH_CAP]
-# 	relay_hashes = [rh for rh in relay_hashes if isinstance(rh, str) and rh.strip()]
-
-# 	known = get_known_relay_hashes()
-# 	missing_relay_hashes = [rh for rh in relay_hashes if rh not in known]
-
-# 	confirmed = db_get_confirmed_many(relay_hashes)
-
-# 	# Include check-in relay inventory as well as unconfirmed gossip
-# 	with station_db() as conn:
-# 		rows = conn.execute("SELECT relay_hash FROM checkins_queued").fetchall()
-
-# 	local_checkin_hashes = [r["relay_hash"] for r in rows]
-
-# 	incoming_checkin_hashes = incoming.get("checkin_hashes") or []
-# 	if not isinstance(incoming_checkin_hashes, list):
-# 		incoming_checkin_hashes = []
-
-# 	missing_checkin_hashes = [
-# 		rh for rh in incoming_checkin_hashes
-# 		if rh not in local_checkin_hashes
-# 	]
-	
-# 	blocks = db_list_blocks(limit=1)
-# 	_chain_tip = blocks[-1] if blocks else None
-# 	chain_tip = None
-# 	if _chain_tip: 
-# 		chain_tip =  {
-# 			"block_index": _chain_tip["block_index"],
-# 			"hash": _chain_tip["hash"],
-# 		}
-
-# 	return jsonify(
-# 		{
-# 			"crisisId": STATION_STATE.get("crisisId"),
-# 			"missing_relay_hashes": missing_relay_hashes,
-# 			"missing_checking_hashes": missing_checkin_hashes,
-# 			"confirmed": confirmed,
-# 			"chain_tip": chain_tip,
-# 		}
-# 	), 200
 
 
 @app.route("/mesh/sync", methods=["POST"])
@@ -2825,17 +2786,14 @@ def flush_to_central_internal() -> dict:
 					elif resp.status_code in (401, 403):
 						# Identity invalid / revoked / inactive => persist rejection
 						set_identity_rejected_at_ms(_now_ms())
+						logger.error("Station identity revoked during check-in. Downgrading immediately.")
+						purge_station_identity()
 						checkin_failed += 1
-						checkin_errors.append(
-							f"{relay_hash}: identity_rejected HTTP {resp.status_code} {resp.text}"
-						)
-						# Stop trying further check-ins this cycle
-						break
+						checkin_errors.append(f"{relay_hash}: identity_revoked HTTP {resp.status_code}")
+						break # Stop trying if api key is revoked by central, revert station to relay mode
 					else:
 						checkin_failed += 1
-						checkin_errors.append(
-							f"{relay_hash}: HTTP {resp.status_code} {resp.text}"
-						)
+						checkin_errors.append(f"{relay_hash}: HTTP {resp.status_code} {resp.text}")
 				except Exception as e:
 					checkin_failed += 1
 					checkin_errors.append(f"{relay_hash}: {e}")

@@ -1312,7 +1312,7 @@ def sanitize_sync_payload_server(payload: dict) -> list[dict]:
 		message_data = msg.get("message_data")
 		if not is_string(message_data):
 			continue
-		if len(message_data) > MAX_MESSAGE_LENGTH:
+		if message_data and len(message_data) > MAX_MESSAGE_LENGTH:
 			continue
 
 		related = msg.get("related_addresses") or []
@@ -1420,7 +1420,6 @@ def health():
 		"provisioned_target": db_get_meta("provisioned_target"),
 		"provisioned_at": db_get_meta("provisioned_at"),
 	}), 200
-
 
 
 @app.route("/relay/provision", methods=["POST"])

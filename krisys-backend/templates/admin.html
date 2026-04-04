@@ -43,7 +43,7 @@
 			<div class="card">
 				<div class="card-title">Admin Token</div>
 				<div class="token-row">
-					<input id="admin-token-input" class="token-input" placeholder="Paste base64 admin token here" />
+					<input id="admin-token-input" class="token-input" placeholder="Paste admin token here" />
 					<button onclick="saveAdminToken()">Save Token</button>
 					<span id="token-status" class="small"></span>
 				</div>
@@ -167,7 +167,13 @@
 	</div>
 
 	<script>
-		const ADMIN_TOKEN_KEY = 'krisys_admin_token_b64'
+		const INJECTED_ADMIN_TOKEN = {{ admin_token|tojson }}
+	</script>
+
+
+	<script>
+		const ADMIN_TOKEN_KEY = 'krisys_admin_token'
+		// const ADMIN_TOKEN_KEY = 'krisys_admin_token_b64'
 
 		/**
 		* DEV NOTE: We seed the admin token from the template-injected global
@@ -175,11 +181,18 @@
 		* extra fetch. Later we can swap this helper to read from an env or config.
 		*/
 		function getAdminToken() {
-			//return sessionStorage.getItem(ADMIN_TOKEN_KEY) || ''
-			const token = sessionStorage.getItem(ADMIN_TOKEN_KEY)
+			let token = sessionStorage.getItem(ADMIN_TOKEN_KEY)
+
+			// If not in session, try injected token from template
+			if (!token && typeof INJECTED_ADMIN_TOKEN === 'string' && INJECTED_ADMIN_TOKEN) {
+				token = INJECTED_ADMIN_TOKEN
+				sessionStorage.setItem(ADMIN_TOKEN_KEY, token)
+			}
+
 			if (!token) {
 				throw new Error('Admin token not set')
 			}
+
 			return token
 		}
 
@@ -224,6 +237,22 @@
 				.replaceAll('>', '&gt;')
 				.replaceAll('"', '&quot;')
 				.replaceAll("'", '&#39;')
+		}
+
+		function archiveStation(stationId) {
+			if (!confirm("Archive station " + stationId + "?")) return
+			let token = getAdminToken()
+
+			fetch("/admin/station/archive", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"X-Admin-Token": token
+				},
+				body: JSON.stringify({ station_id: stationId })
+			})
+			.then(res => res.json())
+			.then(data => location.reload() )
 		}
 
 		async function loadStations() {
@@ -295,6 +324,7 @@
 				const actionButtons = `
 					<button onclick="revokeStation('${escapeHtml(s.station_id)}')">Revoke</button>
 					<button onclick="reactivateStation('${escapeHtml(s.station_id)}')">Activate</button>
+					<button onclick="archiveStation('${escapeHtml(s.station_id)}')">Archive</button>
 				`
 
 				tr.innerHTML = `

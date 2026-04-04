@@ -8,6 +8,7 @@ import time
 import json
 import fcntl
 import glob
+import sys
 import os
 import base64
 from functools import wraps
@@ -170,7 +171,7 @@ def load_or_create_admin_token() -> str:
 # 	- In production, proper auth and secrets will be incorporated into this access so only HQ can hit ADMIN endpoints
 ADMIN_STATION_TOKEN = load_or_create_admin_token()
 
-def station_admin_required(fn):
+def dev_admin_required(fn):
 	@wraps(fn)
 	def wrapper(*args, **kwargs):
 		token = request.headers.get("X-Admin-Token")
@@ -284,6 +285,7 @@ def dev_local_bootstrap_policy_id_and_cleanup() -> str | None:
 		db_path,
 		"blockchain/master_public_key.asc",
 		"blockchain/master_private_key.asc",
+		os.path.join("blockchain", "admin_token.txt"),
 		os.path.join("device-offline-server", "station-data", "station.db"),
 		os.path.join("device-offline-server", "station-data", "krisys_station_identity.json"),
 		os.path.join("relay-offline-server", "relay-data", "relay.db"),
@@ -935,11 +937,10 @@ def create_wallet():
 # TODO: create proper frontend panel with proper auth using JWT
 @app.route("/admin", methods=["GET"])
 def admin_panel():
-	return render_template("admin.html",
-		admin_token_b64=base64.b64encode(
-			ADMIN_TOKEN.encode("utf-8")
-		).decode("utf-8")
-	)
+    return render_template(
+        "admin.html",
+        admin_token=ADMIN_STATION_TOKEN
+    )
 
 @app.route("/debug/stations")
 def debug_stations():
@@ -1040,7 +1041,7 @@ def _safe_parse_context_json(raw: str | None) -> dict | None:
 
 
 @app.route("/admin/stations/status", methods=["GET"])
-@admin_required
+@dev_admin_required
 def admin_station_status():
 	"""
 	Aggregate station operational state for the HQ panel.
@@ -1193,6 +1194,10 @@ def admin_station_status():
 	NOW = int(time.time())
 	OFFLINE_TIMEOUT = TIME_TIL_STATION_DEEMED_STALE   # Seconds til stale, set at top of script
 	for entry in stations.values():
+		# Only monitor active stations
+		if entry["status"] != "active":
+			continue
+
 		last_seen = entry["last_seen_at"]
 		station_id = entry["station_id"]
 		previous_connectivity = entry["lifecycle"]["connectivity"]
@@ -1280,7 +1285,7 @@ def admin_station_status():
 
 # ADMIN EVENTS QUERY ENDPOINT
 @app.route("/admin/events", methods=["GET"])
-@admin_required
+@dev_admin_required
 def get_admin_events():
 	"""
 	Query structured telemetry events.
@@ -1372,7 +1377,7 @@ def mine_block():
 
 
 @app.route('/admin/alert', methods=['POST'])
-@admin_required
+@dev_admin_required
 def admin_alert():
 	data = request.json
 	try: 
@@ -1435,7 +1440,7 @@ def get_current_policy():
 
 
 @app.route('/admin/policy', methods=['POST'])
-@admin_required
+@dev_admin_required
 def set_policy():
 	data = request.json
 	policy_id = data.get('policy_id')
@@ -1709,7 +1714,7 @@ def check_in():
 	#   api_key_hash          TEXT,            -- SHA-256 of long-term API key
 	#
 	#   -- Lifecycle
-	#   status                TEXT DEFAULT 'pending',  -- pending | active | revoked (future)
+	#   status                TEXT DEFAULT 'pending',  -- pending | active | revoked | archived
 	#   activated_device_id   TEXT,            -- device UUID that activated (audit)
 	#   activated_at          INTEGER,         -- unix seconds (audit)
 	#   created_at            INTEGER DEFAULT (CAST(strftime('%s','now') AS INTEGER)),
@@ -1916,6 +1921,48 @@ def station_activate():
 		}
 	), 200
 
+# Archive station - no longer needs to be included in active, pending, or revoked stations lists. Keep records for posterity.
+@app.route("/admin/station/archive", methods=["POST"])
+@dev_admin_required
+def admin_station_archive():
+	"""
+	Archive a station. This removes it from operational monitoring and peer lists but preserves historical telemetry.
+	"""
+
+	data = request.get_json(force=True, silent=True) or {}
+	station_id = data.get("station_id")
+
+	if not isinstance(station_id, str) or not station_id.strip():
+		return jsonify({"error": "Missing station_id"}), 400
+
+	with db_connection() as conn:
+		conn.execute(
+			"""
+			UPDATE stations
+			SET status = 'archived'
+			WHERE station_id = ?
+			""",
+			(station_id.strip(),),
+		)
+		conn.commit()
+
+	emit_telemetry_event(
+		source="HQ",
+		severity="info",
+		event_type="admin_action",
+		context={
+			"action": "archive_station",
+			"station_id": station_id.strip(),
+		},
+		node_id=station_id.strip(),
+	)
+
+	return jsonify({
+		"status": "archived",
+		"station_id": station_id.strip()
+	}), 200
+
+
 # Authentication endpoint that returns private key for client-side decryption
 @app.route('/auth/unlock', methods=['POST'])
 def unlock_wallet_endpoint():
@@ -1960,7 +2007,7 @@ def unlock_wallet_endpoint():
 
 # DEV NOTE: move to admin UI in production, requiring admin key to access internally, not exposed by default
 @app.route("/admin/station/create", methods=["POST"])
-@admin_required
+@dev_admin_required
 # @station_admin_required # convenience, uses txt file in dev - DEV NOTE: REMOVE THIS
 def admin_station_create():
 	"""
@@ -2070,7 +2117,7 @@ def admin_station_create():
 
 # ADMIN: Revoke Station (DEV NOTE: dev control only)
 @app.route("/admin/station/revoke", methods=["POST"])
-@admin_required
+@dev_admin_required
 def admin_station_revoke():
 	"""
 	Set station status to 'revoked'.
@@ -2115,7 +2162,7 @@ def admin_station_revoke():
 
 # ADMIN: Reactivate Station
 @app.route("/admin/station/reactivate", methods=["POST"])
-@admin_required
+@dev_admin_required
 def admin_station_reactivate():
 	"""
 	Set station status back to 'active'.
