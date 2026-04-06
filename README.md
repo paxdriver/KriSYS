@@ -665,8 +665,8 @@ Typical offline workflow tests:
 │   │   └── station_identity_*.json (the persistent api keys for authorized stations in lieu of wallet passphrases)
 │   ├── rtc-host/ (Node WebRTC host to make a pool of many 1-1 webrtc client/station connections)
 │   │   ├── nodeRtcChunking.js
-│   │   ├── server.js		(node server offer/answer and state of pairwise webrtc connections)
-│   │   └── package.json
+│   │   ├── package.json
+│   │   └── server.js		(node server offer/answer and state of pairwise webrtc connections)
 │   ├── app.py
 │   └── Dockerfile
 ├── blockchain.db
@@ -682,6 +682,10 @@ Typical offline workflow tests:
 ├── relay-offline-server 
 │   ├── relay-data  (simulating offline dumb relay with persistent storage to help propagate offline messages)
 │   │   └── relay.db
+│   ├── rtc-host 
+│   │   ├── nodeRtcChunking.js
+│   │   ├── package.json
+│   │   └── server.js
 │   ├── app.py
 │   └── Dockerfile
 ├── requirements.txt

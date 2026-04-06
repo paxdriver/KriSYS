@@ -1509,6 +1509,7 @@ def relay_provision():
 
 	return jsonify({"status": "PINNED", "crisis_id": crisis_id}), 200
 
+
 @app.route("/mesh/inventory", methods=["POST"])
 def mesh_inventory():
 	"""
@@ -1601,6 +1602,90 @@ def mesh_sync():
 
 	payload = export_relay_payload()
 	return jsonify(payload), 200
+
+
+# Room hosting via Nodejs rtc-host/server.js
+@app.route("/relay/allocate-offer", methods=["POST"])
+def relay_allocate_offer():
+	"""
+	Allocate a WebRTC offer from the relay pool.
+
+	Wallet calls this endpoint.
+	Flask validates relay is PINNED.
+	Flask forwards request to Node RTC host.
+	"""
+
+	# Ensure relay is provisioned (must have crisis pinned)
+	ok, err = require_pinned()
+	if not ok:
+		return jsonify({"error": err}), 403
+
+	try:
+		# Forward request to internal RTC host running on port 7000
+		resp = requests.post("http://localhost:7000/allocate-offer", timeout=5)
+
+	except Exception as e:
+		logger.error(f"RTC host unreachable: {e}")
+		return jsonify({"error": "RTC host unavailable"}), 502
+
+	# If Node returned an error, forward it cleanly
+	if resp.status_code != 200:
+		try:
+			return jsonify(resp.json()), resp.status_code
+		except Exception:
+			return jsonify({"error": resp.text}), resp.status_code
+
+	# Return offer directly to wallet (do NOT inspect SDP)
+	return jsonify(resp.json()), 200
+
+
+@app.route("/relay/answer", methods=["POST"])
+def relay_answer():
+	"""
+	Accept WebRTC answer from wallet and forward it to Node RTC host.
+
+	Request JSON:
+	{
+		"peerId": "...",
+		"answer": { ... SDP ... }
+	}
+	"""
+
+	# Relay must be provisioned
+	ok, err = require_pinned()
+	if not ok:
+		return jsonify({"error": err}), 403
+
+	data = request.get_json(force=True, silent=True) or {}
+
+	peer_id = data.get("peerId")
+	answer = data.get("answer")
+
+	# Basic validation
+	if not isinstance(peer_id, str) or not peer_id.strip():
+		return jsonify({"error": "Missing peerId"}), 400
+
+	if not isinstance(answer, dict):
+		return jsonify({"error": "Missing answer"}), 400
+
+	try:
+		resp = requests.post(
+			"http://localhost:7000/answer",
+			json={ "peerId": peer_id, "answer": answer }, timeout=5
+		)
+
+	except Exception as e:
+		logger.error(f"RTC answer forward failed: {e}")
+		return jsonify({"error": "RTC host unavailable"}), 502
+
+	# Forward Node response cleanly
+	if resp.status_code != 200:
+		try:
+			return jsonify(resp.json()), resp.status_code
+		except Exception:
+			return jsonify({"error": resp.text}), resp.status_code
+
+	return jsonify(resp.json()), 200
 
 
 def relay_background_loop():

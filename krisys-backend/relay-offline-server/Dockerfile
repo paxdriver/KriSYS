@@ -1,13 +1,19 @@
 # krisys-backend/relay-offline-server/Dockerfile
 FROM python:3.11-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-	libsqlite3-0 \
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+	curl \
+	gnupg \
 	&& rm -rf /var/lib/apt/lists/*
+
+# Install Node.js (LTS 18 to match station)
+RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+	&& apt-get install -y nodejs
 
 WORKDIR /app
 
-# Reuse top-level requirements (same deps as central backend)
+# Install Python deps
 COPY ./requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -16,7 +22,7 @@ ENV RELAY_AUTO_PULL=1
 # Optional: Setting CENTRAL_API_URL enables:
 # 1) Central auto-provisioning (if UNINITIALIZED)
 # 2) Central block pull (if RELAY_AUTO_PULL=1)
-# Omit for station-only provisioning.
+# Omit for station-only provisioning
 # ENV CENTRAL_API_URL=http://localhost:5000
 
 # Copy only the relay app
@@ -25,6 +31,14 @@ COPY ./relay-offline-server/ /app
 COPY canonical_block.py /app/
 COPY reconcile_local_chain.py /app/
 
-EXPOSE 5000
+# Install Node deps for RTC host
+WORKDIR /app/rtc-host
+RUN npm install
 
-CMD ["gunicorn", "-b", "0.0.0.0:5000", "app:app", "--workers", "1", "--reload"]
+WORKDIR /app
+
+EXPOSE 5000
+EXPOSE 7000
+
+# Start BOTH Flask and Node
+CMD bash -c "node rtc-host/server.js & gunicorn -b 0.0.0.0:5000 app:app --workers 1 --reload"
