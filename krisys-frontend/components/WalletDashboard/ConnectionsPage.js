@@ -75,7 +75,7 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 	const [trustedStations, setTrustedStations] = useState(() => crisisId ? disasterStorage.getStations({ crisisId }) : {})
 	const [selectedStationId, setSelectedStationId] = useState(null)
 
-	const { joinWithOffer, p2pStationInventoryNow, status, connectToStation } = useP2P()
+	const { joinWithOffer, p2pStationInventoryNow, status, connectToStation, connectToRelay } = useP2P()
 	const [stationPools, setStationPools] = useState({})
 	const [loadingPools, setLoadingPools] = useState(false)
 	const [selectedOffer, setSelectedOffer] = useState('')
@@ -105,6 +105,10 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 	// Fetch station pools
 	useEffect(() => {
 		if (status !== 'connected') return
+		
+		// Only run for station host
+		if (hostUrl !== DEFAULT_STATION_URL) return
+		
 		async function loadPools() {
 			try {
 				const res = await fetch(`${hostUrl}/station/peers`)	// DEV NOTE: later users will connect to pool to get baseurl for this
@@ -182,7 +186,7 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 	// END HELPER FUNCS
 	// ------------------------------
 
-	const runSync = async () => {
+	const runSync = async () => { // this is for stations
 		setSyncing(true)
 		setError(null)
 		setLastResult(null)
@@ -475,6 +479,15 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 								disabled={!joinCodeInput.trim() || syncing}
 							>
 								Apply Join Code
+							</button>
+
+							<button
+								className="btn"
+								type="button"
+								onClick={ ()=> connectToRelay(hostUrl) }
+								style={{ marginLeft: '8px' }}
+							>
+								CONNECT TO RELAY
 							</button>
 
 							<button
@@ -816,7 +829,7 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 						disabled={status !== 'connected'}
 						style={{ marginTop: '8px' }}
 					>
-						Sync Station
+						Sync RTC Station/Relay
 					</button>
 
 					<button

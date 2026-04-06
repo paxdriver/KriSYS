@@ -479,6 +479,97 @@ export function P2PProvider({ children, crisisId, familyId }) {
 	}, [handleIncomingJson, log])
 
 
+	// Connect to Relay via Flask → Node bridge
+	const connectToRelay = useCallback(async (baseUrl) => {
+		setError(null)
+
+		if (!canWebRTC) {
+			setError('WebRTC not available in this browser.')
+			return
+		}
+
+		if (!baseUrl || typeof baseUrl !== 'string') {
+			setError('Invalid relay URL')
+			return
+		}
+
+		const trimmedUrl = baseUrl.trim()
+		if (!trimmedUrl) {
+			setError('Invalid relay URL')
+			return
+		}
+
+		reset()
+		setRole('join')
+		setStatus('connecting')
+		log('Requesting offer from relay...')
+
+		try {
+			// 1. Request offer from relay Flask endpoint
+			const offerResp = await fetch(`${trimmedUrl}/relay/allocate-offer`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' }
+			})
+
+			if (!offerResp.ok) {
+				throw new Error(`Relay offer request failed: ${offerResp.status}`)
+			}
+
+			const { peerId, offer } = await offerResp.json()
+
+			log(`Received offer from relay (peerId=${peerId})`)
+
+			// 2. Create local RTCPeerConnection
+			const pc = new RTCPeerConnection({ iceServers: [] })
+			pcRef.current = pc
+
+			attachCommonHandlers(pc)
+
+			// 3. Listen for data channel
+			pc.ondatachannel = (evt) => {
+				const dc = evt.channel
+				dcRef.current = dc
+				attachDataChannelHandlers(dc)
+				log('Data channel received from relay')
+			}
+
+			// 4. Apply relay offer
+			await pc.setRemoteDescription(new RTCSessionDescription(offer))
+
+			// 5. Generate answer
+			const answer = await pc.createAnswer()
+			await pc.setLocalDescription(answer)
+
+			await waitForIceGatheringComplete(pc)
+
+			// 6. Send answer back to relay
+			const answerResp = await fetch(`${trimmedUrl}/relay/answer`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					peerId,
+					answer: pc.localDescription
+				})
+			})
+
+			if (!answerResp.ok) {
+				throw new Error(`Relay answer POST failed: ${answerResp.status}`)
+			}
+
+			log('Answer sent to relay')
+
+		} catch (e) {
+			setError(e?.message || String(e))
+		}
+	}, [
+		canWebRTC,
+		reset,
+		log,
+		attachCommonHandlers,
+		attachDataChannelHandlers
+	])
+
+
 	// Connect to Station's Node WebRTC host via Flask endpoint
 	const connectToStation = useCallback(async () => {
 		setError(null)
@@ -863,6 +954,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 
 			reset,
 			connectToStation,
+			connectToRelay,
 			createHostOffer,
 			joinWithOffer,
 			hostApplyAnswer,
@@ -874,6 +966,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		answerCode,
 		canWebRTC,
 		connectToStation,
+		connectToRelay,
 		createHostOffer,
 		error,
 		hostApplyAnswer,
