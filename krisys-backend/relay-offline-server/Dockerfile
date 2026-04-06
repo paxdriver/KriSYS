@@ -23,7 +23,7 @@ ENV RELAY_AUTO_PULL=1
 # 1) Central auto-provisioning (if UNINITIALIZED)
 # 2) Central block pull (if RELAY_AUTO_PULL=1)
 # Omit for station-only provisioning
-# ENV CENTRAL_API_URL=http://localhost:5000
+ENV CENTRAL_API_URL=http://localhost:5000
 
 # Copy only the relay app
 COPY ./relay-offline-server/ /app

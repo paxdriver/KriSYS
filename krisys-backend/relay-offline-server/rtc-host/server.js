@@ -96,45 +96,168 @@ async function ensureOfferPool() {
 // Initialize pool at startup
 ensureOfferPool()
 
-
 async function handleIncoming(peerId, msg) {
 	console.log("RELAY NODE RECEIVED:", msg?.t)
 
-	// Mesh sync request
+	const offerObj = ALLOCATED_OFFERS[peerId]
+	if (!offerObj) return
+
+	const sender = createChunkSender({ dc: offerObj.dc })
+
+	/*	INVENTORY PHASE
+
+	Client sends:
+	{
+		t: 'krisys_mesh_inventory_v1',
+		id,
+		crisisId,
+		chain_tip,
+		relay_hashes
+	}
+
+	Relay must:
+	1. Compare tips
+	2. If relay ahead -> send payload immediately
+	3. If relay behind -> trigger sync request
+	4. If equal -> do nothing
+	*/
+
+	if (msg?.t === 'krisys_mesh_inventory_v1') {
+
+		// Ask Flask what relay's current state is
+		const resp = await fetch('http://localhost:5000/mesh/inventory', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(msg)
+		})
+
+		const payload = await resp.json()
+
+		const relayTip = payload?.chain_tip?.block_index
+		const clientTip = msg?.chain_tip?.block_index
+
+		console.log("RELAY TIP:", relayTip, "CLIENT TIP:", clientTip)
+
+
+		// CASE 1: Relay Ahead -> Serve Blocks
+		if (
+			typeof relayTip === 'number' &&
+			typeof clientTip === 'number' &&
+			relayTip > clientTip
+		) {
+			console.log("Relay ahead. Sending payload.")
+
+			const syncResp = await fetch('http://localhost:5000/mesh/sync', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					crisisId: msg.crisisId,
+					queued: [],
+					blocks: []
+				})
+			})
+
+			const syncPayload = await syncResp.json()
+
+			sender.sendJson({
+				t: 'krisys_mesh_payload_v1',
+				id: msg.id,
+				sentAt: Date.now(),
+				blocks: syncPayload.blocks || [],
+				queued: syncPayload.queued || []
+			})
+
+			return
+		}
+
+		// CASE 2: Relay Behind -> Request Sync
+		if (
+			typeof relayTip === 'number' &&
+			typeof clientTip === 'number' &&
+			clientTip > relayTip
+		) {
+			console.log("Relay behind. Requesting sync.")
+
+			// Trigger full sync request from client
+			sender.sendJson({
+				t: 'krisys_mesh_sync_req_v1',
+				id: msg.id,
+				sentAt: Date.now(),
+				payload: {
+					version: 1,
+					deviceId: 'relay_node',
+					crisisId: msg.crisisId,
+					generatedAt: Date.now(),
+					chain_tip: payload.chain_tip || null,
+					blocks: [],
+					queued: [],
+					confirmed: {}
+				}
+			})
+
+			return
+		}
+
+		// CASE 3: Equal -> Nothing To Do
+		console.log("Tips equal. No action.")
+		return
+	}
+
+	/* SYNC PHASE
+
+	Client sends:
+	krisys_mesh_sync_req_v1
+
+	Relay forwards to Flask /mesh/sync
+	Flask processes + stores blocks
+	Relay sends krisys_mesh_sync_res_v1 back
+	*/
+
 	if (msg?.t === 'krisys_mesh_sync_req_v1') {
 
-		// Forward payload to relay Flask /mesh/sync
+		console.log("Processing sync request.")
+
 		const resp = await fetch('http://localhost:5000/mesh/sync', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify(msg.payload)
 		})
 
-		const payload = await resp.json()
+		const syncPayload = await resp.json()
 
-		const offerObj = ALLOCATED_OFFERS[peerId]
-		if (!offerObj) return
-
-		const sender = createChunkSender({ dc: offerObj.dc })
-
-		// Send response back to wallet
 		sender.sendJson({
 			t: 'krisys_mesh_sync_res_v1',
 			id: msg.id,
 			sentAt: Date.now(),
-			payload
+			payload: syncPayload
 		})
+
+		return
 	}
 
-	// Simple ping/pong connection checker
-	if (msg?.t === 'krisys_p2p_ping') {
-		const offerObj = ALLOCATED_OFFERS[peerId]
-		if (!offerObj) return
+	// SYNC RESPONSE PHASE (Client sending blocks to relay)
+	if (msg?.t === 'krisys_mesh_sync_res_v1') {
 
+		console.log("Relay received sync response. Storing blocks.")
+
+		const resp = await fetch('http://localhost:5000/mesh/sync', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(msg.payload)
+		})
+
+		await resp.json()  // ensure Flask processes it
+
+		return
+	}
+
+	//	PING
+	if (msg?.t === 'krisys_p2p_ping') {
 		offerObj.dc.send(JSON.stringify({
 			t: 'krisys_p2p_pong',
 			at: Date.now()
 		}))
+		return
 	}
 }
 

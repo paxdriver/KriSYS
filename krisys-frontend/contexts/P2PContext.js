@@ -68,7 +68,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 	const [answerCode, setAnswerCode] = useState('')
 	const [remoteOfferInput, setRemoteOfferInput] = useState('')
 	const [remoteAnswerInput, setRemoteAnswerInput] = useState('')
-
+	const [connectionMode, setConnectionMode] = useState(null)
 	const [logLines, setLogLines] = useState([])
 
 	// { send: {bytesSent,...}, recv: {bytesReceived,...} }
@@ -433,15 +433,17 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			setStatus('connected')
 
 			// Send mandatory handshake immediately after connection opens
-			try {
-				const stations = disasterStorage.getStations({ crisisId }) || {}
-				const firstStation = Object.values(stations)[0]
+			if (connectionMode === 'station') {
+
+				try {
+					const stations = disasterStorage.getStations({ crisisId }) || {}
+					const firstStation = Object.values(stations)[0]
 
 				if (!firstStation) {
 					log('No trusted station stored for handshake')
 					return
 				}
-
+				
 				sendJson({
 					t: 'krisys_handshake_v1',
 					baseUrl: 'http://localhost:6001', // dev only for now
@@ -449,8 +451,9 @@ export function P2PProvider({ children, crisisId, familyId }) {
 				})
 
 				log('sent handshake')
-			} catch (e) {
-				log(`handshake send failed: ${e?.message || String(e)}`)
+				} catch (e) {
+					log(`handshake send failed: ${e?.message || String(e)}`)
+				}
 			}
 		}
 
@@ -482,6 +485,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 	// Connect to Relay via Flask → Node bridge
 	const connectToRelay = useCallback(async (baseUrl) => {
 		setError(null)
+		setConnectionMode("relay")
 
 		if (!canWebRTC) {
 			setError('WebRTC not available in this browser.')
@@ -573,6 +577,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 	// Connect to Station's Node WebRTC host via Flask endpoint
 	const connectToStation = useCallback(async () => {
 		setError(null)
+		setConnectionMode("station")
 
 		if (!canWebRTC) {
 			setError('WebRTC not available in this browser.')
@@ -856,7 +861,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 	}, [closeAfterDrain, crisisId, familyId, log, pushOnlyOnJoin, sendJson])
 
 	// Manually trigger inventory negotiation with station (station as host sync-ing with connected client)
-	const p2pStationInventoryNow = useCallback(async () => {
+	const p2pStationInventoryNow = useCallback(async (hostUrl) => {
 		/*		When you click Sync Station:
 		a) Wallet reads its own block index
 		b) Wallet asks station for its block index (via /mesh/sync)
@@ -868,7 +873,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		setError(null)
 
 		if (status !== 'connected') {
-			log('station sync aborted: not connected')
+			log(`${connectionMode} sync aborted: not connected`)
 			return
 		}
 
@@ -881,9 +886,10 @@ export function P2PProvider({ children, crisisId, familyId }) {
 
 			const localTipIndex = typeof localPayload.chain_tip?.block_index === 'number' ? localPayload.chain_tip.block_index : -1
 
-			// 2. Ask station for its current chain tip
+			// 2. Ask station/relay for its current chain tip
+			const url = `${hostUrl}/mesh/sync`
 			const res = await fetch(
-				`${process.env.NEXT_PUBLIC_STATION_API}/mesh/sync`,
+				url,
 				{
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
@@ -900,27 +906,38 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			const stationTipIndex = typeof stationPayload.chain_tip?.block_index === 'number' ? 
 				stationPayload.chain_tip.block_index : -1
 
-			log(
-				`station sync check local_tip=${localTipIndex} ` +
-				`station_tip=${stationTipIndex}`
-			)
+			log(`${connectionMode} sync check local_tip=${localTipIndex} ` + `station_tip=${stationTipIndex}`)
 
-			// 3. If station is ahead, trigger inventory negotiation
+			// 3. If station/relay is ahead, trigger inventory negotiation
 			if (stationTipIndex > localTipIndex) {
-				log('station ahead — requesting inventory')
-
+				log(`${connectionMode} ahead — requesting inventory`)
+				const id = makeId()
+				pendingSyncIdsRef.current.add(id)
 				sendJson({
 					t: 'krisys_mesh_inventory_v1',
-					id: makeId(),
+					id: id,
 					crisisId,
 					chain_tip: localPayload.chain_tip || null,
 					relay_hashes: (localPayload.queued || []).map(m => m?.relay_hash)
-						.filter(Boolean)
-						.slice(0, INVENTORY_MAX_RELAY_HASHES),
+					.filter(Boolean)
+					.slice(0, INVENTORY_MAX_RELAY_HASHES),
 					sentAt: Date.now(),
 				})
-			} else {
-				log('station sync not needed — no new blocks')
+			}
+			else if (localTipIndex > stationTipIndex) {
+				log(`local ahead — pushing sync to ${connectionMode}`)
+				const id = makeId()
+				pendingSyncIdsRef.current.add(id)
+				sendJson({
+					t: 'krisys_mesh_sync_req_v1',
+					id: id,
+					mode: false,
+					sentAt: Date.now(),
+					payload: localPayload
+				})
+			}
+			else {
+				log(`${connectionMode} sync not needed — no new blocks`)
 			}
 
 		} catch (e) {

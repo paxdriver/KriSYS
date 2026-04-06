@@ -1548,11 +1548,21 @@ def mesh_inventory():
 	missing_relay_hashes = [rh for rh in relay_hashes if rh not in known]
 	confirmed = db_get_confirmed_many(relay_hashes)
 
+	tip = db_get_tip()
+	chain_tip = None
+	if isinstance(tip, dict):
+		chain_tip = {
+			"block_index": tip.get("block_index"),
+			"hash": tip.get("hash"),
+			"previous_hash": tip.get("previous_hash"),
+		}
+
 	return jsonify(
 		{
 			"crisisId": db_get_crisis_id(),
 			"missing_relay_hashes": missing_relay_hashes,
 			"confirmed": confirmed,
+			"chain_tip": chain_tip,
 		}
 	), 200
 

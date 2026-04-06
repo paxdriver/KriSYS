@@ -313,8 +313,6 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 			catch {
 				// ignore
 			}
-
-			alert('Join code applied. You can now click Sync Now.')
 		}
 		catch (e) {
 			setError(e?.message || String(e))
@@ -475,17 +473,12 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 							<button
 								className="btn"
 								type="button"
-								onClick={handleApplyJoinCode}
+								onClick={() => {
+									handleApplyJoinCode()
+									console.log(`Before connecting to relay, check the hostUrl: ${hostUrl}`)
+									connectToRelay(hostUrl)
+								}}
 								disabled={!joinCodeInput.trim() || syncing}
-							>
-								Apply Join Code
-							</button>
-
-							<button
-								className="btn"
-								type="button"
-								onClick={ ()=> connectToRelay(hostUrl) }
-								style={{ marginLeft: '8px' }}
 							>
 								CONNECT TO RELAY
 							</button>
@@ -501,7 +494,7 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 						</div>
 
 						<div className="privacy-notice" style={{ marginTop: '0.75rem' }}>
-							TODO (later): discovery + sort by signal strength.
+							TODO: discovery + sort by signal strength.
 						</div>
 					</div>
 				</div>
@@ -825,7 +818,9 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 					<button
 						className="btn"
 						type="button"
-						onClick={p2pStationInventoryNow}
+						onClick={ () => { 
+							p2pStationInventoryNow(hostUrl) 
+						} }
 						disabled={status !== 'connected'}
 						style={{ marginTop: '8px' }}
 					>
