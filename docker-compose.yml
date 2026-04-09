@@ -59,6 +59,7 @@ services:
       - "6002:5000"
     environment:
       - FLASK_ENV=development
+      - CENTRAL_API_URL=http://backend:5000
     volumes:
       # DEV: local folder where dumb relay stores its own mesh DB/cache
       - ./krisys-backend/relay-offline-server/relay-data:/app/data
@@ -87,6 +88,7 @@ services:
       - "6600:3000"
     environment:
       - NEXT_PUBLIC_STATION_API=http://localhost:6001
+      - CENTRAL_API_URL=http://backend:5000
     volumes:
       - ./krisys-backend/device-offline-server/station-frontend:/app
       - /app/node_modules

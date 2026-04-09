@@ -474,6 +474,29 @@ def db_get_confirmed_many(relay_hashes: list[str]) -> dict:
 		out[r["relay_hash"]] = json.loads(r["json"])
 	return out
 
+def db_get_queued_by_hashes(relay_hashes: list[str]) -> list[dict]:
+	"""
+	Return queued payloads for the specified relay_hash values.
+	Used to respond to selective relay sync requests.
+	"""
+	if not relay_hashes:
+		return []  # No hashes requested -> return empty list
+
+	# Ensure only non-empty strings are used.
+	clean = [rh for rh in relay_hashes if isinstance(rh, str) and rh.strip()]
+	if not clean:
+		return []  # Nothing valid to fetch
+
+	placeholders = ",".join(["?"] * len(clean))  # Build SQL placeholders
+
+	query = f"SELECT json FROM queued WHERE relay_hash IN ({placeholders})"  # Select queued rows
+
+	with relay_db() as conn:
+		rows = conn.execute(query, tuple(clean)).fetchall()  # Execute query
+
+	# Parse JSON rows into dicts.
+	return [json.loads(r["json"]) for r in rows]
+
 
 def get_known_relay_hashes() -> set[str]:
 	"""
@@ -1610,6 +1633,60 @@ def mesh_sync():
 	if isinstance(incoming_blocks, list):
 		process_incoming_blocks(incoming_blocks)
 
+	# Selective response handling (max blocks if not full payload)
+	want_relay_hashes = incoming.get("want_relay_hashes") or []  # Requested relay hashes
+	want_blocks_from = incoming.get("want_blocks_from")  # Requested block start index
+	max_blocks = incoming.get("max_blocks")  # Requested block cap
+
+	has_selector = bool(want_relay_hashes) or isinstance(want_blocks_from, int)
+
+	if has_selector:
+		# Cap max_blocks to prevent abuse.
+		try:
+			max_blocks_cap = int(max_blocks)
+		except Exception:
+			max_blocks_cap = MAX_BLOCKS_PER_PAYLOAD
+		max_blocks_cap = max(1, min(max_blocks_cap, MAX_BLOCKS_PER_PAYLOAD))
+
+		# Build requested queued payloads.
+		queued_payloads = db_get_queued_by_hashes(want_relay_hashes)
+		queued_payloads = _sort_queued_for_export(queued_payloads)  # Deterministic order
+		queued_payloads = queued_payloads[:MAX_QUEUED_PER_PAYLOAD]  # Safety cap
+
+		# Build requested block suffix.
+		blocks_payloads = []
+		if isinstance(want_blocks_from, int):
+			all_blocks = db_list_blocks(MAX_BLOCKS_STORED)  # Bounded local suffix
+			blocks_payloads = [
+				b for b in all_blocks
+				if isinstance(b, dict)
+				and isinstance(b.get("block_index"), int)
+				and b["block_index"] >= want_blocks_from
+			]
+			blocks_payloads = blocks_payloads[:max_blocks_cap]  # Apply cap
+
+		# Build minimal chain_tip to match /mesh/inventory shape.
+		tip = db_get_tip()  # Fetch the latest stored block (may be None)
+		chain_tip = None  # Default to None if no tip exists
+		if isinstance(tip, dict):
+			chain_tip = {  # Return only minimal tip fields
+				"block_index": tip.get("block_index"),
+				"hash": tip.get("hash"),
+				"previous_hash": tip.get("previous_hash"),
+			}
+
+		return jsonify({
+			"version": 1,  # Payload version
+			"deviceId": "relay_local",  # Relay identifier
+			"crisisId": db_get_crisis_id(),  # Pinned crisis id
+			"generatedAt": int(time.time() * 1000),  # Response timestamp
+			"chain_tip": chain_tip,  # Minimal chain tip object
+			"blocks": blocks_payloads,  # Requested blocks
+			"queued": queued_payloads,  # Requested queued payloads
+			"confirmed": {},  # Relay does not assert confirmations
+		}), 200
+
+	# Otherwise return full payload
 	payload = export_relay_payload()
 	return jsonify(payload), 200
 

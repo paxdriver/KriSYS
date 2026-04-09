@@ -12,6 +12,7 @@ app.use(cors())
 app.use(express.json())
 
 // OFFER POOL MANAGEMENT
+const MAX_CONNECTED_PEERS = 20 // Hard cap on active peers for now
 const OFFER_POOL_SIZE = 8
 const OFFER_REGEN_THRESHOLD = 4
 const OFFER_ALLOCATION_EXPIRY_SECONDS = 120
@@ -250,6 +251,91 @@ async function handleIncoming(peerId, msg) {
 
 		return
 	}
+	
+	// Implements relay-specific inventory flow (client-initiated polling)
+	if (msg?.t === 'krisys_relay_inventory_v1') {
+		// Log relay inventory request for debugging
+		console.log('Relay inventory request received')
+
+		// Forward inventory payload to Flask
+		const resp = await fetch('http://localhost:5000/mesh/inventory', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				crisisId: msg.crisisId, // Pass crisis pin
+				chain_tip: msg.chain_tip || null, // Pass client chain tip
+				relay_hashes: Array.isArray(msg.relay_hashes) ? msg.relay_hashes : [], // Pass relay hashes
+			})
+		})
+		// Parse Flask response
+		const payload = await resp.json()
+
+		// Send relay-specific inventory response back to client.
+		sender.sendJson({
+			t: 'krisys_relay_inventory_res_v1', // Relay-specific response type
+			id: msg.id, // Echo request id
+			crisisId: msg.crisisId, // Echo crisisId
+			chain_tip: payload.chain_tip || null, // Relay chain tip
+			missing_relay_hashes: payload.missing_relay_hashes || [], // Relay missing hashes
+			sentAt: Date.now(), // Timestamp for debugging
+		})
+
+		return // Stop further processing for this message
+	}
+
+	// It implements relay-specific sync flow.
+	if (msg?.t === 'krisys_relay_sync_req_v1') {
+		// Log relay sync request for debugging.
+		console.log('Relay sync request received')
+
+		// Build sync request for Flask.
+		const syncReq = {
+			crisisId: msg.crisisId, // Pass crisis pin
+			queued: [], // Default queued if not provided
+			blocks: [], // Default blocks if not provided
+		}
+
+		// If client is pushing data (optional), pass through.
+		if (Array.isArray(msg.queued)) {
+			syncReq.queued = msg.queued // Forward queued messages if provided
+		}
+		if (Array.isArray(msg.blocks)) {
+			syncReq.blocks = msg.blocks // Forward blocks if provided
+		}
+
+		// If client is requesting data, pass selectors for Flask to decide.
+		// DEV NOTE: Flask currently ignores these fields; safe to include for later.
+		if (Array.isArray(msg.want_relay_hashes)) {
+			syncReq.want_relay_hashes = msg.want_relay_hashes // Requested relay hashes
+		}
+		if (typeof msg.want_blocks_from === 'number') {
+			syncReq.want_blocks_from = msg.want_blocks_from // Requested block suffix start
+		}
+		if (typeof msg.max_blocks === 'number') {
+			syncReq.max_blocks = msg.max_blocks // Cap on returned blocks
+		}
+
+		// Forward sync request to Flask.
+		const resp = await fetch('http://localhost:5000/mesh/sync', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(syncReq)
+		})
+
+		// Parse Flask sync response.
+		const payload = await resp.json()
+
+		// Send relay-specific sync response back to client.
+		sender.sendJson({
+			t: 'krisys_relay_sync_res_v1', // Relay-specific response type
+			id: msg.id, // Echo request id
+			blocks: payload.blocks || [], // Relay block suffix
+			queued: payload.queued || [], // Relay queued messages
+			sentAt: Date.now(), // Timestamp for debugging
+		})
+
+		return // Stop further processing for this message
+	}
 
 	//	PING
 	if (msg?.t === 'krisys_p2p_ping') {
@@ -302,6 +388,12 @@ app.post('/answer', async (req, res) => {
 // ALLOCATE ATOMIC OFFER
 app.post('/allocate-offer', async (req, res) => {
 	try {
+		// Enforce max active peers before allocating a new offer (prevents new offers when active peers reach the cap)
+		if (Object.keys(ALLOCATED_OFFERS).length >= MAX_CONNECTED_PEERS) {
+			// Return 429 to indicate capacity reached.
+			return res.status(429).json({ error: 'Relay at capacity' })
+		}
+
 		// Ensure pool is filled
 		await ensureOfferPool()
 

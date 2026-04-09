@@ -269,12 +269,12 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 			setJoinCodeInput(code)
 
 			// Show QR + ALWAYS show the text in the popup (disaster robustness)
-			await showTextQr({
-				text: code,
-				displayName: (hostLabel || '').trim() || 'Join Code',
-				title: 'Join Code',
-				heading: 'Join Code (Share this to join the room)',
-			})
+			// await showTextQr({ 			// DEV NOTE: WORKS, DISABLING FOR DEV BECAUSE IT'S ANNOYING ME
+			// 	text: code,
+			// 	displayName: (hostLabel || '').trim() || 'Join Code',
+			// 	title: 'Join Code',
+			// 	heading: 'Join Code (Share this to join the room)',
+			// })
 
 			// Convenience: try clipboard, but popup already shows text.
 			try {

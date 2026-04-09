@@ -7,8 +7,11 @@ import { createWebRTCRoomCode, parseWebRTCRoomCode } from '@/services/webrtcRoom
 import { createChunkReceiver, createChunkSender, makeId } from '@/services/webrtcChunking'
 const INVENTORY_MAX_RELAY_HASHES = 100	// DEV NOTE: Set this by env var when building policy wizard
 const INVENTORY_MAX_BLOCKS = 10			// DEV NOTE: Set this by env var when building policy wizard
+const RELAY_POLL_INTERVAL_MS = 5000 	// Poll 5s after the last attempt completes
+const RELAY_MAX_BLOCKS_PER_POLL = 10 	// Max block suffix to request per poll
 const STATION_API_URL = 'http://localhost:6001'
 const STATION_SIGNAL_URL = 'http://localhost:7000'
+
 const P2PContext = createContext(null)
 
 function waitForIceGatheringComplete(pc, timeoutMs = 12000) {
@@ -71,11 +74,14 @@ export function P2PProvider({ children, crisisId, familyId }) {
 	const [connectionMode, setConnectionMode] = useState(null)
 	const [logLines, setLogLines] = useState([])
 
-	// { send: {bytesSent,...}, recv: {bytesReceived,...} }
-	const [metrics, setMetrics] = useState(null)
+	const [metrics, setMetrics] = useState(null) 	// { send: {bytesSent,...}, recv: {bytesReceived,...} }
 
 	// Persisted across page switches; used by p2pSyncNow()
 	const [pushOnlyOnJoin, setPushOnlyOnJoin] = useState(false)
+
+	const relayPollIntervalRef = useRef(null) // Holds setInterval id for relay polling
+	const relayPollInFlightRef = useRef(false) // Prevents overlapping relay inventory requests
+	const relayPendingInventoryIdRef = useRef(null) // Tracks the latest inventory request id
 
 	if (!crisisId || !familyId) {
 		throw new Error('P2PProvider requires crisisId and familyId')
@@ -93,6 +99,15 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		})
 	}, [])
 
+	
+	const sendJson = useCallback((obj) => {
+		// Always read the latest sender from the ref at call time.
+		const sender = senderRef.current // Read current sender
+		if (!sender) throw new Error('Sender not ready') // Guard against missing sender
+		sender.sendJson(obj) // Send the message over RTC
+	}, []) // Empty deps keeps this callback stable across renders
+
+
 	const emitP2PStatus = useCallback((next) => {
 		try {
 			if (typeof window === 'undefined') return
@@ -102,6 +117,96 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			// ignore
 		}
 	}, [])
+
+	const clearRelayPollInterval = useCallback(() => {
+		// Log for debugging.
+		log('relay poll: clearRelayPollInterval called') // Debug: identify interval clears
+		// Cancel any pending relay poll interval.
+		if (relayPollIntervalRef.current) {
+			clearInterval(relayPollIntervalRef.current) // Stop interval
+			relayPollIntervalRef.current = null // Clear ref
+		}
+	}, [log]) // Depends on log
+
+	const sendRelayInventoryNow = useCallback(async () => {
+
+		// Do not send if a relay inventory request is already in flight
+		if (relayPollInFlightRef.current) {
+			log('relay poll: blocked (inFlight=true)') // Debug: prevent overlap
+			return // Exit if a request is already in flight
+		}
+		if (status !== 'connected' || connectionMode !== 'relay') {
+			log(`relay poll: blocked (status=${status}, mode=${connectionMode})`) // Debug: not connected/relay
+			return // Exit if not in relay mode or connected
+		}
+		log(`relay poll: sendRelayInventoryNow invoked (status=${status}, mode=${connectionMode})`) // Debug: confirm poll fires
+
+		relayPollInFlightRef.current = true // Mark inventory request as in flight
+
+		try {
+			// Export local payload to derive chain_tip + relay_hashes
+			const localPayload = disasterStorage.exportSyncPayload({
+				crisisId,
+				familyId,
+			})
+
+			// Build bounded relay_hash list from local queued items
+			const relayHashes = (localPayload.queued || [])
+				.map((m) => m?.relay_hash)
+				.filter(Boolean)
+				.slice(0, INVENTORY_MAX_RELAY_HASHES)
+
+			// Build a fresh inventory request id
+			const id = makeId()
+			relayPendingInventoryIdRef.current = id
+
+			// Send relay-specific inventory request over RTC
+			sendJson({
+				t: 'krisys_relay_inventory_v1',
+				id,
+				crisisId,
+				chain_tip: localPayload.chain_tip || null,
+				relay_hashes: relayHashes,
+				sentAt: Date.now(),
+			})
+		} catch (e) {
+			// On failure, clear in-flight and schedule a retry.
+			relayPollInFlightRef.current = false // Clear in-flight flag on error
+
+		}
+	}, [
+		connectionMode, // Ensure we only send while in relay mode
+		crisisId, // Include crisisId in payload
+		familyId, // Include familyId in exportSyncPayload
+		sendJson, // Used to send RTC message
+		status, // Ensure we only send when connected
+	])
+
+
+	// Replace the existing relay polling useEffect with this interval-based version.
+	useEffect(() => {
+		// Start polling only when connected to a relay.
+		if (status === 'connected' && connectionMode === 'relay') {
+			// Avoid double-starting the interval.
+			if (!relayPollIntervalRef.current) {
+				log('relay poll: starting interval') // Debug: interval start
+				relayPollIntervalRef.current = setInterval(() => {
+					void sendRelayInventoryNow() // Trigger inventory send every interval
+				}, RELAY_POLL_INTERVAL_MS)
+			}
+			return // Keep interval running while connected
+		}
+
+		// Stop polling when not in relay mode or disconnected.
+		clearRelayPollInterval() // Cancel interval
+		relayPollInFlightRef.current = false // Reset in-flight flag
+		relayPendingInventoryIdRef.current = null // Reset inventory id
+	}, [
+		clearRelayPollInterval, // Used to stop interval
+		connectionMode, // Re-run when mode changes
+		sendRelayInventoryNow, // Used by interval callback
+		status, // Re-run when connection state changes
+	])
 
 	useEffect(() => {
 		emitP2PStatus({
@@ -155,6 +260,10 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		pendingSyncIdsRef.current = new Set()
 		setPushOnlyOnJoin(false)
 
+		clearRelayPollInterval() // Stop relay interval polling on reset
+		relayPollInFlightRef.current = false // Clear in-flight flag on reset.
+		relayPendingInventoryIdRef.current = null // Clear pending inventory id on reset.
+
 		destroyWire()
 		closeRtc()
 
@@ -190,12 +299,6 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		}
 	},[log])
 
-	const sendJson = useCallback((obj) => {
-		const sender = senderRef.current
-		if (!sender) throw new Error('Sender not ready')
-		sender.sendJson(obj)
-	}, [])
-
 	const handleIncomingJson = useCallback(async (obj) => {
 		if (!obj || typeof obj !== 'object') return
 		if (!crisisId || !familyId) {
@@ -204,6 +307,125 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		}
 		const messageType = obj.t
 		switch (messageType) {
+			// These handle relay-specific inventory and sync messages
+			case 'krisys_relay_inventory_res_v1': {
+				const id = obj.id // Read inventory response id for matching
+				log(`recv relay inventory_res id=${id}`) // Log inventory response
+
+				// Ignore stale inventory responses
+				if (relayPendingInventoryIdRef.current && id !== relayPendingInventoryIdRef.current) {
+					log(`relay inventory_res id=${id} (stale; ignoring)`)
+					return
+				}
+
+				// Inventory request is complete
+				relayPollInFlightRef.current = false
+
+				// Compare chain tips
+				const localPayload = disasterStorage.exportSyncPayload({ crisisId, familyId })
+				const localTipIndex = typeof localPayload.chain_tip?.block_index === 'number'
+					? localPayload.chain_tip.block_index
+					: -1
+				const relayTipIndex = typeof obj.chain_tip?.block_index === 'number'
+					? obj.chain_tip.block_index
+					: -1
+
+				// Determine missing relay hashes from relay response
+				const missingRelay = Array.isArray(obj.missing_relay_hashes)
+					? obj.missing_relay_hashes.slice(0, INVENTORY_MAX_RELAY_HASHES)
+					: []
+
+					
+				// Determine if we want block suffix
+				const wantBlocksFrom = relayTipIndex > localTipIndex ? localTipIndex + 1 : null
+				
+				// If nothing is needed, do not send a sync request.
+				if (!missingRelay.length && wantBlocksFrom == null) {
+					log("Relay and client are already aligned")
+					return // No-op when relay and client are already aligned
+				}
+
+				// If local tip is ahead, push a bounded suffix to the relay.
+				if (localTipIndex > relayTipIndex) {
+					// Build a bounded payload from local state.
+					const localPayload = disasterStorage.exportSyncPayload({
+						crisisId, // Use current crisis id
+						familyId, // Use current family id
+					})
+
+					// Bound blocks to the relay cap to avoid flooding.
+					const blocksToSend = Array.isArray(localPayload.blocks)
+						? localPayload.blocks.slice(-RELAY_MAX_BLOCKS_PER_POLL) // Send last N blocks only
+						: [] // Default empty if no blocks
+
+					// Bound queued to inventory cap to avoid flooding.
+					const queuedToSend = Array.isArray(localPayload.queued)
+						? localPayload.queued.slice(0, INVENTORY_MAX_RELAY_HASHES) // Send up to cap
+						: [] // Default empty if no queued
+
+					// Send relay-specific sync request with payload.
+					sendJson({
+						t: 'krisys_relay_sync_req_v1', // Relay-specific sync request
+						id: makeId(), // New request id for relay sync
+						crisisId, // Crisis pin for safety
+						blocks: blocksToSend, // Push blocks when local is ahead
+						queued: queuedToSend, // Push queued when local is ahead
+						sentAt: Date.now(), // Timestamp for debugging
+					})
+
+					return // Stop here to avoid falling through
+				}
+
+				// Request relay sync for missing items.
+				sendJson({
+					t: 'krisys_relay_sync_req_v1', // Relay-specific sync request
+					id: makeId(), // New request id for sync
+					crisisId, // Crisis pin for safety
+					want_relay_hashes: missingRelay, // Requested relay hashes
+					want_blocks_from: wantBlocksFrom, // Requested block suffix start
+					max_blocks: RELAY_MAX_BLOCKS_PER_POLL, // Cap blocks per response
+					sentAt: safeNow(), // Timestamp for debugging
+				})
+
+				return
+			}
+			case 'krisys_relay_sync_res_v1': {
+				const id = obj.id // Read sync response id
+				log(`recv relay sync_res id=${id}`) // Log sync response
+
+				// Extract bounded blocks + queued arrays.
+				const blocks = Array.isArray(obj.blocks)
+					? obj.blocks.slice(0, RELAY_MAX_BLOCKS_PER_POLL) // Cap blocks
+					: [] // Default empty
+				const queued = Array.isArray(obj.queued)
+					? obj.queued.slice(0, INVENTORY_MAX_RELAY_HASHES) // Cap queued
+					: [] // Default empty
+
+				try {
+					// Import relay payload into local storage.
+					await disasterStorage.importSyncPayloadAsync({
+						crisisId, // Pass crisisId
+						familyId, // Pass familyId
+						payload: {
+							version: 1, // Payload version
+							deviceId: 'relay_peer', // Identify payload source
+							crisisId, // Include crisisId
+							generatedAt: safeNow(), // Timestamp for audit/debug
+							chain_tip: null, // No chain tip needed here
+							blocks, // Verified blocks from relay
+							queued, // Unconfirmed queued messages
+							confirmed: {}, // Relay does not assert confirmations
+						},
+					})
+
+					log(`imported relay payload id=${id} blocks=${blocks.length} queued=${queued.length}`) // Debug log
+				} catch (e) {
+					log(`relay payload import failed id=${id}: ${e?.message || e}`) // Error log
+				}
+
+				return // End this case
+			}
+
 			// Station → Wallet inventory negotiation
 			case 'krisys_mesh_inventory_v1': {
 				const id = obj.id
