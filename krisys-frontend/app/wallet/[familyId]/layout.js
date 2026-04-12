@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import { P2PProvider } from '@/contexts/P2PContext'
-import { UserHostedRoomProvider } from '@/components/WalletDashboard/UserHostedRoom'
+import { UserHostedRoomProvider } from '@/contexts/UserHostedRoomContext'
 import { api } from '@/services/api'
 import { disasterStorage } from '@/services/localStorage'
 
@@ -64,7 +64,9 @@ export default function WalletLayout({ children }) {
 
 	return (
 		<P2PProvider crisisId={crisisId} familyId={familyId}>
-			{children}
+			<UserHostedRoomProvider crisisId={crisisId} familyId={familyId}>
+				{children}
+			</UserHostedRoomProvider>
 		</P2PProvider>
 	)
 }

@@ -1,10 +1,10 @@
 // krisys-frontend/contexts/P2PContext.js
-
 'use client'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { disasterStorage } from '@/services/localStorage'
 import { createWebRTCRoomCode, parseWebRTCRoomCode } from '@/services/webrtcRoomCode'
 import { createChunkReceiver, createChunkSender, makeId } from '@/services/webrtcChunking'
+
 const INVENTORY_MAX_RELAY_HASHES = 100	// DEV NOTE: Set this by env var when building policy wizard
 const INVENTORY_MAX_BLOCKS = 10			// DEV NOTE: Set this by env var when building policy wizard
 const RELAY_POLL_INTERVAL_MS = 5000 	// Poll 5s after the last attempt completes
@@ -248,6 +248,9 @@ export function P2PProvider({ children, crisisId, familyId }) {
 	}, [])
 
 	const reset = useCallback(() => {
+		log("RESET CALLED")
+		console.warn("RESET CALLED")
+
 		setError(null)
 		setStatus('closed')
 		setRole('idle')
@@ -307,6 +310,34 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		}
 		const messageType = obj.t
 		switch (messageType) {
+
+			// These handle the user-hosted room negotiations
+			case 'krisys_user_room_handshake_v1': {
+				log(`recv user_room_handshake from ${obj.familyId}`)
+
+				// Crisis validation (basic guard)
+				if (obj.crisisId !== crisisId) {
+					log('handshake rejected: crisis mismatch')
+					return
+				}
+
+				// Send acknowledgement
+				sendJson({
+					t: 'krisys_user_room_handshake_ack_v1',
+					role: 'host',
+					crisisId,
+					sentAt: Date.now(),
+				})
+
+				log('sent user_room_handshake_ack')
+				return
+			}
+
+			case 'krisys_user_room_handshake_ack_v1': {
+				log('recv user_room_handshake_ack')
+				return
+			}
+
 			// These handle relay-specific inventory and sync messages
 			case 'krisys_relay_inventory_res_v1': {
 				const id = obj.id // Read inventory response id for matching
@@ -677,14 +708,31 @@ export function P2PProvider({ children, crisisId, familyId }) {
 					log(`handshake send failed: ${e?.message || String(e)}`)
 				}
 			}
+			// If this side is a joining peer in user-hosted room (as opposed to station pools or relay rooms)
+			else if (connectionMode === 'user_hosted_room_peer') {
+				sendJson({
+					t: 'krisys_user_room_handshake_v1',
+					role: 'peer',
+					crisisId,
+					familyId,
+					sentAt: Date.now(),
+				})
+				log('sent user_room_handshake')
+			}
 		}
 
 		dc.onclose = () => {
+			console.log('dc.close was triggered!')
 			log('dc.close')
 		}
 
 		dc.onerror = () => {
 			log('dc.error')
+		}
+		dc.onconnectionstatechange = ()=> {
+			log('dc.onconnectionstatechange was triggered in P2PContext')
+			console.log('dc.onconnectionstatechange was triggered in P2PContext')
+			console.warn(dc.connectionState)
 		}
 
 		dc.onmessage = async (evt) => {
@@ -706,8 +754,12 @@ export function P2PProvider({ children, crisisId, familyId }) {
 
 	// Connect to Relay via Flask → Node bridge
 	const connectToRelay = useCallback(async (baseUrl) => {
+		log('Creating new RTCPeerConnection for relay')
 		setError(null)
+		let _debug = connectionMode
 		setConnectionMode("relay")
+		log(`SET CONNECTION MODE CHANGED to relay from ${_debug}!`)
+		console.warn(`SET CONNECTION MODE CHANGED to relay from ${_debug}!`)
 
 		if (!canWebRTC) {
 			setError('WebRTC not available in this browser.')
@@ -798,8 +850,13 @@ export function P2PProvider({ children, crisisId, familyId }) {
 
 	// Connect to Station's Node WebRTC host via Flask endpoint
 	const connectToStation = useCallback(async () => {
+		log('Creating new RTCPeerConnection to station')
+
 		setError(null)
+		let _debug = connectionMode
 		setConnectionMode("station")
+		log(`SET CONNECTION MODE CHANGED to station from ${_debug}!`)
+		console.warn(`SET CONNECTION MODE CHANGED to station from ${_debug}!`)
 
 		if (!canWebRTC) {
 			setError('WebRTC not available in this browser.')

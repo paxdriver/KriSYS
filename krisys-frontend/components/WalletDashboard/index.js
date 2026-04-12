@@ -10,6 +10,7 @@ import ContactsPage from './ContactPage'
 import MessagingPage from './MessagingPage'
 import ConnectionsPage from './ConnectionsPage'
 import UserSettings from './UserSettings'
+import UserHostedRoom from './UserHostedRoom'
 import UnlockForm from './UnlockForm'
 import '../../styles/wallet_dashboard.css'
 import DevTools from '../DevTools'  // DEV NOTE: DEVELOPMENT ONLY
@@ -143,6 +144,10 @@ export default function WalletDashboard({ walletData, transactions = [], familyI
 
 						{currentPage === 'connections' && (
 							<ConnectionsPage onRefresh={onRefresh} walletData={walletData} />
+						)}
+
+						{currentPage == 'user_hosted_room' && (
+							<UserHostedRoom crisisId={crisisId} />
 						)}
 
 						{currentPage === 'settings' && <UserSettings />}
