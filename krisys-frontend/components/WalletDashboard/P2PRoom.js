@@ -30,12 +30,9 @@ export default function P2PRoom() {
 		setRemoteAnswerInput,
 		setPushOnlyOnJoin,
 
-		reset,
 		createHostOffer,
 		joinWithOffer,
 		hostApplyAnswer,
-		p2pSyncNow,
-		sendPing,
 	} = useP2P()
 
 	const [scannerOpen, setScannerOpen] = useState(false)
@@ -126,30 +123,6 @@ export default function P2PRoom() {
 						}}
 					/>
 				)}
-
-				<div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-					<button
-						type="button"
-						className="btn"
-						onClick={p2pSyncNow}
-						disabled={status !== 'connected'}
-					>
-						P2P Sync Now
-					</button>
-
-					<button
-						type="button"
-						className="btn"
-						onClick={sendPing}
-						disabled={status !== 'connected'}
-					>
-						Send Ping
-					</button>
-
-					<button type="button" className="btn" onClick={reset}>
-						Reset P2P
-					</button>
-				</div>
 
 				<hr style={{ margin: '14px 0', opacity: 0.2 }} />
 

@@ -15,6 +15,20 @@ const STATION_SIGNAL_URL = 'http://localhost:7000'
 const P2PContext = createContext(null)
 
 function waitForIceGatheringComplete(pc, timeoutMs = 12000) {
+	/* DEV NOTE: 
+	Wait until ICE candidate gathering completes before exporting localDescription (ensures SDP contains full candidate set).
+	This is signaling-phase only and is separate from runtime connection lifecycle handled in attachCommonHandlers.
+
+	This runs:
+		- During SDP creation
+		- Before you serialize localDescription
+		- Before you send answer back to signaling server
+	
+	Later phases of more complex network resolution may demand this be signalling be amended, for eg:
+		- Trickle ICE
+		- STUN/TURN
+		- NAT traversal complexity
+	*/
 	return new Promise((resolve, reject) => {
 		if (!pc) return reject(new Error('Missing RTCPeerConnection'))
 		if (pc.iceGatheringState === 'complete') return resolve()
@@ -49,18 +63,10 @@ function safeNow() {
 	return Date.now()
 }
 
-async function sleep(ms) {
-	return new Promise((r) => setTimeout(r, ms))
-}
-
 // accept familyId via props
 export function P2PProvider({ children, crisisId, familyId }) {
-	const pcRef = useRef(null)
-	const dcRef = useRef(null)
-
-	const senderRef = useRef(null)
-	const receiverRef = useRef(null)
-
+	const connectionsRef = useRef(new Map())	// connection registry of all active RTC connections
+	const activeConnectionIdRef = useRef(null)	// DEV NOTE: temp legacy compatibility
 	const pendingSyncIdsRef = useRef(new Set())
 
 	const [status, setStatus] = useState('disconnected') // disconnected | connecting | connected | closed
@@ -76,7 +82,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 
 	const [metrics, setMetrics] = useState(null) 	// { send: {bytesSent,...}, recv: {bytesReceived,...} }
 
-	// Persisted across page switches; used by p2pSyncNow()
+	// Persisted across page switches
 	const [pushOnlyOnJoin, setPushOnlyOnJoin] = useState(false)
 
 	const relayPollIntervalRef = useRef(null) // Holds setInterval id for relay polling
@@ -91,7 +97,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		return typeof window !== 'undefined' && typeof RTCPeerConnection !== 'undefined'
 	}, [])
 
-	const log = useCallback((line) => {
+	const log = useCallback( line => {
 		setLogLines((prev) => {
 			const next = Array.isArray(prev) ? prev.slice(-80) : []
 			next.push(`${new Date().toLocaleTimeString()} ${line}`)
@@ -99,16 +105,37 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		})
 	}, [])
 
-	
-	const sendJson = useCallback((obj) => {
-		// Always read the latest sender from the ref at call time.
-		const sender = senderRef.current // Read current sender
-		if (!sender) throw new Error('Sender not ready') // Guard against missing sender
-		sender.sendJson(obj) // Send the message over RTC
-	}, []) // Empty deps keeps this callback stable across renders
+	// Connection registry instance creator
+	function createConnection({ role }) {
+		const id = makeId()
+		const pc = new RTCPeerConnection({ iceServers: [] })
+		const connection = {
+			id,
+			role,
+			pc,
+			dc: null,
+			sender: null,
+			receiver: null,
+		}
+		connectionsRef.current.set(id, connection)
+		activeConnectionIdRef.current = id		// DEV NOTE: legacy compatibility reference pointer to be removed
+
+		return connection
+	}
+
+	const sendJson = useCallback ( (obj, connectionId = null) => {
+		const id = connectionId || activeConnectionIdRef.current	// DEV NOTE: re: connectionId once we start doing rebroadcast across multiple peers we'll need to explicitly pass connectionId otherwise we'll be accidentally sending the peer to the wrong connection here. connectionId is thus a legacy compatibility option during development while transitioning to connection registry connectionRef
+		const conn = connectionsRef.current.get(id)
+
+		if (!conn || !conn.sender) {
+			throw new Error('Connection sender not ready in P2PContext.js/??')
+		}
+
+		conn.sender.sendJson(obj) // createChunkSender()'s sendJson, this is not a recursive reference
+	}, []) // no deps since this function references connectionsRef.current, which is a static reference
 
 
-	const emitP2PStatus = useCallback((next) => {
+	const emitP2PStatus = useCallback( next => {
 		try {
 			if (typeof window === 'undefined') return
 			window.KRISYS_P2P_STATUS = next
@@ -167,7 +194,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 				crisisId,
 				chain_tip: localPayload.chain_tip || null,
 				relay_hashes: relayHashes,
-				sentAt: Date.now(),
+				sentAt: safeNow(),
 			})
 		} catch (e) {
 			// On failure, clear in-flight and schedule a retry.
@@ -217,39 +244,12 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		})
 	}, [emitP2PStatus, status, role, metrics])
 
-	const destroyWire = useCallback(() => {
-		try {
-			if (senderRef.current?.destroy) senderRef.current.destroy()
-		} catch {
-			// ignore for now
-		}
-		try {
-			if (receiverRef.current?.destroy) receiverRef.current.destroy()
-		} catch {
-			// ignore for now
-		}
-		senderRef.current = null
-		receiverRef.current = null
-	}, [])
-
-	const closeRtc = useCallback(() => {
-		try {
-			if (dcRef.current) dcRef.current.close()
-		} catch {
-			// ignore for now
-		}
-		try {
-			if (pcRef.current) pcRef.current.close()
-		} catch {
-			// ignore for now
-		}
-		dcRef.current = null
-		pcRef.current = null
-	}, [])
 
 	const reset = useCallback(() => {
 		log("RESET CALLED")
 		console.warn("RESET CALLED")
+
+		disconnectAll() // same as destroyAllConnections(), uses disconnectById()
 
 		setError(null)
 		setStatus('closed')
@@ -267,11 +267,10 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		relayPollInFlightRef.current = false // Clear in-flight flag on reset.
 		relayPendingInventoryIdRef.current = null // Clear pending inventory id on reset.
 
-		destroyWire()
-		closeRtc()
+		activeConnectionIdRef.current = null	// DEV NOTE: legacy reference pointer, to be removed in Phase 6
 
 		emitP2PStatus({ active: false, status: 'closed', role: 'idle' })
-	}, [closeRtc, destroyWire, emitP2PStatus])
+	}, [disconnectAll, clearRelayPollInterval, emitP2PStatus, log])
 
 	useEffect(() => {
 		return () => {
@@ -284,21 +283,28 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		}
 	}, [reset])
 
-	const attachCommonHandlers = useCallback( (pc) => {
-		pc.onconnectionstatechange = () => {
-			log(`pc.connectionState=${pc.connectionState}`)
-			if (pc.connectionState === 'connected') setStatus('connected')
-			if (pc.connectionState === 'disconnected') setStatus('disconnected')
-			if (pc.connectionState === 'failed') setStatus('disconnected')
-			if (pc.connectionState === 'closed') setStatus('closed')
+	const attachCommonHandlers = useCallback( conn => {
+		conn.pc.onconnectionstatechange = () => {
+			log(`conn.pc.connectionState=${conn.pc.connectionState}`)
+
+			if (conn.pc.connectionState === 'connected') { 
+				setStatus('connected')
+			}
+			
+			else if (conn.pc.connectionState === 'disconnected' || 
+				conn.pc.connectionState === 'closed' || 
+				conn.pc.connectionState === 'failed') {
+					setStatus('disconnected')
+					disconnectById(conn.id)
+			}
 		}
 
-		pc.oniceconnectionstatechange = () => {
-			log(`pc.iceConnectionState=${pc.iceConnectionState}`)
+		conn.pc.oniceconnectionstatechange = () => {
+			log(`conn.pc.iceConnectionState=${conn.pc.iceConnectionState}`)
 		}
 
-		pc.onicegatheringstatechange = () => {
-			log(`pc.iceGatheringState=${pc.iceGatheringState}`)
+		conn.pc.onicegatheringstatechange = () => {
+			log(`conn.pc.iceGatheringState=${conn.pc.iceGatheringState}`)
 		}
 	},[log])
 
@@ -326,7 +332,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 					t: 'krisys_user_room_handshake_ack_v1',
 					role: 'host',
 					crisisId,
-					sentAt: Date.now(),
+					sentAt: safeNow(),
 				})
 
 				log('sent user_room_handshake_ack')
@@ -401,7 +407,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 						crisisId, // Crisis pin for safety
 						blocks: blocksToSend, // Push blocks when local is ahead
 						queued: queuedToSend, // Push queued when local is ahead
-						sentAt: Date.now(), // Timestamp for debugging
+						sentAt: safeNow(), // Timestamp for debugging
 					})
 
 					return // Stop here to avoid falling through
@@ -493,7 +499,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 					id,
 					want_relay_hashes: wantRelayHashes.slice(0, INVENTORY_MAX_RELAY_HASHES),
 					want_blocks_from: wantBlocksFrom,
-					sentAt: Date.now(),
+					sentAt: safeNow(),
 				})
 
 				log(`sent inventory_res id=${id} ` +`want_relay=${wantRelayHashes.length} ` +`want_blocks_from=${wantBlocksFrom}`)
@@ -523,7 +529,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 					id,
 					want_relay_hashes: wantRelay,
 					want_blocks_from: wantBlocksFrom,
-					sentAt: Date.now(),
+					sentAt: safeNow(),
 				})
 
 				log(
@@ -551,7 +557,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 							version: 1,
 							deviceId: 'station_peer',
 							crisisId,
-							generatedAt: Date.now(),
+							generatedAt: safeNow(),
 							chain_tip: null,
 							blocks,
 							queued,
@@ -658,8 +664,10 @@ export function P2PProvider({ children, crisisId, familyId }) {
 
 	}, [crisisId, familyId, log, sendJson])
 
-	const attachDataChannelHandlers = useCallback( (dc) => {
-		senderRef.current = createChunkSender({
+	const attachDataChannelHandlers = useCallback( (conn, dc) => {
+		conn.dc = dc
+
+		conn.sender = createChunkSender({
 			dc,
 			log,
 			onStats: (s) => {
@@ -670,7 +678,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			},
 		})
 
-		receiverRef.current = createChunkReceiver({
+		conn.receiver = createChunkReceiver({
 			onJson: handleIncomingJson,
 			log,
 			onStats: (s) => {
@@ -715,7 +723,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 					role: 'peer',
 					crisisId,
 					familyId,
-					sentAt: Date.now(),
+					sentAt: safeNow(),
 				})
 				log('sent user_room_handshake')
 			}
@@ -729,22 +737,17 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		dc.onerror = () => {
 			log('dc.error')
 		}
-		dc.onconnectionstatechange = ()=> {
-			log('dc.onconnectionstatechange was triggered in P2PContext')
-			console.log('dc.onconnectionstatechange was triggered in P2PContext')
-			console.warn(dc.connectionState)
-		}
 
-		dc.onmessage = async (evt) => {
+		dc.onmessage = async evt => {
 			try {
 				const text = typeof evt?.data === 'string' ? evt.data : ''
 				if (!text) {
 					log('dc.message: [non-string or empty]')
 					return
 				}
-				const receiver = receiverRef.current
-				if (!receiver) return
-				await receiver.handleText(text)
+
+				if (!conn.receiver) return
+				await conn.receiver.handleText(text)
 			} catch (e) {
 				log(`dc.message error: ${e?.message || String(e)}`)
 			}
@@ -777,7 +780,6 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			return
 		}
 
-		reset()
 		setRole('join')
 		setStatus('connecting')
 		log('Requesting offer from relay...')
@@ -798,27 +800,22 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			log(`Received offer from relay (peerId=${peerId})`)
 
 			// 2. Create local RTCPeerConnection
-			const pc = new RTCPeerConnection({ iceServers: [] })
-			pcRef.current = pc
-
-			attachCommonHandlers(pc)
-
+			const conn = createConnection({role: 'relay'})
+			attachCommonHandlers(conn)
+			
 			// 3. Listen for data channel
-			pc.ondatachannel = (evt) => {
-				const dc = evt.channel
-				dcRef.current = dc
-				attachDataChannelHandlers(dc)
-				log('Data channel received from relay')
+			conn.pc.ondatachannel = evt => {
+				attachDataChannelHandlers(conn, evt.channel)
 			}
 
 			// 4. Apply relay offer
-			await pc.setRemoteDescription(new RTCSessionDescription(offer))
+			await conn.pc.setRemoteDescription(new RTCSessionDescription(offer))
 
 			// 5. Generate answer
-			const answer = await pc.createAnswer()
-			await pc.setLocalDescription(answer)
+			const answer = await conn.pc.createAnswer()
+			await conn.pc.setLocalDescription(answer)
 
-			await waitForIceGatheringComplete(pc)
+			await waitForIceGatheringComplete(conn.pc)
 
 			// 6. Send answer back to relay
 			const answerResp = await fetch(`${trimmedUrl}/relay/answer`, {
@@ -826,7 +823,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					peerId,
-					answer: pc.localDescription
+					answer: conn.pc.localDescription
 				})
 			})
 
@@ -841,7 +838,6 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		}
 	}, [
 		canWebRTC,
-		reset,
 		log,
 		attachCommonHandlers,
 		attachDataChannelHandlers
@@ -863,7 +859,6 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			return
 		}
 
-		reset()
 		setRole('join')
 		setStatus('connecting')
 		log('Requesting offer from station...')
@@ -871,7 +866,6 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		try {
 			// 1. Ask station Node for a new offer
 			const offerResp = await fetch(`${STATION_API_URL}/station/allocate-offer`, {
-			// const offerResp = await fetch(`${STATION_SIGNAL_URL}/allocate-offer`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' }
 			})
@@ -885,28 +879,22 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			log(`Received offer from station (peerId=${peerId})`)
 
 			// 2. Create local RTCPeerConnection
-			const pc = new RTCPeerConnection({ iceServers: [] })
-			pcRef.current = pc
-
-			attachCommonHandlers(pc)
+			const conn = createConnection( {role: 'station'} )
+			attachCommonHandlers(conn)
 
 			// 3. Listen for data channel from station
-			pc.ondatachannel = (evt) => {
-				const dc = evt.channel
-				dcRef.current = dc
-				attachDataChannelHandlers(dc)
-				log('Data channel received from station')
+			conn.pc.ondatachannel = evt => {
+				attachDataChannelHandlers(conn, evt.channel)
 			}
 
 			// 4. Apply station's offer
-			// await pc.setRemoteDescription(offer)
-			await pc.setRemoteDescription(new RTCSessionDescription(offer)) // browser compat. 
+			await conn.pc.setRemoteDescription(new RTCSessionDescription(offer))
 
 			// 5. Generate answer
-			const answer = await pc.createAnswer()
-			await pc.setLocalDescription(answer)
+			const answer = await conn.pc.createAnswer()
+			await conn.pc.setLocalDescription(answer)
 
-			await waitForIceGatheringComplete(pc)
+			await waitForIceGatheringComplete(conn.pc)
 
 			// 6. Send answer back to station Node
 				// DEV NOTE: /answer is part of RTC signaling (Node on port 7000, not Flask on 6001)
@@ -914,19 +902,18 @@ export function P2PProvider({ children, crisisId, familyId }) {
 				// - It attaches to in-memory RTCPeerConnection
 				// - Proxying through Flask would add complexity without benefit
 				
-				// Allocation is policy-sensitive
-				// Answer is transport-level
+			// Allocation is policy-sensitive, answer is transport-level
 			const answerResp = await fetch(`${STATION_SIGNAL_URL}/answer`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					peerId,
-					answer: pc.localDescription
+					answer: conn.pc.localDescription
 				})
 			})
 
 			if (!answerResp.ok) {
-				log(`Answer in P2PContext provider failed! Response object:\n\n${answerResp}\n------------------`)
+				log(`Answer in P2PContext provider failed! Response object:\n\n${answerResp}\n`)
 				throw new Error(`Answer POST failed: ${answerResp.status}`)
 			}
 			log('Answer sent to station')
@@ -936,7 +923,6 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		}
 	}, [
 		canWebRTC,
-		reset,
 		log,
 		attachCommonHandlers,
 		attachDataChannelHandlers
@@ -950,24 +936,21 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			return
 		}
 
-		reset()
 		setRole('host')
 		setStatus('connecting')
 		log('Creating host offer...')
 
-		const pc = new RTCPeerConnection({ iceServers: [] })
-		pcRef.current = pc
-		attachCommonHandlers(pc)
+		const conn = createConnection({ role: 'user_hosted_room_host' })
+		attachCommonHandlers(conn)
 
-		const dc = pc.createDataChannel('krisys', { ordered: true })
-		dcRef.current = dc
-		attachDataChannelHandlers(dc)
+		const dc = conn.pc.createDataChannel('krisys', { ordered: true })
+		attachDataChannelHandlers(conn, dc)
 
-		const offer = await pc.createOffer()
-		await pc.setLocalDescription(offer)
-		await waitForIceGatheringComplete(pc)
+		const offer = await conn.pc.createOffer()
+		await conn.pc.setLocalDescription(offer)
+		await waitForIceGatheringComplete(conn.pc)
 
-		const local = pc.localDescription
+		const local = conn.pc.localDescription
 
 		const code = createWebRTCRoomCode({
 			kind: 'offer',
@@ -977,7 +960,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 
 		setOfferCode(code)
 		log('Offer ready (copy/paste or show QR).')
-	}, [attachCommonHandlers, attachDataChannelHandlers, canWebRTC, crisisId, log, reset,])
+	}, [attachCommonHandlers, attachDataChannelHandlers, canWebRTC, crisisId, log])
 
 	const joinWithOffer = useCallback( async (rawOfferCode, { pushOnly = false } = {}) => {
 		setError(null)
@@ -995,7 +978,6 @@ export function P2PProvider({ children, crisisId, familyId }) {
 
 		setPushOnlyOnJoin(!!pushOnly)
 
-		reset()
 		setRole('join')
 		setStatus('connecting')
 		log('Joining with offer...')
@@ -1012,24 +994,20 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			if (!ok) return
 		}
 
-		const pc = new RTCPeerConnection({ iceServers: [] })
-		pcRef.current = pc
-		attachCommonHandlers(pc)
+		const conn = createConnection({ role: 'user_hosted_room_peer' })
+		attachCommonHandlers(conn)
 
-		pc.ondatachannel = (evt) => {
-			const dc = evt.channel
-			dcRef.current = dc
-			attachDataChannelHandlers(dc)
-			log('Received data channel from host.')
+		conn.pc.ondatachannel = evt => {
+			attachDataChannelHandlers(conn, evt.channel)
 		}
 
-		await pc.setRemoteDescription(parsed.sdp)
+		await conn.pc.setRemoteDescription(parsed.sdp)
 
-		const answer = await pc.createAnswer()
-		await pc.setLocalDescription(answer)
-		await waitForIceGatheringComplete(pc)
+		const answer = await conn.pc.createAnswer()
+		await conn.pc.setLocalDescription(answer)
+		await waitForIceGatheringComplete(conn.pc)
 
-		const local = pc.localDescription
+		const local = conn.pc.localDescription
 
 		const code = createWebRTCRoomCode({
 			kind: 'answer',
@@ -1039,7 +1017,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 
 		setAnswerCode(code)
 		log('Answer ready. Give it back to the host.')
-	}, [ attachCommonHandlers, attachDataChannelHandlers, canWebRTC, crisisId, log, reset,])
+	}, [ attachCommonHandlers, attachDataChannelHandlers, canWebRTC, crisisId, log])
 	
 
 	const hostApplyAnswer = useCallback( async (rawAnswerCode) => {
@@ -1051,9 +1029,16 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			return
 		}
 
-		const pc = pcRef.current
-		if (!pc) {
-			setError('No active host session. Create an offer first.')
+		const id = activeConnectionIdRef.current
+		if (!id){
+			setError("No active host session.")
+			console.error(activeConnectionIdRef.current)
+			return
+		}
+
+		const conn = connectionsRef.current.get(id)
+		if (!conn) {
+			setError("No active host connection found!!!")
 			return
 		}
 
@@ -1063,16 +1048,66 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			return
 		}
 
-		if (parsed.crisisId && crisisId && parsed.crisisId !== crisisId) {
-			const ok = confirm(
-				`Answer crisisId mismatch.\n\nLocal: ${crisisId}\nAnswer: ${parsed.crisisId}\n\nContinue anyway?`
-			)
-			if (!ok) return
+		log('Applying answer...')
+		await conn.pc.setRemoteDescription(parsed.sdp)
+	}, [crisisId, log])
+
+
+	// ---------------------
+	// Disconnection Helpers
+	const disconnectById = useCallback( id => {
+		const conn = connectionsRef.current.get(id)
+		if (!conn) return
+
+		try { conn.sender?.destroy?.() } catch {}
+		try { conn.receiver?.destroy?.() } catch {}
+		try { conn.dc?.close() } catch {}
+		try { conn.pc?.close() } catch {}
+
+		connectionsRef.current.delete(id)
+
+		// If active connection removed, clear pointer
+		if (activeConnectionIdRef.current === id) {
+			activeConnectionIdRef.current = null	// DEV NOTE: legacy compatibility later
 		}
 
-		log('Applying answer...')
-		await pc.setRemoteDescription(parsed.sdp)
-	}, [crisisId, log])
+		log(`Disconnected connection: ${id}`)
+
+		// Update status if no connections left
+		if (connectionsRef.current.size === 0) {
+			setStatus('disconnected')
+		}
+	}, [log])
+	const disconnectByRole = useCallback( role => {
+		const idsToRemove = []
+
+		for (const [id, conn] of connectionsRef.current.entries()) {
+			if (conn.role === role) {
+				idsToRemove.push(id)
+			}
+		}
+
+		idsToRemove.forEach(id => disconnectById(id))
+
+		log(`Disconnected all connections with role ${role}`)
+	}, [disconnectById, log])
+
+	// For transport layer to call...
+	function destroyAllConnections() {
+		const ids = Array.from(connectionsRef.current.keys())
+		ids.forEach( id => disconnectById(id) )
+		log("Disconnected all connections")
+	}	
+	// For user UI layer to call...
+	const disconnectAll = useCallback(() => {
+		destroyAllConnections()
+
+		activeConnectionIdRef.current = null	// DEV NOTE: legacy pointer
+		setStatus('disconnected')
+
+		log('Disconnected all connections')
+	}, [disconnectById, destroyAllConnections, log])
+	// -------------------
 
 
 	const sendPing = useCallback(() => {
@@ -1080,64 +1115,6 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		log('sent ping')
 	}, [log, sendJson])
 
-	const closeAfterDrain = useCallback(async () => {
-		const maxWaitMs = 8000
-		const startedAt = safeNow()
-
-		while (safeNow() - startedAt < maxWaitMs) {
-			const senderStats = senderRef.current?.getStats?.()
-			const queueDepth = senderStats?.queueDepth ?? null
-			const bufferedAmount = senderStats?.bufferedAmount ?? null
-
-			if (queueDepth === 0 && (bufferedAmount === 0 || bufferedAmount < 4096)) {
-				break
-			}
-			await sleep(50)
-		}
-
-		try {
-			if (dcRef.current) dcRef.current.close()
-			if (pcRef.current) pcRef.current.close()
-		} catch {
-			// ignore
-		}
-
-		dcRef.current = null
-		pcRef.current = null
-
-		setPushOnlyOnJoin(false)
-		setStatus('closed')
-		setRole('idle')
-		log('push-only: disconnected')
-	}, [log])
-
-	const p2pSyncNow = useCallback(async () => {
-		setError(null)
-
-		try {
-			
-			const id = makeId()
-			pendingSyncIdsRef.current.add(id)
-
-			const payload = disasterStorage.exportSyncPayload({ crisisId, familyId })
-			sendJson({
-				t: 'krisys_mesh_sync_req_v1',
-				id,
-				mode: pushOnlyOnJoin,
-				sentAt: safeNow(),
-				payload,
-			})
-
-			log(`sent sync req id=${id}`)
-
-			if (pushOnlyOnJoin) {
-				log('push-only mode: closing after drain')
-				closeAfterDrain()
-			}
-		} catch (e) {
-			setError(e?.message || String(e))
-		}
-	}, [closeAfterDrain, crisisId, familyId, log, pushOnlyOnJoin, sendJson])
 
 	// Manually trigger inventory negotiation with station (station as host sync-ing with connected client)
 	const p2pStationInventoryNow = useCallback(async (hostUrl) => {
@@ -1200,7 +1177,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 					relay_hashes: (localPayload.queued || []).map(m => m?.relay_hash)
 					.filter(Boolean)
 					.slice(0, INVENTORY_MAX_RELAY_HASHES),
-					sentAt: Date.now(),
+					sentAt: safeNow(),
 				})
 			}
 			else if (localTipIndex > stationTipIndex) {
@@ -1211,7 +1188,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 					t: 'krisys_mesh_sync_req_v1',
 					id: id,
 					mode: false,
-					sentAt: Date.now(),
+					sentAt: safeNow(),
 					payload: localPayload
 				})
 			}
@@ -1228,6 +1205,9 @@ export function P2PProvider({ children, crisisId, familyId }) {
 	const value = useMemo(() => {
 		return {
 			canWebRTC,
+			disconnectAll,
+			disconnectById,
+			disconnectByRole,
 
 			status,
 			role,
@@ -1254,7 +1234,6 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			createHostOffer,
 			joinWithOffer,
 			hostApplyAnswer,
-			p2pSyncNow,
 			p2pStationInventoryNow,
 			sendPing,
 		}
@@ -1264,13 +1243,15 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		connectToStation,
 		connectToRelay,
 		createHostOffer,
+		disconnectAll,
+		disconnectById,
+		disconnectByRole,
 		error,
 		hostApplyAnswer,
 		joinWithOffer,
 		logLines,
 		metrics,
 		offerCode,
-		p2pSyncNow,
 		p2pStationInventoryNow,
 		pushOnlyOnJoin,
 		remoteAnswerInput,
