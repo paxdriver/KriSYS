@@ -4,6 +4,7 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import { P2PProvider } from '@/contexts/P2PContext'
+import { UserHostedRoomProvider } from '@/components/WalletDashboard/UserHostedRoom'
 import { api } from '@/services/api'
 import { disasterStorage } from '@/services/localStorage'
 

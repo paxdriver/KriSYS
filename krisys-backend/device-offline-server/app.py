@@ -3405,8 +3405,8 @@ def station_allocate_offer():
 	Flask forwards request to Node RTC host.
 	"""
 
-	# Ensure this device is operating as a station
-	ok, err = require_station_mode()
+	# Ensure this device is operating as a station or relay to establish a pool/room of peers
+	ok, err = require_usable_relay()
 	if not ok:
 		return jsonify({"error": err}), 403
 
