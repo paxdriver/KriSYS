@@ -1,6 +1,16 @@
 // krisys-frontend/contexts/UserHostedRoomContext.js
 'use client'
 
+/* P2PContext is the actual transport layer... this component should eventually manage:
+	- Peer metadata
+	- Host registry
+	- Per-peer known inventory
+	- Rebroadcast logic
+	- Room mode (host / idle)
+	- SOS broadcast logic
+	- Chat messages
+*/
+
 import { createContext, useContext, useMemo, useState } from 'react'
 
 const UserHostedRoomContext = createContext(null)
