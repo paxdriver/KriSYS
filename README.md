@@ -736,9 +736,11 @@ Typical offline workflow tests:
 │       ├── Sidebar.js
 │       ├── StorageMeter.js
 │       ├── TransactionItem.js
+│       ├── UserHostedRoom.js
 │       ├── UserSettings.js
 │       └── UnlockForm.js
 ├── contexts
+│   ├── UserHostedRoomContext.js (later room features)
 │   └── P2PContext.js
 ├── Dockerfile
 ├── package.json
@@ -1075,7 +1077,7 @@ Targets:
 	- [ ] block/queue bandwidth negotiation
 - UI declutter:
 	- [ ] move dev-only tools behind explicit dev gates
-	- [ ] unify “Connections” UX for station/relay/P2P
+	- [x] unify “Connections” UX for station/relay/P2P
 - [ ] Accessibility and mobile-friendly layout improvements
 - Relay Role Clarification & Topology:
 	- [x] Define relay role taxonomy (static, ferry, fallback, volunteer)
@@ -1159,7 +1161,7 @@ Relay Role Architecture
 Static Infrastructure Relay (relay_role="LAN_amplifier")
 - [ ] Prefer station over HQ
 - [ ] Low-frequency HQ polling fallback
-- [ ] Stable LAN room hosting
+- [x] Stable LAN room hosting
 
 Mobile Ferry Relay (relay_role="delivery_facilitation")
 - [ ] Dedicated ferry container
@@ -1177,7 +1179,7 @@ Station Fallback (mode="relay", internally configured and NOT a relay_role)
 - [x] Telemetry event on downgrade
 
 Volunteer Relay ("user_volunteer")
-- [ ] Define volunteer relay behavior (no HQ default)
+- [x] Define volunteer relay behavior (no HQ default)
 - [ ] Add time-bound toggle
 - [ ] Add battery-safe safeguards
 - [ ] Add clear UI indicator
