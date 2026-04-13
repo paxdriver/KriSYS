@@ -75,7 +75,7 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 	const [trustedStations, setTrustedStations] = useState(() => crisisId ? disasterStorage.getStations({ crisisId }) : {})
 	const [selectedStationId, setSelectedStationId] = useState(null)
 
-	const { joinWithOffer, p2pStationInventoryNow, status, connectToStation, connectToRelay } = useP2P()
+	const { joinWithOffer, p2pStationInventoryNow, status, connectToStation, connectToRelay, sendPing } = useP2P()
 	const [stationPools, setStationPools] = useState({})
 	const [loadingPools, setLoadingPools] = useState(false)
 	const [selectedOffer, setSelectedOffer] = useState('')
@@ -427,6 +427,13 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 					{syncing ? 'Syncing...' : 'Sync Now'}
 				</button>
 
+				<button
+					className="btn"
+					type="button"
+					onClick={sendPing}
+				>
+					SEND PING
+				</button>
 			</div>
 
 			{/* P2P Rooms */}

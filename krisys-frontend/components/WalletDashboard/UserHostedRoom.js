@@ -3,41 +3,78 @@
 
 import { useState } from 'react'
 import { useP2P } from '@/contexts/P2PContext'
-import { createWebRTCRoomCode, parseWebRTCRoomCode } from '@/services/webrtcRoomCode'
+import { parseWebRTCRoomCode } from '@/services/webrtcRoomCode'
 import { showTextQr } from '@/utils/qr'
 
 export default function UserHostedRoom({ crisisId }) {
+
+	// Pull required transport-layer functions from P2P context
 	const {
-		status,
-		reset,
-		createHostOffer,
-		joinWithOffer,
-		hostApplyAnswer,
-		offerCode,
-		answerCode,
-		setRemoteAnswerInput,
-		remoteAnswerInput,
+	createHostOffer,	// generates a new host offer (creates new connection)
+	joinWithOffer,		// join another host using offer
+	hostApplyAnswer,	// apply answer to a specific connection
+	offerCode,			// DEV NOTE: legacy single-offer value, deprecated now, phasing out
+	answerCode,			// answer generated when joining
 		setRemoteOfferInput,
 		remoteOfferInput,
+		status,
+		logLines,
 	} = useP2P()
 
-	const [mode, setMode] = useState(null) // 'host' | 'join'
+	// Track whether we are hosting or joining
+	const [mode, setMode] = useState(null) // 'host' | 'join' | null
 
-	async function handleStartHosting() {
-		reset()
-		setMode('host')
-		await createHostOffer()
+	// Offer pool state: array of { connId, offerCode }
+	const [hostOffers, setHostOffers] = useState([])
+
+	// Track per-offer answer input temporarily
+	const [answers, setAnswers] = useState({}) // { connId: answerText }
+
+	
+	// USER HOSTS ROOM
+	async function handleGenerateOffer() {
+		// Call transport-layer function to create new host offer
+		const result = await createHostOffer()
+		// createHostOffer RET { connId, offerCode }
+
+		if (!result) return
+		const { connId, offerCode } = result
+		console.log(result)
+		setHostOffers(prev => [
+			...prev,
+			{ connId, offerCode }
+		])
 	}
 
-	async function handleJoin() {
-		reset()
-		setMode('join')
-		await joinWithOffer(remoteOfferInput)
+	async function handleApplyAnswer(connId) {
+		const raw = answers[connId]
+		if (!raw) return
+
+		// Parse answer to ensure valid format
+		const parsed = parseWebRTCRoomCode(raw)
+
+		console.log(parsed)
+
+		if (parsed.kind !== 'answer') {
+			alert('Invalid answer code')
+			return
+		}
+
+		// Apply answer to correct connection
+		await hostApplyAnswer(connId, raw)
+
+		// Remove consumed offer from pool
+		setHostOffers(prev => prev.filter(o => o.connId !== connId))
+
+		// Clear answer input
+		setAnswers(prev => {
+			const copy = { ...prev }
+			delete copy[connId]
+			return copy
+		})
 	}
 
-	async function handleShowQr() {
-		if (!offerCode) return
-
+	async function handleShowQr(offerCode) {
 		await showTextQr({
 			text: offerCode,
 			displayName: 'User Hosted Room',
@@ -46,14 +83,26 @@ export default function UserHostedRoom({ crisisId }) {
 		})
 	}
 
+	// JOIN MODE
+	async function handleJoinRoom() {
+		if (!remoteOfferInput.trim()) return
+		setMode('join')
+		await joinWithOffer(remoteOfferInput)
+	}
+
 	return (
 		<div className="page">
+
 			<h2>User Hosted Room</h2>
 
+			{/* MODE SELECTOR */}
 			{!mode && (
-				<div>
-					<button className="btn" onClick={handleStartHosting}>
-						Start Hosting Room
+				<>
+					<button
+						className="btn"
+						onClick={() => setMode('host')}
+					>
+						Host Room
 					</button>
 
 					<hr />
@@ -63,64 +112,118 @@ export default function UserHostedRoom({ crisisId }) {
 						rows="4"
 						placeholder="Paste host offer here..."
 						value={remoteOfferInput}
-						onChange={(e) => setRemoteOfferInput(e.target.value)}
-					/>
-
-					<button className="btn" onClick={handleJoin}>
-						Join Room
-					</button>
-				</div>
-			)}
-
-			{mode === 'host' && (
-				<div>
-					<h3>Hosting Room</h3>
-
-					<textarea
-						className="form-input"
-						rows="6"
-						value={offerCode}
-						readOnly
-					/>
-
-					<button className="btn" onClick={handleShowQr}>
-						Show QR
-					</button>
-
-					<hr />
-
-					<textarea
-						className="form-input"
-						rows="4"
-						placeholder="Paste peer answer here..."
-						value={remoteAnswerInput}
-						onChange={(e) => setRemoteAnswerInput(e.target.value)}
+						onChange={e => setRemoteOfferInput(e.target.value)}
 					/>
 
 					<button
 						className="btn"
-						onClick={() => hostApplyAnswer(remoteAnswerInput)}
+						onClick={handleJoinRoom}
 					>
-						Apply Answer
+						Join Room
 					</button>
-				</div>
+				</>
 			)}
 
+			{/* HOST MODE */}
+			{mode === 'host' && (
+				<>
+					<h3>Hosting Room</h3>
+
+					<button
+						className="btn"
+						onClick={handleGenerateOffer}
+					>
+						Generate New Offer
+					</button>
+
+					<div style={{ marginTop: '1rem' }} />
+
+					{hostOffers.map(offer => (
+						<div
+							key={offer.connId}
+							style={{
+								border: '1px solid #ccc',
+								padding: '1rem',
+								marginBottom: '1rem'
+							}}
+						>
+							<strong>Connection ID:</strong> {offer.connId}
+
+							<textarea
+								className="form-input"
+								rows="5"
+								value={offer.offerCode}
+								readOnly
+							/>
+
+							<button
+								className="btn"
+								onClick={() => handleShowQr(offer.offerCode)}
+							>
+								Show QR
+							</button>
+
+							<textarea
+								className="form-input"
+								rows="4"
+								placeholder="Paste answer here..."
+								value={answers[offer.connId] || ''}
+								onChange={e =>
+									setAnswers(prev => ({
+										...prev,
+										[offer.connId]: e.target.value
+									}))
+								}
+							/>
+
+							<button
+								className="btn"
+								onClick={() => handleApplyAnswer(offer.connId)}
+							>
+								Apply Answer
+							</button>
+						</div>
+					))}
+
+					{hostOffers.length === 0 && (
+						<p>No pending offers yet.</p>
+					)}
+				</>
+			)}
+
+			{/* JOIN MODE */}
 			{mode === 'join' && (
-				<div>
+				<>
 					<h3>Joined Room</h3>
+
+					<p>Send this answer back to the host:</p>
+
 					<textarea
 						className="form-input"
 						rows="6"
 						value={answerCode}
 						readOnly
 					/>
-					<p>Send this answer back to host.</p>
-				</div>
+				</>
 			)}
 
-			<div style={{ marginTop: '1rem' }}>
+			<hr />
+
+			<div>
 				<strong>Status:</strong> {status}
+			</div>
+
+			<div style={{ marginTop: '1rem' }}>
+				<strong>Logs:</strong>
+				<pre style={{
+					maxHeight: '200px',
+					overflow: 'auto',
+					background: '#111',
+					color: '#0f0',
+					padding: '0.5rem'
+				}}>
+					{logLines.join('\n')}
+				</pre>
 			</div>
 		</div>
 	)

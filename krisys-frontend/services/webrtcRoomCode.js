@@ -75,7 +75,9 @@ export function parseWebRTCRoomCode(code) {
 
 	const trimmed = code.trim()
 	const prefix = 'krisys:webrtc:v1:'
+	
 	if (!trimmed.startsWith(prefix)) {
+		console.log(trimmed)
 		throw new Error('Invalid WebRTC code prefix')
 	}
 

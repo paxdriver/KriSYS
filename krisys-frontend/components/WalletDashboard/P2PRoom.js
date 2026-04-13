@@ -128,6 +128,16 @@ export default function P2PRoom() {
 
 				<div style={{ display: 'grid', gap: '14px' }}>
 					<div>
+						<div>
+							<div style={{ fontWeight: 700, marginBottom: '6px' }}>Log</div>
+							<textarea
+								className="form-input"
+								rows="8"
+								value={logLines.join('\n')}
+								readOnly
+							/>
+						</div>
+						
 						<div style={{ fontWeight: 700, marginBottom: '6px' }}>
 							Host (create room)
 						</div>
@@ -245,16 +255,6 @@ export default function P2PRoom() {
 							readOnly
 							placeholder="Answer code will appear here"
 							style={{ marginTop: '8px' }}
-						/>
-					</div>
-
-					<div>
-						<div style={{ fontWeight: 700, marginBottom: '6px' }}>Log</div>
-						<textarea
-							className="form-input"
-							rows="8"
-							value={logLines.join('\n')}
-							readOnly
 						/>
 					</div>
 

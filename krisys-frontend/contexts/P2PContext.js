@@ -120,7 +120,23 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		connectionsRef.current.set(id, connection)
 		activeConnectionIdRef.current = id		// DEV NOTE: legacy compatibility reference pointer to be removed
 
+		logConnectionRegistry()
+
 		return connection
+	}
+
+	function logConnectionRegistry() {
+		const snapshot = Array.from(connectionsRef.current.entries()).map(
+			([id, conn]) => ({
+				id,
+				role: conn.role,
+				hasDC: !!conn.dc,
+				state: conn.pc?.connectionState,
+			})
+		)
+
+		console.log("=== CONNECTION REGISTRY SNAPSHOT ===")
+		console.table(snapshot)
 	}
 
 	const sendJson = useCallback ( (obj, connectionId = null) => {
@@ -270,18 +286,19 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		activeConnectionIdRef.current = null	// DEV NOTE: legacy reference pointer, to be removed in Phase 6
 
 		emitP2PStatus({ active: false, status: 'closed', role: 'idle' })
-	}, [disconnectAll, clearRelayPollInterval, emitP2PStatus, log])
+	}, [clearRelayPollInterval, emitP2PStatus, log])
 
-	useEffect(() => {
-		return () => {
-			// Provider unmount => teardown (leaving wallet route)
-			try {
-				reset()
-			} catch {
-				// ignore for now
-			}
-		}
-	}, [reset])
+	// useEffect(() => {
+	// 	return () => {
+	// 		// Provider unmount => teardown (leaving wallet route)
+	// 		try {
+	// 			destroyAllConnections()
+	// 			// reset()
+	// 		} catch {
+	// 			// ignore for now
+	// 		}
+	// 	}
+	// }, [])
 
 	const attachCommonHandlers = useCallback( conn => {
 		conn.pc.onconnectionstatechange = () => {
@@ -958,8 +975,15 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			sdp: { type: local.type, sdp: local.sdp },
 		})
 
+		// helps show sdp's are different since they'll look very similar when generated on the same machine
+		// console.log("OFFER FIRST 100 CHARS:", conn.pc.localDescription.sdp.slice(0, 100)) 
+
 		setOfferCode(code)
 		log('Offer ready (copy/paste or show QR).')
+		return {
+			connId : conn.id,
+			offerCode: code,
+		}
 	}, [attachCommonHandlers, attachDataChannelHandlers, canWebRTC, crisisId, log])
 
 	const joinWithOffer = useCallback( async (rawOfferCode, { pushOnly = false } = {}) => {
@@ -1020,7 +1044,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 	}, [ attachCommonHandlers, attachDataChannelHandlers, canWebRTC, crisisId, log])
 	
 
-	const hostApplyAnswer = useCallback( async (rawAnswerCode) => {
+	const hostApplyAnswer = useCallback( async (connId, rawAnswerCode) => {
 		setError(null)
 
 		const raw = (rawAnswerCode || '').trim()
@@ -1029,7 +1053,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			return
 		}
 
-		const id = activeConnectionIdRef.current
+		const id = connId
 		if (!id){
 			setError("No active host session.")
 			console.error(activeConnectionIdRef.current)
@@ -1066,6 +1090,8 @@ export function P2PProvider({ children, crisisId, familyId }) {
 
 		connectionsRef.current.delete(id)
 
+		logConnectionRegistry()
+
 		// If active connection removed, clear pointer
 		if (activeConnectionIdRef.current === id) {
 			activeConnectionIdRef.current = null	// DEV NOTE: legacy compatibility later
@@ -1093,11 +1119,11 @@ export function P2PProvider({ children, crisisId, familyId }) {
 	}, [disconnectById, log])
 
 	// For transport layer to call...
-	function destroyAllConnections() {
+	const destroyAllConnections = useCallback( () => {
 		const ids = Array.from(connectionsRef.current.keys())
 		ids.forEach( id => disconnectById(id) )
 		log("Disconnected all connections")
-	}	
+	}, [])	
 	// For user UI layer to call...
 	const disconnectAll = useCallback(() => {
 		destroyAllConnections()
@@ -1106,15 +1132,28 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		setStatus('disconnected')
 
 		log('Disconnected all connections')
-	}, [disconnectById, destroyAllConnections, log])
+	}, [disconnectById, log])
 	// -------------------
 
 
-	const sendPing = useCallback(() => {
-		sendJson({ t: 'krisys_p2p_ping', at: safeNow() })
-		log('sent ping')
-	}, [log, sendJson])
+	// const sendPing = useCallback(() => {
+	// 	sendJson({ t: 'krisys_p2p_ping', at: safeNow() })
+	// 	log('sent ping')
+	// }, [log, sendJson])
 
+	const sendPing = useCallback(() => {
+		for (const [id, conn] of connectionsRef.current.entries()) {
+			try {
+				conn.sender?.sendJson({
+					t: 'krisys_p2p_ping',
+					at: safeNow(),
+				})
+				log(`sent ping to ${id}`)
+			} catch (e) {
+				console.warn("Ping failed for", id)
+			}
+		}
+	}, [log])
 
 	// Manually trigger inventory negotiation with station (station as host sync-ing with connected client)
 	const p2pStationInventoryNow = useCallback(async (hostUrl) => {
