@@ -75,7 +75,7 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 	const [trustedStations, setTrustedStations] = useState(() => crisisId ? disasterStorage.getStations({ crisisId }) : {})
 	const [selectedStationId, setSelectedStationId] = useState(null)
 
-	const { joinWithOffer, p2pStationInventoryNow, status, connectToStation, connectToRelay, sendPing } = useP2P()
+	const { joinWithOffer, connectToStation, connectToRelay, sendPing } = useP2P()
 	const [stationPools, setStationPools] = useState({})
 	const [loadingPools, setLoadingPools] = useState(false)
 	const [selectedOffer, setSelectedOffer] = useState('')
@@ -104,7 +104,7 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 
 	// Fetch station pools
 	useEffect(() => {
-		if (status !== 'connected') return
+		// if (status !== 'connected') return // IN THE PROCESS OF DEPRECATING USE OF STATUS FROM P2PCONTEXT - no longer using globals for this, status is now per connection
 		
 		// Only run for station host
 		if (hostUrl !== DEFAULT_STATION_URL) return
@@ -122,7 +122,8 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 		}
 
 		loadPools()
-	}, [status, hostUrl])
+	}, [hostUrl])
+	// }, [status, hostUrl])
 
 
 	// ------------------------------
@@ -822,17 +823,19 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 						{loadingPools ? 'Loading...' : 'Refresh Pools'}
 					</button>
 
-					<button
+					{/* DEV NOTE: REMOVE THIS UPON SUCCESSFUL TESTING OF MULTIPLE CONNECTIONS NOW THROUGH NODE AND P2PCONTEXT */}
+					{/* <button
 						className="btn"
 						type="button"
 						onClick={ () => { 
-							p2pStationInventoryNow(hostUrl) 
+							// p2pStationInventoryNow(hostUrl) 
+							// CURRENTLY IN THE PROCESS OF BEING DEPRECATED!!!!
 						} }
 						disabled={status !== 'connected'}
 						style={{ marginTop: '8px' }}
 					>
 						Sync RTC Station/Relay
-					</button>
+					</button> */}
 
 					<button
 						className="btn"

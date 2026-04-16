@@ -96,8 +96,6 @@ async function ensureOfferPool() {
 // Initialize pool at startup
 ensureOfferPool()
 
-
-// Create a NEW offer. Every wallet that connects calls this endpoint. Each call creates a brand new RTCPeerConnection. This is the key to supporting multiple wallets.
 async function handleIncoming(peerId, msg) {
 	console.log("NODE RECEIVED:", msg?.t)
 	if (msg?.t === 'krisys_mesh_sync_req_v1') {
@@ -122,6 +120,106 @@ async function handleIncoming(peerId, msg) {
 			sentAt: Date.now(),
 			payload
 		})
+	}
+
+	/*	INVENTORY PHASE (Wallet → Station over RTC)
+
+	Client sends:
+	{
+		t: 'krisys_mesh_inventory_v1',
+		id,
+		crisisId,
+		chain_tip,
+		relay_hashes
+	}
+
+	Station must:
+		1. Ask Flask what its current state is (/mesh/inventory)
+		2. Compare chain tips
+		3. If station ahead → send blocks via mesh_payload
+		4. If station behind → request sync from client
+		5. If equal → do nothing
+	*/
+
+	if (msg?.t === 'krisys_mesh_inventory_v1') {
+
+		console.log("STATION RTC RECEIVED inventory")
+
+		// Forward inventory request to Flask station backend
+		const resp = await fetch('http://localhost:5000/mesh/inventory', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				crisisId: msg.crisisId,
+				relay_hashes: Array.isArray(msg.relay_hashes) ? msg.relay_hashes : [],
+			})
+		})
+
+		const payload = await resp.json()
+
+		const stationTip = payload?.chain_tip?.block_index
+		const clientTip = msg?.chain_tip?.block_index
+
+		console.log("STATION TIP:", stationTip, "CLIENT TIP:", clientTip)
+
+		const offerObj = ALLOCATED_OFFERS[peerId]
+		if (!offerObj) return
+
+		const sender = createChunkSender({ dc: offerObj.dc })
+
+		// CASE 1: Station Ahead → Send Payload
+		if (typeof stationTip === 'number' && typeof clientTip === 'number' && stationTip > clientTip) {
+			console.log("Station ahead. Sending payload.")
+
+			const syncResp = await fetch('http://localhost:5000/mesh/sync', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					crisisId: msg.crisisId,
+					queued: [],
+					blocks: []
+				})
+			})
+
+			const syncPayload = await syncResp.json()
+
+			sender.sendJson({
+				t: 'krisys_mesh_payload_v1',
+				id: msg.id,
+				sentAt: Date.now(),
+				blocks: syncPayload.blocks || [],
+				queued: syncPayload.queued || []
+			})
+
+			return
+		}
+
+		// CASE 2: Station Behind → Request Sync From Wallet
+		if (typeof stationTip === 'number' && typeof clientTip === 'number' && clientTip > stationTip) {
+			console.log("Station behind. Requesting sync from wallet.")
+
+			sender.sendJson({
+				t: 'krisys_mesh_sync_req_v1',
+				id: msg.id,
+				sentAt: Date.now(),
+				payload: {
+					version: 1,
+					deviceId: 'station_node',
+					crisisId: msg.crisisId,
+					generatedAt: Date.now(),
+					chain_tip: payload.chain_tip || null,
+					blocks: [],
+					queued: [],
+					confirmed: {}
+				}
+			})
+
+			return
+		}
+
+		// CASE 3: Equal → Nothing To Do
+		console.log("Station tips equal. No action.")
+		return
 	}
 
 	if (msg?.t === 'krisys_p2p_ping') {
