@@ -9,6 +9,11 @@ const INVENTORY_MAX_RELAY_HASHES = 100	// DEV NOTE: Set this by env var when bui
 const INVENTORY_MAX_BLOCKS = 10			// DEV NOTE: Set this by env var when building policy wizard
 const RELAY_POLL_INTERVAL_MS = 5000 	// Poll 5s after the last attempt completes
 const RELAY_MAX_BLOCKS_PER_POLL = 10 	// Max block suffix to request per poll
+
+const PEER_IDLE_TIMEOUT_MS = 3 * 60 * 1000 // DEV NOTE: default 3 minute per-connection timeout - HOSTS DO NOT TIMEOUT!!!
+// Math.max(5000, Math.floor(PEER_IDLE_TIMEOUT_MS / 3) // DEV NOTE: guard against really small intervals of 5s or less because it'll break /3
+const PEER_IDLE_CHECK_INTERVAL = Math.floor(PEER_IDLE_TIMEOUT_MS / 3)
+
 const STATION_API_URL = 'http://localhost:6001'
 const STATION_SIGNAL_URL = 'http://localhost:7000'
 
@@ -69,25 +74,18 @@ export function P2PProvider({ children, crisisId, familyId }) {
 	const activeConnectionIdRef = useRef(null)	// DEV NOTE: temp legacy compatibility
 	const pendingSyncIdsRef = useRef(new Set())
 
-	const [status, setStatus] = useState('disconnected') // disconnected | connecting | connected | closed
-	const [role, setRole] = useState('idle') // idle | host | join
 	const [error, setError] = useState(null)
 
 	const [offerCode, setOfferCode] = useState('')
 	const [answerCode, setAnswerCode] = useState('')
 	const [remoteOfferInput, setRemoteOfferInput] = useState('')
 	const [remoteAnswerInput, setRemoteAnswerInput] = useState('')
-	const [connectionMode, setConnectionMode] = useState(null)
 	const [logLines, setLogLines] = useState([])
 
 	const [metrics, setMetrics] = useState(null) 	// { send: {bytesSent,...}, recv: {bytesReceived,...} }
 
 	// Persisted across page switches
 	const [pushOnlyOnJoin, setPushOnlyOnJoin] = useState(false)
-
-	const relayPollIntervalRef = useRef(null) // Holds setInterval id for relay polling
-	const relayPollInFlightRef = useRef(false) // Prevents overlapping relay inventory requests
-	const relayPendingInventoryIdRef = useRef(null) // Tracks the latest inventory request id
 
 	if (!crisisId || !familyId) {
 		throw new Error('P2PProvider requires crisisId and familyId')
@@ -106,16 +104,20 @@ export function P2PProvider({ children, crisisId, familyId }) {
 	}, [])
 
 	// Connection registry instance creator
-	function createConnection({ role }) {
+	function createConnection({ transportRole }) {
 		const id = makeId()
 		const pc = new RTCPeerConnection({ iceServers: [] })
 		const connection = {
 			id,
-			role,
+			transportRole,	// transport layer role: | relay_client | station_client | relay_host // DEV NOTE: CHECK THIS!!!
+			// user_hosted_room_peer (values for old global 'connectionMode')
 			pc,
 			dc: null,
 			sender: null,
 			receiver: null,
+			status: 'connecting',		// initial lifecycle state: 'connecting' | 'connected' | 'closed'
+			relayPollInterval: null,	// per-connection inventory polling interval
+			lastActivity: safeNow(),	// safe fallback timeout per connection, default to save battery life if connection left open
 		}
 		connectionsRef.current.set(id, connection)
 		activeConnectionIdRef.current = id		// DEV NOTE: legacy compatibility reference pointer to be removed
@@ -126,14 +128,12 @@ export function P2PProvider({ children, crisisId, familyId }) {
 	}
 
 	function logConnectionRegistry() {
-		const snapshot = Array.from(connectionsRef.current.entries()).map(
-			([id, conn]) => ({
-				id,
-				role: conn.role,
-				hasDC: !!conn.dc,
-				state: conn.pc?.connectionState,
-			})
-		)
+		const snapshot = Array.from(connectionsRef.current.entries()).map( ([id, conn]) => ({
+			id,
+			transportRole: conn.transportRole,
+			hasDC: !!conn.dc,
+			state: conn.pc?.connectionState,
+		}))
 
 		console.log("=== CONNECTION REGISTRY SNAPSHOT ===")
 		console.table(snapshot)
@@ -148,6 +148,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		}
 
 		conn.sender.sendJson(obj) // createChunkSender()'s sendJson, this is not a recursive reference
+		conn.lastActivity = safeNow()	// failsafe timeout so connections aren't accidentally left open
 	}, []) // no deps since this function references connectionsRef.current, which is a static reference
 
 
@@ -161,50 +162,49 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		}
 	}, [])
 
-	const clearRelayPollInterval = useCallback(() => {
-		// Log for debugging.
-		log('relay poll: clearRelayPollInterval called') // Debug: identify interval clears
-		// Cancel any pending relay poll interval.
-		if (relayPollIntervalRef.current) {
-			clearInterval(relayPollIntervalRef.current) // Stop interval
-			relayPollIntervalRef.current = null // Clear ref
-		}
-	}, [log]) // Depends on log
 
-	const sendRelayInventoryNow = useCallback(async () => {
+	const sendRelayInventoryNow = useCallback( async (conn) => {
+		// Guard: require a connection object
+		if (!conn) return
 
-		// Do not send if a relay inventory request is already in flight
-		if (relayPollInFlightRef.current) {
-			log('relay poll: blocked (inFlight=true)') // Debug: prevent overlap
-			return // Exit if a request is already in flight
+		// Guard: only operate on relay transport connections
+		if (conn.transportRole !== 'relay_client') {
+			log(`relay poll: blocked (not relay_client)`)
+			return
 		}
-		if (status !== 'connected' || connectionMode !== 'relay') {
-			log(`relay poll: blocked (status=${status}, mode=${connectionMode})`) // Debug: not connected/relay
-			return // Exit if not in relay mode or connected
-		}
-		log(`relay poll: sendRelayInventoryNow invoked (status=${status}, mode=${connectionMode})`) // Debug: confirm poll fires
 
-		relayPollInFlightRef.current = true // Mark inventory request as in flight
+		// Guard: only send if connection is currently usable
+		if (conn.status !== 'connected') {
+			log(`relay poll: blocked (status=${conn.status})`)
+			return
+		}
+
+		// Guard: ensure data channel sender exists
+		if (!conn.sender) {
+			log(`relay poll: blocked (no sender)`)
+			return
+		}
+
+		log(`relay poll: sending inventory on connection ${conn.id}`)
 
 		try {
-			// Export local payload to derive chain_tip + relay_hashes
+			// Export local state snapshot for relay negotiation
 			const localPayload = disasterStorage.exportSyncPayload({
 				crisisId,
 				familyId,
 			})
 
-			// Build bounded relay_hash list from local queued items
+			// Extract bounded relay_hash list from queued messages
 			const relayHashes = (localPayload.queued || [])
 				.map((m) => m?.relay_hash)
 				.filter(Boolean)
 				.slice(0, INVENTORY_MAX_RELAY_HASHES)
 
-			// Build a fresh inventory request id
+			// Generate unique request ID
 			const id = makeId()
-			relayPendingInventoryIdRef.current = id
 
-			// Send relay-specific inventory request over RTC
-			sendJson({
+			// Send relay inventory request over THIS connection only
+			conn.sender.sendJson({
 				t: 'krisys_relay_inventory_v1',
 				id,
 				crisisId,
@@ -213,52 +213,45 @@ export function P2PProvider({ children, crisisId, familyId }) {
 				sentAt: safeNow(),
 			})
 		} catch (e) {
-			// On failure, clear in-flight and schedule a retry.
-			relayPollInFlightRef.current = false // Clear in-flight flag on error
-
+			log(`relay poll error on ${conn.id}: ${e?.message || e}`)
 		}
-	}, [
-		connectionMode, // Ensure we only send while in relay mode
-		crisisId, // Include crisisId in payload
-		familyId, // Include familyId in exportSyncPayload
-		sendJson, // Used to send RTC message
-		status, // Ensure we only send when connected
-	])
+	}, [crisisId, familyId, log, makeId,] )
 
+	// CONNECTION MANAGEMENT
+	const getAnyConnectedConnections = () => {	// RET: bool
+		return Array.from(connectionsRef.current.values()).some( connection => connection.status === 'connected')
+	}
+	const getConnectedRelayConnections = () => { // RET: Array
+		return Array.from(connectionsRef.current.values())
+			.filter(conn => (conn.transportRole === 'relay_client' && conn.status === 'connected')
+		)
+	}
+	const startIdleTimeoutForConnection = conn => {
+		if (conn.idleInterval) return // Guard: prevents stacking intervals if one exists already
 
-	// Replace the existing relay polling useEffect with this interval-based version.
-	useEffect(() => {
-		// Start polling only when connected to a relay.
-		if (status === 'connected' && connectionMode === 'relay') {
-			// Avoid double-starting the interval.
-			if (!relayPollIntervalRef.current) {
-				log('relay poll: starting interval') // Debug: interval start
-				relayPollIntervalRef.current = setInterval(() => {
-					void sendRelayInventoryNow() // Trigger inventory send every interval
-				}, RELAY_POLL_INTERVAL_MS)
+		// Only apply to peer-type connections
+		if (conn.transportRole == 'relay_client' ||
+			conn.transportRole == 'station_client' ||
+			conn.transportRole == 'user_hosted_room_peer') {
+				conn.idleInterval = setInterval( () => {
+					if (conn.status !== 'connected') return
+
+					const now = safeNow()
+					if (now - conn.lastActivity > PEER_IDLE_TIMEOUT_MS) {
+						console.log(`Idle timeout for connection ${conn.id}. Closing connection now...`)
+						disconnectById(conn.id)
+					}
+				}, PEER_IDLE_CHECK_INTERVAL)
 			}
-			return // Keep interval running while connected
-		}
+	}
 
-		// Stop polling when not in relay mode or disconnected.
-		clearRelayPollInterval() // Cancel interval
-		relayPollInFlightRef.current = false // Reset in-flight flag
-		relayPendingInventoryIdRef.current = null // Reset inventory id
-	}, [
-		clearRelayPollInterval, // Used to stop interval
-		connectionMode, // Re-run when mode changes
-		sendRelayInventoryNow, // Used by interval callback
-		status, // Re-run when connection state changes
-	])
 
 	useEffect(() => {
 		emitP2PStatus({
-			active: status === 'connecting' || status === 'connected',
-			status,
-			role,
+			active: getAnyConnectedConnections(),
 			metrics: metrics || null,
 		})
-	}, [emitP2PStatus, status, role, metrics])
+	}, [emitP2PStatus, metrics])
 
 
 	const reset = useCallback(() => {
@@ -268,8 +261,6 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		disconnectAll() // same as destroyAllConnections(), uses disconnectById()
 
 		setError(null)
-		setStatus('closed')
-		setRole('idle')
 		setOfferCode('')
 		setAnswerCode('')
 		setRemoteOfferInput('')
@@ -279,39 +270,50 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		pendingSyncIdsRef.current = new Set()
 		setPushOnlyOnJoin(false)
 
-		clearRelayPollInterval() // Stop relay interval polling on reset
-		relayPollInFlightRef.current = false // Clear in-flight flag on reset.
-		relayPendingInventoryIdRef.current = null // Clear pending inventory id on reset.
-
 		activeConnectionIdRef.current = null	// DEV NOTE: legacy reference pointer, to be removed in Phase 6
 
-		emitP2PStatus({ active: false, status: 'closed', role: 'idle' })
-	}, [clearRelayPollInterval, emitP2PStatus, log])
+		emitP2PStatus({ active: false, status: 'closed', transportRole: 'idle' })
+	}, [emitP2PStatus, log])
 
-	// useEffect(() => {
-	// 	return () => {
-	// 		// Provider unmount => teardown (leaving wallet route)
-	// 		try {
-	// 			destroyAllConnections()
-	// 			// reset()
-	// 		} catch {
-	// 			// ignore for now
-	// 		}
-	// 	}
-	// }, [])
+	useEffect(() => {
+		return () => {
+			// Provider unmount => teardown (leaving wallet route)
+			try {
+				destroyAllConnections()
+			} catch {
+				// ignore for now
+			}
+		}
+	}, [])
 
 	const attachCommonHandlers = useCallback( conn => {
 		conn.pc.onconnectionstatechange = () => {
 			log(`conn.pc.connectionState=${conn.pc.connectionState}`)
 
 			if (conn.pc.connectionState === 'connected') { 
-				setStatus('connected')
+				conn.status = 'connected'
+				console.log(`Connection ${conn.id} connected!`)
+				
+				// Start the failsafe idle timeoout by via conn.lastActivity...
+				startIdleTimeoutForConnection(conn)
+
+				if (conn.transportRole === 'relay_client') {
+					if (!conn.relayPollInterval) {
+						log(`Starting relay polling for ${conn.id}`)
+
+						conn.relayPollInterval = setInterval(() => {
+							if (conn.status !== 'connected') return
+							sendRelayInventoryNow(conn)
+						}, RELAY_POLL_INTERVAL_MS)
+					}
+				}
 			}
 			
 			else if (conn.pc.connectionState === 'disconnected' || 
 				conn.pc.connectionState === 'closed' || 
 				conn.pc.connectionState === 'failed') {
-					setStatus('disconnected')
+					conn.status = 'closed'
+					console.log(`Connection ${conn.id} closed!`)
 					disconnectById(conn.id)
 			}
 		}
@@ -323,9 +325,9 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		conn.pc.onicegatheringstatechange = () => {
 			log(`conn.pc.iceGatheringState=${conn.pc.iceGatheringState}`)
 		}
-	},[log])
+	},[log, sendRelayInventoryNow]) // startIdleTimeout is always rendered static with the rest of the functions, so it doesn't need to be a dependency
 
-	const handleIncomingJson = useCallback(async (obj) => {
+	const handleIncomingJson = useCallback(async (obj, conn) => {
 		if (!obj || typeof obj !== 'object') return
 		if (!crisisId || !familyId) {
 			log('recv message: missing crisisId/familyId context locally')
@@ -367,13 +369,10 @@ export function P2PProvider({ children, crisisId, familyId }) {
 				log(`recv relay inventory_res id=${id}`) // Log inventory response
 
 				// Ignore stale inventory responses
-				if (relayPendingInventoryIdRef.current && id !== relayPendingInventoryIdRef.current) {
-					log(`relay inventory_res id=${id} (stale; ignoring)`)
-					return
-				}
-
-				// Inventory request is complete
-				relayPollInFlightRef.current = false
+				// if (relayPendingInventoryIdRef.current && id !== relayPendingInventoryIdRef.current) {
+				// 	log(`relay inventory_res id=${id} (stale; ignoring)`)
+				// 	return
+				// }
 
 				// Compare chain tips
 				const localPayload = disasterStorage.exportSyncPayload({ crisisId, familyId })
@@ -389,7 +388,6 @@ export function P2PProvider({ children, crisisId, familyId }) {
 					? obj.missing_relay_hashes.slice(0, INVENTORY_MAX_RELAY_HASHES)
 					: []
 
-					
 				// Determine if we want block suffix
 				const wantBlocksFrom = relayTipIndex > localTipIndex ? localTipIndex + 1 : null
 				
@@ -397,6 +395,10 @@ export function P2PProvider({ children, crisisId, familyId }) {
 				if (!missingRelay.length && wantBlocksFrom == null) {
 					log("Relay and client are already aligned")
 					return // No-op when relay and client are already aligned
+				}
+
+				if (missingRelay.length > 0 || wantBlocksFrom !== null) {
+					conn.lastActivity = safeNow() // failsafe timeout for connections left open
 				}
 
 				// If local tip is ahead, push a bounded suffix to the relay.
@@ -416,7 +418,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 					const queuedToSend = Array.isArray(localPayload.queued)
 						? localPayload.queued.slice(0, INVENTORY_MAX_RELAY_HASHES) // Send up to cap
 						: [] // Default empty if no queued
-
+					
 					// Send relay-specific sync request with payload.
 					sendJson({
 						t: 'krisys_relay_sync_req_v1', // Relay-specific sync request
@@ -431,6 +433,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 				}
 
 				// Request relay sync for missing items.
+				conn.lastActivity = safeNow()	// failsafe timeout so connections aren't accidentally left open
 				sendJson({
 					t: 'krisys_relay_sync_req_v1', // Relay-specific sync request
 					id: makeId(), // New request id for sync
@@ -502,12 +505,16 @@ export function P2PProvider({ children, crisisId, familyId }) {
 				const localTip = localPayload.chain_tip
 				const remoteTip = obj.chain_tip
 
-				if ( remoteTip && typeof remoteTip.block_index === 'number' &&
+				if (remoteTip && typeof remoteTip.block_index === 'number' &&
 					localTip && typeof localTip.block_index === 'number') {
 					
 					if (remoteTip.block_index > localTip.block_index) {
 						wantBlocksFrom = localTip.block_index + 1
 					}
+				}
+
+				if ( wantRelayHashes.length > 0 || (typeof wantBlocksFrom === 'number') ) {
+					conn.lastActivity = safeNow() // failsafe timeout for connections left open
 				}
 
 				// 4. Send inventory response
@@ -539,6 +546,8 @@ export function P2PProvider({ children, crisisId, familyId }) {
 					log(`inventory_res id=${id} nothing requested`)
 					return
 				}
+
+				if ((typeof wantBlocksFrom === 'number') && wantRelayHashes.length > 0) conn.lastActivity = safeNow()	// failsafe timeout so connections aren't accidentally left open
 
 				// Send inventory_res back to station to trigger payload
 				sendJson({
@@ -696,7 +705,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		})
 
 		conn.receiver = createChunkReceiver({
-			onJson: handleIncomingJson,
+			onJson: (obj) => handleIncomingJson(obj, conn),
 			log,
 			onStats: (s) => {
 				setMetrics((prev) => ({
@@ -707,42 +716,47 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		})
 
 		dc.onopen = () => {
-			log('dc.open')
-			setStatus('connected')
+			log(`dc.open for ${conn.id} (${conn.transportRole})`)
 
-			// Send mandatory handshake immediately after connection opens
-			if (connectionMode === 'station') {
+			// Mark activity at connection open
+			conn.lastActivity = safeNow()
 
+			// Station handshake (wallet → station_client)
+			if (conn.transportRole === 'station_client') {
 				try {
 					const stations = disasterStorage.getStations({ crisisId }) || {}
 					const firstStation = Object.values(stations)[0]
 
-				if (!firstStation) {
-					log('No trusted station stored for handshake')
-					return
-				}
-				
-				sendJson({
-					t: 'krisys_handshake_v1',
-					baseUrl: 'http://localhost:6001', // dev only for now
-					storedStation: firstStation,
-				})
+					if (!firstStation) {
+						log('No trusted station stored for handshake')
+						return
+					}
 
-				log('sent handshake')
+					conn.sender?.sendJson({
+						t: 'krisys_handshake_v1',
+						baseUrl: 'http://localhost:6001', // DEV ONLY
+						storedStation: firstStation,
+					})
+
+					conn.lastActivity = safeNow()
+					log('Sent station handshake')
 				} catch (e) {
-					log(`handshake send failed: ${e?.message || String(e)}`)
+					log(`Station handshake failed: ${e?.message || String(e)}`)
 				}
 			}
-			// If this side is a joining peer in user-hosted room (as opposed to station pools or relay rooms)
-			else if (connectionMode === 'user_hosted_room_peer') {
-				sendJson({
+
+			// User-hosted room peer handshake
+			else if (conn.transportRole === 'user_hosted_room_peer') {
+				conn.sender?.sendJson({
 					t: 'krisys_user_room_handshake_v1',
 					role: 'peer',
 					crisisId,
 					familyId,
 					sentAt: safeNow(),
 				})
-				log('sent user_room_handshake')
+
+				conn.lastActivity = safeNow()
+				log('Sent user room handshake')
 			}
 		}
 
@@ -776,10 +790,6 @@ export function P2PProvider({ children, crisisId, familyId }) {
 	const connectToRelay = useCallback(async (baseUrl) => {
 		log('Creating new RTCPeerConnection for relay')
 		setError(null)
-		let _debug = connectionMode
-		setConnectionMode("relay")
-		log(`SET CONNECTION MODE CHANGED to relay from ${_debug}!`)
-		console.warn(`SET CONNECTION MODE CHANGED to relay from ${_debug}!`)
 
 		if (!canWebRTC) {
 			setError('WebRTC not available in this browser.')
@@ -797,8 +807,6 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			return
 		}
 
-		setRole('join')
-		setStatus('connecting')
 		log('Requesting offer from relay...')
 
 		try {
@@ -817,7 +825,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			log(`Received offer from relay (peerId=${peerId})`)
 
 			// 2. Create local RTCPeerConnection
-			const conn = createConnection({role: 'relay'})
+			const conn = createConnection({transportRole: 'relay_client'})
 			attachCommonHandlers(conn)
 			
 			// 3. Listen for data channel
@@ -864,20 +872,13 @@ export function P2PProvider({ children, crisisId, familyId }) {
 	// Connect to Station's Node WebRTC host via Flask endpoint
 	const connectToStation = useCallback(async () => {
 		log('Creating new RTCPeerConnection to station')
-
 		setError(null)
-		let _debug = connectionMode
-		setConnectionMode("station")
-		log(`SET CONNECTION MODE CHANGED to station from ${_debug}!`)
-		console.warn(`SET CONNECTION MODE CHANGED to station from ${_debug}!`)
 
 		if (!canWebRTC) {
 			setError('WebRTC not available in this browser.')
 			return
 		}
 
-		setRole('join')
-		setStatus('connecting')
 		log('Requesting offer from station...')
 
 		try {
@@ -896,7 +897,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			log(`Received offer from station (peerId=${peerId})`)
 
 			// 2. Create local RTCPeerConnection
-			const conn = createConnection( {role: 'station'} )
+			const conn = createConnection( {transportRole: 'station_client'} )
 			attachCommonHandlers(conn)
 
 			// 3. Listen for data channel from station
@@ -953,11 +954,9 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			return
 		}
 
-		setRole('host')
-		setStatus('connecting')
 		log('Creating host offer...')
 
-		const conn = createConnection({ role: 'user_hosted_room_host' })
+		const conn = createConnection({ transportRole: 'user_hosted_room_host' })
 		attachCommonHandlers(conn)
 
 		const dc = conn.pc.createDataChannel('krisys', { ordered: true })
@@ -1001,9 +1000,6 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		}
 
 		setPushOnlyOnJoin(!!pushOnly)
-
-		setRole('join')
-		setStatus('connecting')
 		log('Joining with offer...')
 
 		const parsed = parseWebRTCRoomCode(raw)
@@ -1018,7 +1014,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			if (!ok) return
 		}
 
-		const conn = createConnection({ role: 'user_hosted_room_peer' })
+		const conn = createConnection({ transportRole: 'user_hosted_room_peer' })
 		attachCommonHandlers(conn)
 
 		conn.pc.ondatachannel = evt => {
@@ -1041,7 +1037,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 
 		setAnswerCode(code)
 		log('Answer ready. Give it back to the host.')
-	}, [ attachCommonHandlers, attachDataChannelHandlers, canWebRTC, crisisId, log])
+	}, [attachCommonHandlers, attachDataChannelHandlers, canWebRTC, crisisId, log])
 	
 
 	const hostApplyAnswer = useCallback( async (connId, rawAnswerCode) => {
@@ -1088,6 +1084,16 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		try { conn.dc?.close() } catch {}
 		try { conn.pc?.close() } catch {}
 
+		// Remove interval for this connection before deleting it
+		if (conn.relayPollInterval) {
+			clearInterval(conn.relayPollInterval)
+			conn.relayPollInterval = null
+		}
+		if (conn.idleInterval) {
+			clearInterval(conn.idleInterval)
+			conn.idleInterval = null
+		}
+		conn.status = 'closed'
 		connectionsRef.current.delete(id)
 
 		logConnectionRegistry()
@@ -1099,23 +1105,19 @@ export function P2PProvider({ children, crisisId, familyId }) {
 
 		log(`Disconnected connection: ${id}`)
 
-		// Update status if no connections left
-		if (connectionsRef.current.size === 0) {
-			setStatus('disconnected')
-		}
 	}, [log])
-	const disconnectByRole = useCallback( role => {
+	const disconnectByTransportRole = useCallback( transportRole => {
 		const idsToRemove = []
 
 		for (const [id, conn] of connectionsRef.current.entries()) {
-			if (conn.role === role) {
+			if (conn.transportRole === transportRole) {
 				idsToRemove.push(id)
 			}
 		}
 
 		idsToRemove.forEach(id => disconnectById(id))
 
-		log(`Disconnected all connections with role ${role}`)
+		log(`Disconnected all connections with transportRole ${transportRole}`)
 	}, [disconnectById, log])
 
 	// For transport layer to call...
@@ -1123,23 +1125,17 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		const ids = Array.from(connectionsRef.current.keys())
 		ids.forEach( id => disconnectById(id) )
 		log("Disconnected all connections")
-	}, [])	
+	}, [disconnectById])	
 	// For user UI layer to call...
 	const disconnectAll = useCallback(() => {
 		destroyAllConnections()
 
 		activeConnectionIdRef.current = null	// DEV NOTE: legacy pointer
-		setStatus('disconnected')
+		// setStatus('disconnected')
 
 		log('Disconnected all connections')
 	}, [disconnectById, log])
 	// -------------------
-
-
-	// const sendPing = useCallback(() => {
-	// 	sendJson({ t: 'krisys_p2p_ping', at: safeNow() })
-	// 	log('sent ping')
-	// }, [log, sendJson])
 
 	const sendPing = useCallback(() => {
 		for (const [id, conn] of connectionsRef.current.entries()) {
@@ -1166,11 +1162,6 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		DEV NOTE: This will be expanded later for 1 station to pull from HQ, distribute to sister stations nearby on same LAN and/or include some sort of broadcast but for now it's a new button in ConnectionsPage to help keep dev tests separated until they're no longer needed.
 		*/
 		setError(null)
-
-		if (status !== 'connected') {
-			log(`${connectionMode} sync aborted: not connected`)
-			return
-		}
 
 		try {
 			// 1. Get local wallet chain tip
@@ -1201,11 +1192,9 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			const stationTipIndex = typeof stationPayload.chain_tip?.block_index === 'number' ? 
 				stationPayload.chain_tip.block_index : -1
 
-			log(`${connectionMode} sync check local_tip=${localTipIndex} ` + `station_tip=${stationTipIndex}`)
-
 			// 3. If station/relay is ahead, trigger inventory negotiation
 			if (stationTipIndex > localTipIndex) {
-				log(`${connectionMode} ahead — requesting inventory`)
+				// log(`${connectionMode} ahead — requesting inventory`)
 				const id = makeId()
 				pendingSyncIdsRef.current.add(id)
 				sendJson({
@@ -1220,7 +1209,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 				})
 			}
 			else if (localTipIndex > stationTipIndex) {
-				log(`local ahead — pushing sync to ${connectionMode}`)
+				// log(`local ahead — pushing sync to ${connectionMode}`)
 				const id = makeId()
 				pendingSyncIdsRef.current.add(id)
 				sendJson({
@@ -1232,13 +1221,13 @@ export function P2PProvider({ children, crisisId, familyId }) {
 				})
 			}
 			else {
-				log(`${connectionMode} sync not needed — no new blocks`)
+				// log(`${connectionMode} sync not needed — no new blocks`)
 			}
 
 		} catch (e) {
 			setError(e?.message || String(e))
 		}
-	}, [status, crisisId, familyId, log, sendJson])
+	}, [crisisId, familyId, log, sendJson])
 
 
 	const value = useMemo(() => {
@@ -1246,26 +1235,26 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			canWebRTC,
 			disconnectAll,
 			disconnectById,
-			disconnectByRole,
-
-			status,
-			role,
-			error,
-			metrics,
+			disconnectByTransportRole,
 
 			offerCode,
-			answerCode,
-			remoteOfferInput,
-			remoteAnswerInput,
-			pushOnlyOnJoin,
-
-			logLines,
-
 			setOfferCode,
+
+			answerCode,
 			setAnswerCode,
+
+			remoteOfferInput,
 			setRemoteOfferInput,
+
+			remoteAnswerInput,
 			setRemoteAnswerInput,
+
+			pushOnlyOnJoin,
 			setPushOnlyOnJoin,
+
+			error,
+			metrics,
+			logLines,
 
 			reset,
 			connectToStation,
@@ -1284,7 +1273,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		createHostOffer,
 		disconnectAll,
 		disconnectById,
-		disconnectByRole,
+		disconnectByTransportRole,
 		error,
 		hostApplyAnswer,
 		joinWithOffer,
@@ -1296,9 +1285,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		remoteAnswerInput,
 		remoteOfferInput,
 		reset,
-		role,
 		sendPing,
-		status,
 	])
 
 	return <P2PContext.Provider value={value}>{children}</P2PContext.Provider>
