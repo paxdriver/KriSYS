@@ -75,10 +75,10 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 	const [trustedStations, setTrustedStations] = useState(() => crisisId ? disasterStorage.getStations({ crisisId }) : {})
 	const [selectedStationId, setSelectedStationId] = useState(null)
 
-	const { joinWithOffer, connectToStation, connectToRelay, sendPing } = useP2P()
+	const { connectToStation, connectToRelay, sendPing } = useP2P()
 	const [stationPools, setStationPools] = useState({})
 	const [loadingPools, setLoadingPools] = useState(false)
-	const [selectedOffer, setSelectedOffer] = useState('')
+	const [selectedOffer, setSelectedOffer] = useState('') // DEV NOTE: no longer manually entering offer codes, this is done via connect buttons
 
 	const localCounts = useMemo(() => getLocalCounts({ crisisId, familyId }), [lastResult, crisisId, familyId])
 
@@ -102,31 +102,6 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 		}
 	}
 
-	// Fetch station pools
-	useEffect(() => {
-		// if (status !== 'connected') return // IN THE PROCESS OF DEPRECATING USE OF STATUS FROM P2PCONTEXT - no longer using globals for this, status is now per connection
-		
-		// Only run for station host
-		if (hostUrl !== DEFAULT_STATION_URL) return
-		
-		async function loadPools() {
-			try {
-				const res = await fetch(`${hostUrl}/station/peers`)	// DEV NOTE: later users will connect to pool to get baseurl for this
-				// const res = await fetch(`${hostUrl}/station/pools`)	// DEV NOTE: later users will connect to pool to get baseurl for this
-				const data = await res.json()
-				if (data) setStationPools(data || {})
-				// setStationPools(data.pools || [])
-			} catch (e) {
-				console.warn('Failed to load station pools', e)
-			}
-		}
-
-		loadPools()
-	}, [hostUrl])
-	// }, [status, hostUrl])
-
-
-	// ------------------------------
 	// DEV NOTE: Button for convenience will change to "scan station qr code"
 	const fetchStationProfile = async () => {
 		const res = await fetch(`${process.env.NEXT_PUBLIC_STATION_API}/station/profile`)
@@ -168,9 +143,9 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 		setError(null)
 
 		try {
-			const station = trustedStations[selectedStationId]
+			const station = trustedStations[selectedStationId] // UI to test connection to station as if user scanned station's qr code
 			// const res = await fetch(`${hostUrl}/station/pools`)
-			const res = await fetch(`${hostUrl}/station/peers`)
+			const res = await fetch(`${hostUrl}/station/peers`) // UI to test trusted station exposing LAN-connected stations the user has not yet scanned
 			if (!res.ok) throw new Error("Failed to fetch station's known trusted peers (on same LAN)")
 			// if (!res.ok) throw new Error('Failed to fetch pools')
 			const data = await res.json()
@@ -187,71 +162,70 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 	// END HELPER FUNCS
 	// ------------------------------
 
-	const runSync = async () => { // this is for stations
-		setSyncing(true)
-		setError(null)
-		setLastResult(null)
+	// const runSync = async () => { // this is for stations
+	// 	setSyncing(true)
+	// 	setError(null)
+	// 	setLastResult(null)
 
-		const trimmedUrl = (hostUrl || '').trim()
-		if (!trimmedUrl) {
-			setError('Enter a host URL')
-			setSyncing(false)
-			return
-		}
+	// 	const trimmedUrl = (hostUrl || '').trim()
+	// 	if (!trimmedUrl) {
+	// 		setError('Enter a host URL')
+	// 		setSyncing(false)
+	// 		return
+	// 	}
 
-		try {
-			try {
-				localStorage.setItem(STORAGE_LAST_HOST_URL, trimmedUrl)
-				localStorage.setItem(STORAGE_LAST_HOST_LABEL, (hostLabel || '').trim())
-			}
-			catch {
-				// ignore
-			}
+	// 	try {
+	// 		try {
+	// 			localStorage.setItem(STORAGE_LAST_HOST_URL, trimmedUrl)
+	// 			localStorage.setItem(STORAGE_LAST_HOST_LABEL, (hostLabel || '').trim())
+	// 		}
+	// 		catch {
+	// 			// ignore
+	// 		}
 
-			// Label is just UI sugar (helps logs + results read nicer)
-			const label = (hostLabel || '').trim() || (
-				trimmedUrl === DEFAULT_STATION_URL ? 'Station' : 
-					trimmedUrl === DEFAULT_RELAY_URL ? 'Relay' : 'Host')
-			console.log(label)
-			console.log(`trimmedUrl in connectionspage: ${trimmedUrl}`)
+	// 		// Label is just UI sugar (helps logs + results read nicer)
+	// 		const label = (hostLabel || '').trim() || (
+	// 			trimmedUrl === DEFAULT_STATION_URL ? 'Station' : 
+	// 				trimmedUrl === DEFAULT_RELAY_URL ? 'Relay' : 'Host')
+	// 		console.log(label)
+	// 		console.log(`trimmedUrl in connectionspage: ${trimmedUrl}`)
 
-			// const selectedStation = trustedStations[Object.keys(trustedStations)[0]]
-			// if (!selectedStation) {
-			// 	setError('No trusted station selected')
-			// 	setSyncing(false)
-			// 	return
-			// }
-			if (!selectedStationId) {
-				setError('No trusted station selected')
-				setSyncing(false)
-				return
-			}
+	// 		// const selectedStation = trustedStations[Object.keys(trustedStations)[0]]
+	// 		// if (!selectedStation) {
+	// 		// 	setError('No trusted station selected')
+	// 		// 	setSyncing(false)
+	// 		// 	return
+	// 		// }
+	// 		if (!selectedStationId) {
+	// 			setError('No trusted station selected')
+	// 			setSyncing(false)
+	// 			return
+	// 		}
 
-			const selectedStation = trustedStations[selectedStationId]
+	// 		const selectedStation = trustedStations[selectedStationId]
 
+	// 		await performStationHandshake({
+	// 			baseUrl: trimmedUrl,
+	// 			storedStation: selectedStation,
+	// 		})
 
-			await performStationHandshake({
-				baseUrl: trimmedUrl,
-				storedStation: selectedStation,
-			})
+	// 		const result = await syncWithMeshHost({ baseUrl: trimmedUrl, label, familyId })
+	// 		setLastResult({
+	// 			...result,
+	// 			at: Date.now(),
+	// 			hostUrl: trimmedUrl,
+	// 			label,
+	// 		})
 
-			const result = await syncWithMeshHost({ baseUrl: trimmedUrl, label, familyId })
-			setLastResult({
-				...result,
-				at: Date.now(),
-				hostUrl: trimmedUrl,
-				label,
-			})
-
-			if (onRefresh) onRefresh()
-		}
-		catch (e) {
-			setError(e?.message || String(e))
-		}
-		finally {
-			setSyncing(false)
-		}
-	}
+	// 		if (onRefresh) onRefresh()
+	// 	}
+	// 	catch (e) {
+	// 		setError(e?.message || String(e))
+	// 	}
+	// 	finally {
+	// 		setSyncing(false)
+	// 	}
+	// }
 
 	const handleGenerateJoinCode = async () => {
 		setError(null)
@@ -424,7 +398,9 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 		<div id="connections-page" className="page">
 			<div className="page-header">
 				<h1 className="page-title">Connections</h1>
-				<button className="btn" onClick={runSync} disabled={syncing}>
+				<button className="btn" onClick={ ()=> {
+					// runSync // in the process of converting to an automatic loop instead of manually running sync after connected to station
+					}} disabled={syncing}>
 					{syncing ? 'Syncing...' : 'Sync Now'}
 				</button>
 
@@ -572,6 +548,7 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 					</div>
 				</div>
 
+				{/* IN THE PROCESS OF DEPRECATING - we want to use connect button and sync loop instead  */}
 				<div className="card">
 					<div className="card-header">
 						<h3 className="card-title">Public Key Exchange</h3>
@@ -822,20 +799,6 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 					>
 						{loadingPools ? 'Loading...' : 'Refresh Pools'}
 					</button>
-
-					{/* DEV NOTE: REMOVE THIS UPON SUCCESSFUL TESTING OF MULTIPLE CONNECTIONS NOW THROUGH NODE AND P2PCONTEXT */}
-					{/* <button
-						className="btn"
-						type="button"
-						onClick={ () => { 
-							// p2pStationInventoryNow(hostUrl) 
-							// CURRENTLY IN THE PROCESS OF BEING DEPRECATED!!!!
-						} }
-						disabled={status !== 'connected'}
-						style={{ marginTop: '8px' }}
-					>
-						Sync RTC Station/Relay
-					</button> */}
 
 					<button
 						className="btn"

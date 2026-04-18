@@ -11,10 +11,10 @@ export default function P2PRoom() {
 	const crisisId = disasterStorage.getCrisisMetadata()?.id || null
 
 	const {
-		canWebRTC,
+		getConnectionsSnapshot,		// manual refresh button for the active connections
+		fullSyncByConnDerivedTransportRole,	// manual sync on specific active connection
 
-		status,
-		role,
+		canWebRTC,
 		error,
 		metrics,
 
@@ -37,6 +37,13 @@ export default function P2PRoom() {
 
 	const [scannerOpen, setScannerOpen] = useState(false)
 	const [scanTarget, setScanTarget] = useState(null) // offer | answer | null
+	
+	const [connectionsSnapshot, setConnectionsSnapshot] = useState([])		// Holds manually refreshed connection snapshot
+	// Manual refresh of connection registry snapshot
+	const refreshConnections = () => {
+		const snapshot = getConnectionsSnapshot()
+		setConnectionsSnapshot(snapshot)
+	}
 
 	const showQr = async (text, title) => {
 		if (!text || typeof text !== 'string') return
@@ -97,9 +104,9 @@ export default function P2PRoom() {
 				<h3 className="card-title">P2P Room (WebRTC)</h3>
 			</div>
 
+			{/* THIS IS WHERE I WANT TO LIST OUR CONNECTIONS AND THEIR INDIVIDUAL STATUSES NOW */}
 			<div className="card-body">
 				<div className="privacy-notice" style={{ marginBottom: '8px' }}>
-					Status: {status} | role: {role} | crisisId: {crisisId || 'unknown'}
 					{metrics ? (
 						<>
 							<br />
@@ -109,6 +116,68 @@ export default function P2PRoom() {
 							Join mode: {pushOnlyOnJoin ? 'push-only' : 'full-sync'}
 						</>
 					) : null}
+				</div>
+
+				<hr style={{ margin: '14px 0', opacity: 0.2 }} />
+				
+				{/* ACTIVE CONNECTIONS STATUSES */}
+				<div style={{ marginBottom: '10px' }}>
+					<button
+						type="button"
+						className="btn"
+						onClick={refreshConnections}
+					>
+						Refresh Connections
+					</button>
+				</div>
+
+				<div>
+					<div style={{ fontWeight: 700, marginBottom: '6px' }}>
+						Active Connections
+					</div>
+
+					{connectionsSnapshot.length === 0 ? (
+						<div className="privacy-notice">
+							No connections in registry.
+						</div>
+					) : (
+						connectionsSnapshot.map((conn) => (
+							<div
+								key={conn.id}
+								style={{
+									border: '1px solid #ccc',
+									padding: '8px',
+									marginBottom: '8px',
+								}}
+							>
+								{/* SYNC THIS CONNECTION */}
+								<button
+									type="button"
+									className="btn"
+									style={{ marginTop: '6px' }}
+									onClick={() => fullSyncByConnDerivedTransportRole(conn.id)}
+								>
+									Full Sync
+								</button>
+								
+								{/* THIS CONNECTION'S DETAILS */}
+								<div><strong>ID:</strong> {conn.id}</div>
+								<div><strong>Role:</strong> {conn.transportRole}</div>
+								<div><strong>Status:</strong> {conn.status}</div>
+								<div><strong>RTCPeerConnection:</strong> {conn.connectionState}</div>
+								<div><strong>ICE State:</strong> {conn.iceConnectionState}</div>
+								<div><strong>Has DataChannel:</strong> {String(conn.hasDataChannel)}</div>
+								<div><strong>Relay Poll:</strong> {String(conn.relayPollActive)}</div>
+								<div><strong>Station Poll:</strong> {String(conn.stationPollActive)}</div>
+								<div>
+									<strong>Last Activity:</strong>{' '}
+									{conn.lastActivity
+										? new Date(conn.lastActivity).toLocaleTimeString()
+										: 'n/a'}
+								</div>
+							</div>
+						))
+					)}
 				</div>
 
 				{error && <div className="error">{error}</div>}
@@ -125,7 +194,7 @@ export default function P2PRoom() {
 				)}
 
 				<hr style={{ margin: '14px 0', opacity: 0.2 }} />
-
+				{/* DEPRECATING MANUALY COPY-PASTE OF OFFER ANDSWER JOIN METHOD - replace with connect bottom and sync loops */}
 				<div style={{ display: 'grid', gap: '14px' }}>
 					<div>
 						<div>

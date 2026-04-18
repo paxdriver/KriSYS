@@ -142,6 +142,64 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		return connection
 	}
 
+	// HELPER TO GET AN UPDATED LIST OF ACTIVE CONNECTIONS AND THEIR STATUSES
+	const getConnectionsSnapshot = ()=>{
+		const snapshot = []
+
+		for (const [id, conn] of connectionsRef.current.entries()) {
+			snapshot.push({
+				id,															// unique connection id
+				transportRole: conn.transportRole,							// relay_client | station_client | etc
+				status: conn.status,										// connecting | connected | closed
+				connectionState: conn.pc?.connectionState || null, 			// native RTCPeerConnection state
+				iceConnectionState: conn.pc?.iceConnectionState || null,
+				hasDataChannel: !!conn.dc,									// whether data channel exists
+				lastActivity: conn.lastActivity || null,					// ms timestamp
+				relayPollActive: !!conn.relayPollInterval,
+				stationPollActive: !!conn.stationPollInterval,
+			})
+		}
+
+		return snapshot
+	}
+
+	// Manually trigger a full sync negotiation on a specific connection. This derives which sync routine to run based on transportRole.
+	const fullSyncByConnDerivedTransportRole = (connId) => {
+		if (!connId || typeof connId !== 'string') {
+			log('fullSync: invalid connId')
+			return
+		}
+
+		const conn = connectionsRef.current.get(connId)
+
+		if (!conn) {
+			log(`fullSync: connection not found (${connId})`)
+			return
+		}
+
+		if (conn.status !== 'connected') {
+			log(`fullSync: connection ${connId} not connected (status=${conn.status})`)
+			return
+		}
+
+		// Relay client path
+		if (conn.transportRole === 'relay_client') {
+			log(`fullSync: triggering relay inventory on ${connId}`)
+			sendRelayInventoryNow(conn)
+			return
+		}
+
+		// Station client path
+		if (conn.transportRole === 'station_client') {
+			log(`fullSync: triggering station inventory on ${connId}`)
+			sendStationInventoryNow(conn)
+			return
+		}
+
+		// User-hosted peers do not participate in relay/station inventory model
+		log(`fullSync: no sync handler for transportRole=${conn.transportRole}`)
+	}
+
 	function logConnectionRegistry() {
 		const snapshot = Array.from(connectionsRef.current.entries()).map( ([id, conn]) => ({
 			id,
@@ -1234,8 +1292,10 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			createHostOffer,
 			joinWithOffer,
 			hostApplyAnswer,
-			// p2pStationInventoryNow,
 			sendPing,
+
+			getConnectionsSnapshot,
+			fullSyncByConnDerivedTransportRole,
 		}
 	}, [
 		answerCode,
@@ -1252,7 +1312,6 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		logLines,
 		metrics,
 		offerCode,
-		// p2pStationInventoryNow,
 		pushOnlyOnJoin,
 		remoteAnswerInput,
 		remoteOfferInput,
