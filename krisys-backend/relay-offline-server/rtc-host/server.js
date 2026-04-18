@@ -254,6 +254,8 @@ async function handleIncoming(peerId, msg) {
 	
 	// Implements relay-specific inventory flow (client-initiated polling)
 	if (msg?.t === 'krisys_relay_inventory_v1') {
+		console.log('[2] RELAY received inventory relay_hashes:', msg.relay_hashes)
+
 		// Log relay inventory request for debugging
 		console.log('Relay inventory request received')
 
@@ -270,13 +272,18 @@ async function handleIncoming(peerId, msg) {
 		// Parse Flask response
 		const payload = await resp.json()
 
+		// DEBUGGING
+		console.log('[4] RELAY → WALLET inventory_res want:', payload.want_relay_hashes)
+		console.log('[4] RELAY → WALLET inventory_res missing:', payload.missing_relay_hashes)
+
 		// Send relay-specific inventory response back to client.
 		sender.sendJson({
 			t: 'krisys_relay_inventory_res_v1', // Relay-specific response type
 			id: msg.id, // Echo request id
 			crisisId: msg.crisisId, // Echo crisisId
 			chain_tip: payload.chain_tip || null, // Relay chain tip
-			missing_relay_hashes: payload.missing_relay_hashes || [], // Relay missing hashes
+			want_relay_hashes: payload.want_relay_hashes || [], // Relay has hashes the client should ask for
+			missing_relay_hashes: payload.missing_relay_hashes || [], // Relay missing hashes it wants from the client
 			sentAt: Date.now(), // Timestamp for debugging
 		})
 
@@ -324,6 +331,9 @@ async function handleIncoming(peerId, msg) {
 
 		// Parse Flask sync response.
 		const payload = await resp.json()
+
+		// DEBUGGING
+		console.log('[7] RELAY → WALLET sync_res queued:', payload.queued.map(m => m.relay_hash))
 
 		// Send relay-specific sync response back to client.
 		sender.sendJson({

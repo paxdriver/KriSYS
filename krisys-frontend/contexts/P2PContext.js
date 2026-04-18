@@ -10,7 +10,7 @@ const INVENTORY_MAX_BLOCKS = 10			// DEV NOTE: Set this by env var when building
 const RELAY_MAX_BLOCKS_PER_POLL = 10 	// Max block suffix to request per poll
 
 // Definition: "How often a wallet acting as relay_client sends inventory negotiation to a relay container."
-const RELAY_POLL_INTERVAL_MS = 5000 	// Poll 5s after the last attempt completes. relay_client only!
+const RELAY_POLL_INTERVAL_MS = 30000 	// Poll 5s after the last attempt completes. relay_client only!
 
 // Definition: peer timer when connected to a station for how often to check for new data to sync
 const PEER_TO_POLL_STATION_INTERVAL = RELAY_POLL_INTERVAL_MS * 10	// less frequently than relays, stations will be busier than relays, don't spam them
@@ -317,6 +317,9 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			// Generate unique request ID
 			const id = makeId()
 
+			// DEBUGGING
+			console.log('[1] WALLET → RELAY inventory send relay_hashes:', relayHashes)
+
 			// Send relay inventory request over THIS connection only
 			conn.sender.sendJson({
 				t: 'krisys_relay_inventory_v1',
@@ -455,6 +458,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			log('recv message: missing crisisId/familyId context locally')
 			return
 		}
+		console.log(obj)
 		const messageType = obj.t
 		switch (messageType) {
 
@@ -485,80 +489,96 @@ export function P2PProvider({ children, crisisId, familyId }) {
 				return
 			}
 
-			// These handle relay-specific inventory and sync messages
 			case 'krisys_relay_inventory_res_v1': {
-				const id = obj.id // Read inventory response id for matching
-				log(`recv relay inventory_res id=${id}`) // Log inventory response
 
-				// Compare chain tips
-				const localPayload = disasterStorage.exportSyncPayload({ crisisId, familyId })
-				const localTipIndex = typeof localPayload.chain_tip?.block_index === 'number'
-					? localPayload.chain_tip.block_index
-					: -1
-				const relayTipIndex = typeof obj.chain_tip?.block_index === 'number'
-					? obj.chain_tip.block_index
-					: -1
+				// DEBUGGING
+				console.log('[5] WALLET received inventory_res want:', obj.want_relay_hashes)
+				console.log('[5] WALLET received inventory_res missing:', obj.missing_relay_hashes)
 
-				// Determine missing relay hashes from relay response
-				const missingRelay = Array.isArray(obj.missing_relay_hashes)
-					? obj.missing_relay_hashes.slice(0, INVENTORY_MAX_RELAY_HASHES)
-					: []
+				// 1. We just received an inventory response from the relay.
+				//	This came from: Wallet → Node (server.js) → Flask /mesh/inventory → Node → Wallet
+				const id = obj.id
+				log(`recv relay inventory_res id=${id}`)
 
-				// Determine if we want block suffix
-				const wantBlocksFrom = relayTipIndex > localTipIndex ? localTipIndex + 1 : null
-				
-				// If nothing is needed, do not send a sync request.
-				if (!missingRelay.length && wantBlocksFrom == null) {
-					log("Relay and client are already aligned")
-					return // No-op when relay and client are already aligned
-				}
-
-				if (missingRelay.length > 0 || wantBlocksFrom !== null) {
-					conn.lastActivity = safeNow() // failsafe timeout for connections left open
-				}
-
-				// If local tip is ahead, push a bounded suffix to the relay.
-				if (localTipIndex > relayTipIndex) {
-					// Build a bounded payload from local state.
-					const localPayload = disasterStorage.exportSyncPayload({
-						crisisId, // Use current crisis id
-						familyId, // Use current family id
-					})
-
-					// Bound blocks to the relay cap to avoid flooding.
-					const blocksToSend = Array.isArray(localPayload.blocks)
-						? localPayload.blocks.slice(-RELAY_MAX_BLOCKS_PER_POLL) // Send last N blocks only
-						: [] // Default empty if no blocks
-
-					// Bound queued to inventory cap to avoid flooding.
-					const queuedToSend = Array.isArray(localPayload.queued)
-						? localPayload.queued.slice(0, INVENTORY_MAX_RELAY_HASHES) // Send up to cap
-						: [] // Default empty if no queued
-					
-					// Send relay-specific sync request with payload.
-					sendJson(conn, {
-						t: 'krisys_relay_sync_req_v1', // Relay-specific sync request
-						id: makeId(), // New request id for relay sync
-						crisisId, // Crisis pin for safety
-						blocks: blocksToSend, // Push blocks when local is ahead
-						queued: queuedToSend, // Push queued when local is ahead
-						sentAt: safeNow(), // Timestamp for debugging
-					})
-
-					return // Stop here to avoid falling through
-				}
-
-				// Request relay sync for missing items.
-				conn.lastActivity = safeNow()	// failsafe timeout so connections aren't accidentally left open
-				sendJson(conn, {
-					t: 'krisys_relay_sync_req_v1', // Relay-specific sync request
-					id: makeId(), // New request id for sync
-					crisisId, // Crisis pin for safety
-					want_relay_hashes: missingRelay, // Requested relay hashes
-					want_blocks_from: wantBlocksFrom, // Requested block suffix start
-					max_blocks: RELAY_MAX_BLOCKS_PER_POLL, // Cap blocks per response
-					sentAt: safeNow(), // Timestamp for debugging
+				// 2. Read relay's reported chain tip (for block negotiation)
+				const localPayload = disasterStorage.exportSyncPayload({
+					crisisId,
+					familyId,
 				})
+
+				const localTipIndex = typeof localPayload.chain_tip?.block_index === 'number' ? 
+					localPayload.chain_tip.block_index : -1
+
+				const relayTipIndex = typeof obj.chain_tip?.block_index === 'number' ?
+					obj.chain_tip.block_index : -1
+
+				// 3. Determine what the relay says it is missing FROM US.
+				//    (We must PUSH these queued items to the relay.)
+				const relayMissingFromUs = Array.isArray(obj.missing_relay_hashes) ? 
+					obj.missing_relay_hashes.slice(0, INVENTORY_MAX_RELAY_HASHES) : []
+
+				// 4. Determine what we are missing FROM THE RELAY.
+				//    (We must REQUEST these from the relay.)
+				const weMissingFromRelay = Array.isArray(obj.want_relay_hashes) ? 
+					obj.want_relay_hashes.slice(0, INVENTORY_MAX_RELAY_HASHES) : []
+
+				// Debug visibility
+				// console.log('relayMissingFromUs:', relayMissingFromUs)
+				// console.log('weMissingFromRelay:', weMissingFromRelay)
+
+				// 5. Determine if we need block suffix from relay.
+				//    (Block negotiation separate from queued negotiation.)
+				const wantBlocksFrom = relayTipIndex > localTipIndex ? localTipIndex + 1 : null
+
+				// 6. If NOTHING is needed in either direction, stop.
+				if (relayMissingFromUs.length === 0 && weMissingFromRelay.length === 0 && wantBlocksFrom == null) {
+					log('Relay and client are already aligned')
+					return
+				}
+
+				// Mark activity to prevent idle timeout
+				conn.lastActivity = safeNow()
+
+				// 7. Build selective PUSH payload (only what relay is missing)
+				//    This is data we SEND TO relay.
+				let queuedToPush = []
+				if (relayMissingFromUs.length > 0) {
+					const localQueued = Array.isArray(localPayload.queued) ? localPayload.queued : []
+
+					queuedToPush = localQueued.filter(m => relayMissingFromUs.includes(m?.relay_hash))
+				}
+
+				// DEBUGGING
+				console.log('[6] WALLET → RELAY sync_req push:', queuedToPush.map(m => m.relay_hash))
+				console.log('[6] WALLET → RELAY sync_req request:', weMissingFromRelay)
+
+				// 8. Send relay sync request.
+				//    This goes: Wallet → Node server.js → Flask /mesh/sync → Node → Wallet
+				sendJson(conn, {
+					t: 'krisys_relay_sync_req_v1',     // Relay sync request
+					id: makeId(),                     // Unique request id
+					crisisId,                         // Crisis pin for safety
+
+					// PUSH: items relay said it is missing
+					queued: queuedToPush,
+
+					// REQUEST: items we are missing from relay
+					want_relay_hashes: weMissingFromRelay,
+
+					// REQUEST: block suffix if relay tip ahead
+					want_blocks_from: wantBlocksFrom,
+
+					// Cap returned blocks per poll
+					max_blocks: RELAY_MAX_BLOCKS_PER_POLL,
+
+					sentAt: safeNow(),
+				})
+
+				log(
+					`sent relay_sync_req push=${queuedToPush.length} ` +
+					`request=${weMissingFromRelay.length} ` +
+					`blocksFrom=${wantBlocksFrom}`
+				)
 
 				return
 			}
@@ -590,6 +610,12 @@ export function P2PProvider({ children, crisisId, familyId }) {
 							confirmed: {}, // Relay does not assert confirmations
 						},
 					})
+
+					// DEBUGGING
+					console.log('[8] WALLET queue after import:',
+						disasterStorage.getMessageQueue({ crisisId, familyId })
+							.map(m => m.relay_hash)
+					)
 
 					log(`imported relay payload id=${id} blocks=${blocks.length} queued=${queued.length}`) // Debug log
 				} catch (e) {

@@ -2698,6 +2698,7 @@ def flush_to_central_internal() -> dict:
 
 	for msg in pending_msgs:
 		relay_hash = msg.get("relay_hash")
+		logger.info("STATION posting relay_hash=%s", relay_hash)
 		try:
 			url = f"{CENTRAL_URL}/transaction"
 			headers = {

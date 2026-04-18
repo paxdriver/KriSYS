@@ -106,8 +106,8 @@ MAX_ADDRESS_LENGTH = 128
 MAX_STATION_ADDRESS_LENGTH = 128
 MAX_TYPE_FIELD_LENGTH = 32
 
-MAX_BLOCKS_PER_PAYLOAD = 10
-MAX_BLOCKS_STORED = 25
+MAX_BLOCKS_PER_PAYLOAD = 25
+MAX_BLOCKS_STORED = 500
 
 # Inventory request cap (relay_hashes only)
 RELAY_HASH_CAP = 1000
@@ -118,8 +118,8 @@ BOTTOM_PRIORITY = 5
 
 # Storage pruning (DEV-TUNED DEFAULTS)
 QUEUED_TTL_MS = 7 * 24 * 60 * 60 * 1000
-QUEUED_HIGH_WATER = 40
-QUEUED_LOW_WATER = 20
+QUEUED_HIGH_WATER = 1000
+QUEUED_LOW_WATER = 100
 QUEUED_SOFT_WATER = int(QUEUED_HIGH_WATER * 0.6) # heads up before the stop, just for soft warnings
 def is_storage_under_pressure(count: int) -> bool:
 	return count >= int(QUEUED_SOFT_WATER)
@@ -1564,13 +1564,43 @@ def mesh_inventory():
 		logger.warning("Mesh request rejected: %s", err)
 		return jsonify({"error": "relay_hashes must be a list"}), 400
 
+	# Bound and sanitize client-provided relay hashes
 	relay_hashes = relay_hashes[:RELAY_HASH_CAP]
 	relay_hashes = [rh for rh in relay_hashes if isinstance(rh, str) and rh.strip()]
 
-	known = get_known_relay_hashes()
-	missing_relay_hashes = [rh for rh in relay_hashes if rh not in known]
+	# ------------------------------------------------------------
+	# QUEUE DOMAIN (UNCONFIRMED PAYLOAD NEGOTIATION)
+	# ------------------------------------------------------------
+	# Only queued (unconfirmed) relay_hash values participate
+	# in payload exchange negotiation.
+	# Confirmed hashes are handled separately for pruning only.
+	# ------------------------------------------------------------
+	with relay_db() as conn:
+		rows = conn.execute("SELECT relay_hash FROM queued").fetchall()
+		queued_known = {r["relay_hash"] for r in rows}
+
+	client_known_set = set(relay_hashes)
+
+	# Relay is missing these from client (client should PUSH)
+	missing_relay_hashes = [
+		rh for rh in relay_hashes
+		if rh not in queued_known
+	]
+
+	# Client is missing these from relay (client should REQUEST)
+	want_relay_hashes = [
+		rh for rh in queued_known
+		if rh not in client_known_set
+	]
+
+	# Safety cap to avoid excessive negotiation payload
+	want_relay_hashes = want_relay_hashes[:RELAY_HASH_CAP]
+
+	# CONFIRMATION DOMAIN (PRUNING NEGOTIATION)
+	# Confirmed relay_hash values do NOT participate in queue  diff logic. They are only sent so clients can prune.
 	confirmed = db_get_confirmed_many(relay_hashes)
 
+	# CHAIN TIP (BLOCK NEGOTIATION)
 	tip = db_get_tip()
 	chain_tip = None
 	if isinstance(tip, dict):
@@ -1580,14 +1610,21 @@ def mesh_inventory():
 			"previous_hash": tip.get("previous_hash"),
 		}
 
-	return jsonify(
-		{
-			"crisisId": db_get_crisis_id(),
-			"missing_relay_hashes": missing_relay_hashes,
-			"confirmed": confirmed,
-			"chain_tip": chain_tip,
-		}
-	), 200
+	# DEBUGGINMG
+	print("[3] RELAY inventory compute")
+	print("    queued_known:", sorted(list(queued_known)))
+	print("    client_known:", sorted(list(client_known_set)))
+	print("    missing_relay_hashes:", sorted(missing_relay_hashes))
+	print("    want_relay_hashes:", sorted(want_relay_hashes))
+	time.sleep(2)
+
+	return jsonify({
+		"crisisId": db_get_crisis_id(),
+		"missing_relay_hashes": missing_relay_hashes, 	# Relay does not have these — client should push full payload
+		"want_relay_hashes": want_relay_hashes,			# Relay has these — client should request full payload
+		"confirmed": confirmed,			# Confirmed relay hashes for client-side which are already on a block
+		"chain_tip": chain_tip,			# Minimal chain tip for deterministic block comparison
+	}), 200
 
 
 @app.route("/mesh/sync", methods=["POST"])
@@ -1792,14 +1829,47 @@ def relay_background_loop():
 
 			if ok:
 				try:
+					# Submit queued messages to HQ
+					queued = db_list_queued(limit=MAX_QUEUED_PER_PAYLOAD)
+					pending = [
+						m for m in queued
+						if (m.get("status") or "pending") == "pending"
+					]
+
+					# for msg in pending:
+					# 	relay_hash = msg.get("relay_hash")
+					# 	try:
+					# 		resp = requests.post(
+					# 			f"{CENTRAL_URL}/transaction",
+					# 			json=msg,
+					# 			timeout=5,
+					# 		)
+
+					# 		if resp.status_code in (200, 201):
+					# 			pass
+					# 			# logger.info("Relay posted relay_hash=%s to HQ", relay_hash)
+					# 			# Do NOT delete here.
+					# 			# Pruning happens after block pull.
+					# 		else:
+					# 			logger.warning(
+					# 				"Relay post failed relay_hash=%s HTTP=%s",
+					# 				relay_hash,
+					# 				resp.status_code,
+					# 			)
+					# 	except Exception as e:
+					# 		logger.warning(
+					# 			"Relay post exception relay_hash=%s err=%s",
+					# 			relay_hash,
+					# 			e,
+					# 		)
+
+					#Pull blocks from HQ
 					stored = relay_pull_from_central()
 					if stored > 0:
 						logger.info("Relay pulled %d new block(s) from HQ", stored)
-				except Exception as e:
-					logger.warning("Relay pull failed: %s", e)
 
-			# Schedule next attempt regardless of outcome
-			RELAY_RUNTIME["next_pull_at_ms"] = now_ms + RELAY_PULL_INTERVAL_MS
+				except Exception as e:
+					logger.warning("Relay sync cycle failed: %s", e)
 
 		time.sleep(0.25)
 

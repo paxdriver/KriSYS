@@ -1,4 +1,5 @@
 # krisys-backend/app.py
+import threading
 import hashlib
 import uuid
 from flask import Flask, request, jsonify, render_template
@@ -35,6 +36,12 @@ def get_db_size_kb():
 	size_bytes = os.path.getsize(db_path)
 	# Convert to Kilobytes (KB)
 	return size_bytes / 1024.0
+
+# ----------------------------
+# SIMPLE AUTO-MINING CONFIG
+# ----------------------------
+AUTO_MINE_ENABLED = True            # Toggle for dev
+AUTO_MINE_INTERVAL_SECONDS = 30     # Mine every 30 seconds
 
 # -----------------------
 # TELEMETRY CONFIGURATION
@@ -2245,6 +2252,58 @@ def get_wallet_public_key(family_id):
 		logger.error(f"Error getting public key: {str(e)}")
 		return jsonify({"error": "Internal server error"}), 500
 
+
+# ----------------------------
+# SIMPLE BACKGROUND MINING LOOP
+# ----------------------------
+def auto_mining_loop():
+	"""
+	Simple deterministic mining loop.
+
+	Every AUTO_MINE_INTERVAL_SECONDS:
+	- If there are pending transactions
+	- Mine a block
+	- Persist it
+	"""
+
+	logger.info("HQ auto-mining loop started (interval=%ss)", AUTO_MINE_INTERVAL_SECONDS)
+
+	while True:
+		try:
+			time.sleep(AUTO_MINE_INTERVAL_SECONDS)
+
+			# Only mine if enabled
+			if not AUTO_MINE_ENABLED:
+				continue
+
+			# Only mine if there are pending transactions
+			if not blockchain.pending_transactions:
+				continue
+
+			logger.info("Auto-mining: pending tx count = %s", len(blockchain.pending_transactions))
+
+			block = blockchain.mine_block()
+			blockchain.save_block(block)
+
+			emit_telemetry_event(
+				source="HQ",
+				severity="info",
+				event_type="blockchain",
+				context={
+					"auto_mined_block_index": block.block_index,
+					"tx_count": len(block.transactions),
+				},
+			)
+
+			logger.info("Auto-mined block #%s", block.block_index)
+
+		except Exception as e:
+			logger.error("Auto-mining error: %s", str(e))
+
+# Start auto-mining thread (dev-safe)
+if AUTO_MINE_ENABLED:
+	miner_thread = threading.Thread(target=auto_mining_loop, daemon=True)
+	miner_thread.start()
 
 if __name__ == '__main__':
 	app.run(host='0.0.0.0', port=5000)

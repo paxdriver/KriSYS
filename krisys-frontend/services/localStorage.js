@@ -786,6 +786,8 @@ class DisasterStorage {
 			!this.isMessageConfirmed({ crisisId, relayHash: msg.relay_hash })
 		)
 
+		console.log('ExportSync relay_hashes:', queuedForSync.map(m => m.relay_hash))
+
 		// Bound queued payload size (prevents huge P2P messages)
 		queuedForSync = queuedForSync.slice(0, this.MAX_QUEUED_PER_PAYLOAD)
 		// Bound confirmed map size deterministically (sorted keys)
@@ -797,7 +799,6 @@ class DisasterStorage {
 			limitedConfirmed[k] = confirmed[k]
 		}
 		// DEV NOTE: WebRTC messages can be large, but you don’t want to depend on that. This bounds risk up-front
-
 
 		// Crisis metadata (if we have it) for sanity-checking that peers are syncing the same crisis / blockchain.
 		const crisisMeta = this.getCrisisMetadata({ crisisId })
