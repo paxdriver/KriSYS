@@ -23,6 +23,11 @@ apiClient.interceptors.request.use(config => {
 
 // Add request interceptor to include dev headers (used in production with verified stations)
 apiClient.interceptors.request.use((config) => {
+    if (config.url?.includes('/health') || config.url?.includes('/blockchain')) {
+        console.log('API CALL:', config.url)
+        console.trace() // DEBUGGING
+    }
+
     // Add rate limit override header if enabled
     if (localStorage.getItem('dev_bypass_rate_limit') === 'true') {
         config.headers['X-Dev-Rate-Override'] = 'true'

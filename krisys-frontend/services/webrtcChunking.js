@@ -278,7 +278,7 @@ export function createChunkSender({ dc, log, onStats } = {}) {
 }
 
 export function createChunkReceiver({ onJson, log, onStats } = {}) {
-	const assemblies = new Map()
+	const assemblies = new Map() // in-progress chunked messages
 
 	const stats = {
 		framesReceived: 0,
@@ -294,8 +294,19 @@ export function createChunkReceiver({ onJson, log, onStats } = {}) {
 		inflight: 0,
 	}
 
-	let lastStatsEmitAt = 0
+	// TEMP HANDLERS: These allow request/response style flows (like sync) without interfering with the normal message pipeline.
+	const tempHandlers = new Set()
 
+	function registerTempHandler(fn) {
+		tempHandlers.add(fn)
+	}
+
+	function unregisterTempHandler(fn) {
+		tempHandlers.delete(fn)
+	}
+
+	// STATS
+	let lastStatsEmitAt = 0
 	const emitStats = (force = false) => {
 		const now = safeNow()
 		if (!force && now - lastStatsEmitAt < STATS_EMIT_THROTTLE_MS) return
@@ -304,11 +315,198 @@ export function createChunkReceiver({ onJson, log, onStats } = {}) {
 		if (typeof onStats === 'function') {
 			try {
 				onStats({ ...stats })
+			} catch {}
+		}
+	}
+
+	// CLEANUP (TTL eviction)
+	const cleanupExpired = () => {
+		const now = safeNow()
+		for (const [id, a] of assemblies.entries()) {
+			if (now - a.lastAt > ASSEMBLY_TTL_MS) {
+				assemblies.delete(id)
+			}
+		}
+		stats.inflight = assemblies.size
+	}
+
+	// LIMIT INFLIGHT ASSEMBLIES
+	const evictIfNeeded = () => {
+		if (assemblies.size < MAX_INFLIGHT_ASSEMBLIES) return
+
+		let oldestId = null
+		let oldestAt = Infinity
+
+		for (const [id, a] of assemblies.entries()) {
+			if (a.lastAt < oldestAt) {
+				oldestAt = a.lastAt
+				oldestId = id
+			}
+		}
+
+		if (oldestId) assemblies.delete(oldestId)
+		stats.inflight = assemblies.size
+	}
+
+	// HANDLE CHUNKED MESSAGE FRAME
+	const handleChunkFrame = async (obj) => {
+		const id = obj.id
+		const seq = obj.seq
+		const total = obj.total
+		const kind = obj.kind || 'unknown'
+
+		// Basic validation
+		if (typeof id !== 'string' || !id || id.length > MAX_ID_LENGTH) return
+		if (typeof obj.b64 !== 'string' || obj.b64.length > MAX_B64_CHARS_PER_CHUNK) return
+		if (typeof seq !== 'number' || typeof total !== 'number') return
+		if (total <= 0 || total > MAX_CHUNKS_PER_MESSAGE) return
+		if (seq < 0 || seq >= total) return
+
+		evictIfNeeded()
+
+		let a = assemblies.get(id)
+
+		// Create new assembly if needed
+		if (!a) {
+			a = {
+				kind,
+				total,
+				createdAt: safeNow(),
+				lastAt: safeNow(),
+				parts: new Array(total).fill(null),
+				received: 0,
+				bytes: 0,
+			}
+			assemblies.set(id, a)
+			stats.inflight = assemblies.size
+		}
+
+		// Reject inconsistent streams
+		if (a.total !== total) {
+			assemblies.delete(id)
+			stats.inflight = assemblies.size
+			return
+		}
+
+		// Ignore duplicate chunks
+		if (a.parts[seq]) return
+
+		let decoded
+		try {
+			decoded = base64UrlDecodeToBytes(obj.b64)
+		} catch {
+			assemblies.delete(id)
+			stats.inflight = assemblies.size
+			return
+		}
+
+		// Safety check
+		if (decoded.length > CHUNK_RAW_BYTES) {
+			assemblies.delete(id)
+			stats.inflight = assemblies.size
+			return
+		}
+
+		a.parts[seq] = decoded
+		a.received += 1
+		a.bytes += decoded.length
+		a.lastAt = safeNow()
+
+		stats.chunkFramesReceived += 1
+		stats.lastRecvAt = safeNow()
+
+		emitStats(false)
+
+		// COMPLETE MESSAGE
+		if (a.received === a.total) {
+			assemblies.delete(id)
+			stats.inflight = assemblies.size
+
+			const bytes = concatBytes(a.parts.filter(Boolean))
+			const json = new TextDecoder().decode(bytes)
+
+			let inner
+			try {
+				inner = JSON.parse(json)
 			} catch {
-				// ignore
+				return
+			}
+
+			stats.chunkMessagesCompleted += 1
+			stats.lastCompleteAt = safeNow()
+
+			emitStats(true)
+
+			// TEMP HANDLERS FIRST (for request/response flows)
+			for (const handler of tempHandlers) {
+				try {
+					handler(inner)
+				} catch (e) {
+					console.warn('temp handler error', e)
+				}
+			}
+
+			// NORMAL HANDLER
+			if (typeof onJson === 'function') {
+				await onJson(inner)
 			}
 		}
 	}
+
+	// HANDLE INCOMING FRAME
+	const handleText = async (text) => {
+		cleanupExpired()
+
+		stats.framesReceived += 1
+		stats.bytesReceived += typeof text === 'string' ? text.length : 0
+		stats.lastRecvAt = safeNow()
+
+		let obj
+		try {
+			obj = JSON.parse(text)
+		} catch {
+			emitStats(false)
+			return
+		}
+
+		// CHUNKED MESSAGE
+		if (obj?.t === 'krisys_chunk_v1') {
+			await handleChunkFrame(obj)
+			return
+		}
+
+		emitStats(false)
+
+		// TEMP HANDLERS FOR DIRECT MESSAGES
+		for (const handler of tempHandlers) {
+			try {
+				handler(obj)
+			} catch (e) {
+				console.warn('temp handler error', e)
+			}
+		}
+
+		// NORMAL HANDLER
+		if (typeof onJson === 'function') {
+			await onJson(obj)
+		}
+	}
+
+	// CLEANUP
+	const destroy = () => {
+		assemblies.clear()
+		tempHandlers.clear()
+		stats.inflight = 0
+	}
+
+	return {
+		handleText,
+		registerTempHandler,
+		unregisterTempHandler,
+		destroy,
+		getStats: () => ({ ...stats }),
+	}
+}
 
 	const cleanupExpired = () => {
 		const now = safeNow()
@@ -458,49 +656,28 @@ export function createChunkReceiver({ onJson, log, onStats } = {}) {
 			}
 
 			emitStats(true)
+			
+			// First give temp handlers a chance
+			for (const handler of tempHandlers) {
+				try {
+					handler(inner)
+				} catch (e) {
+					console.warn('temp handler error', e)
+				}
+			}
 
 			if (typeof onJson === 'function') {
 				await onJson(inner)
 			}
 		}
-	}
 
-	const handleText = async (text) => {
-		cleanupExpired()
-
-		stats.framesReceived += 1
-		stats.bytesReceived += typeof text === 'string' ? text.length : 0
-		stats.lastRecvAt = safeNow()
-
-		// Try parse as JSON. If it fails, ignore.
-		let obj
-		try {
-			obj = JSON.parse(text)
-		} catch {
-			if (typeof log === 'function') log('recv non-json')
-			emitStats(false)
-			return
-		}
-
-		// Chunk frame handling
-		if (obj?.t === 'krisys_chunk_v1') {
-			await handleChunkFrame(obj)
-			return
-		}
-
-		// Non-chunked message
-		if (typeof log === 'function') log(`recv direct t=${obj?.t || 'unknown'}`)
-		emitStats(false)
-
-		if (typeof onJson === 'function') {
-			await onJson(obj)
+		return {
+			handleText,
+			registerTempHandler,
+			unregisterTempHandler,
+			destroy: () => {
+				tempHandlers.clear()
+			}
 		}
 	}
 
-	const destroy = () => {
-		assemblies.clear()
-		stats.inflight = 0
-	}
-
-	return { handleText, destroy, getStats: () => ({ ...stats }) }
-}

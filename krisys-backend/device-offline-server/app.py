@@ -1799,12 +1799,23 @@ def get_pool_inventory_snapshot() -> dict:
 		if isinstance(msg, dict) and msg.get("relay_hash")
 	]
 
+	# return {
+	# 	"version": snapshot.get("version"),
+	# 	"generatedAt": snapshot.get("generatedAt"),
+	# 	"crisisId": snapshot.get("crisisId"),
+	# 	"chain_tip": snapshot.get("chain_tip"),
+	# 	"relay_hashes": relay_hashes,
+	# }
 	return {
 		"version": snapshot.get("version"),
 		"generatedAt": snapshot.get("generatedAt"),
 		"crisisId": snapshot.get("crisisId"),
 		"chain_tip": snapshot.get("chain_tip"),
 		"relay_hashes": relay_hashes,
+
+		# (temporary compatibility layer)
+		"want_relay_hashes": [],
+		"missing_relay_hashes": []
 	}
 # Produce full data snapshot as opposed to inventory which is just a list of relay_hashes and the chain_tip
 def get_full_pool_snapshot() -> dict:

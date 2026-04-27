@@ -745,6 +745,7 @@ def admin_required(f):
 # Test route
 @app.route('/health', methods=['GET'])
 def health():
+	print("CALL /health FROM:", request.remote_addr, request.headers.get('User-Agent'))
 	return jsonify({"role": "backend", "status": "ok"}), 200
 
 # Crisis metadata
@@ -891,6 +892,7 @@ def add_transaction():
 	
 @app.route('/blockchain', methods=['GET'])
 def get_chain():
+	print("CALL /blockchain FROM:", request.remote_addr, request.headers.get('User-Agent'))
 	chain_data = [block.to_dict() for block in blockchain.chain]
 	return jsonify(chain_data), 200
 

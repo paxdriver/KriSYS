@@ -98,6 +98,12 @@ ensureOfferPool()
 
 async function handleIncoming(peerId, msg) {
 	console.log("NODE RECEIVED:", msg?.t)
+
+	const offerObj = ALLOCATED_OFFERS[peerId]
+	if (!offerObj) return
+
+	const sender = createChunkSender({ dc: offerObj.dc })
+
 	if (msg?.t === 'krisys_mesh_sync_req_v1') {
 		const resp = await fetch('http://localhost:5000/mesh/sync', {
 			method: 'POST',
@@ -111,8 +117,6 @@ async function handleIncoming(peerId, msg) {
 
 		const offerObj = ALLOCATED_OFFERS[peerId]
 		if (!offerObj) return
-
-		const sender = createChunkSender({ dc: offerObj.dc })
 
 		sender.sendJson({
 			t: 'krisys_mesh_sync_res_v1',
@@ -141,6 +145,112 @@ async function handleIncoming(peerId, msg) {
 		5. If equal → do nothing
 	*/
 
+
+
+
+
+	// CLIENT → STATION INVENTORY REQUEST
+	if (msg?.t === 'client_to_station_inventory_req') {
+
+		console.log('[STATION] Inventory request received')
+
+		// 1. Ask Flask for station state
+		const resp = await fetch('http://localhost:5000/mesh/inventory', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				crisisId: msg.crisisId,
+				chain_tip: msg.chain_tip || null,
+				relay_hashes: Array.isArray(msg.relay_hashes) ? msg.relay_hashes : [],
+			})
+		})
+
+		const payload = await resp.json()
+
+		// 2. Extract diff results
+		const wantRelay = payload.want_relay_hashes || []      // station HAS these, client may want
+		const missingRelay = payload.missing_relay_hashes || []// station NEEDS these from client
+
+		const stationTip = payload?.chain_tip?.block_index
+		const clientTip = msg?.chain_tip?.block_index
+
+		let wantBlocksFrom = null
+
+		// 3. If station is ahead, client should request blocks
+		if (
+			typeof stationTip === 'number' &&
+			typeof clientTip === 'number' &&
+			stationTip > clientTip
+		) {
+			wantBlocksFrom = clientTip + 1
+		}
+
+		// 4. Respond with ONLY inventory diff (no payloads here)
+		sender.sendJson({
+			t: 'station_to_client_inventory_res',
+			id: msg.id,
+			crisisId: msg.crisisId,
+			want_relay_hashes: wantRelay,
+			missing_relay_hashes: missingRelay,
+			want_blocks_from: wantBlocksFrom,
+			sentAt: Date.now(),
+		})
+
+		console.log(
+			'[STATION] Inventory response:',
+			'want=', wantRelay.length,
+			'missing=', missingRelay.length,
+			'blocksFrom=', wantBlocksFrom
+		)
+
+		return
+	}
+
+	// CLIENT → STATION SYNC REQUEST
+	if (msg?.t === 'client_to_station_sync_req') {
+
+		console.log('[STATION] Sync request received')
+
+		// 1. Forward to Flask /mesh/sync
+		const resp = await fetch('http://localhost:5000/mesh/sync', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				crisisId: msg.crisisId,
+				queued: Array.isArray(msg.queued) ? msg.queued : [],
+				blocks: Array.isArray(msg.blocks) ? msg.blocks : [],
+				want_relay_hashes: Array.isArray(msg.want_relay_hashes) ? msg.want_relay_hashes : [],
+				want_blocks_from: typeof msg.want_blocks_from === 'number' ? msg.want_blocks_from : undefined,
+				max_blocks: typeof msg.max_blocks === 'number' ? msg.max_blocks : undefined,
+			})
+		})
+
+		const syncPayload = await resp.json()
+
+		// 2. Respond with payload
+		sender.sendJson({
+			t: 'station_to_client_sync_res',
+			id: msg.id,
+			crisisId: msg.crisisId,
+			blocks: syncPayload.blocks || [],
+			queued: syncPayload.queued || [],
+			sentAt: Date.now(),
+		})
+
+		console.log(
+			'[STATION] Sync response:',
+			'blocks=', (syncPayload.blocks || []).length,
+			'queued=', (syncPayload.queued || []).length
+		)
+
+		return
+	}
+
+
+
+
+
+	// DEV NOTE: OLD VERSION BEING DEPRECATED FOR FULL SYNC EXCHANGE AND COMPARISON
 	if (msg?.t === 'krisys_mesh_inventory_v1') {
 
 		console.log("STATION RTC RECEIVED inventory")

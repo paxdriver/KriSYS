@@ -182,6 +182,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			return
 		}
 
+		// DEV NOTE: TODO - FULL FLOW
 		// Relay client path
 		if (conn.transportRole === 'relay_client') {
 			log(`fullSync: triggering relay inventory on ${connId}`)
@@ -189,7 +190,8 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			return
 		}
 
-		// Station client path
+		// STATION CLIENT
+		// ==============================
 		if (conn.transportRole === 'station_client') {
 			log(`fullSync: triggering station inventory on ${connId}`)
 			sendStationInventoryNow(conn)
@@ -233,12 +235,13 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		}
 	}, [])
 
+	
 
-	const sendStationInventoryNow = useCallback((conn) => {
-		if (!conn) return
+	// CLIENT SYNC WITH CONNECTED STATION
+	const sendStationInventoryNow = useCallback(async (conn) => {
 
-		if (conn.transportRole !== 'station_client') {
-			log('station sync: blocked (not station_client)')
+		if (!conn || conn.transportRole !== 'station_client') {
+			log('station sync: invalid connection')
 			return
 		}
 
@@ -252,30 +255,137 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			return
 		}
 
-		log(`station sync: sending inventory on ${conn.id}`)
+		log(`station sync: starting on ${conn.id}`)
 
 		const localPayload = disasterStorage.exportSyncPayload({
 			crisisId,
 			familyId,
 		})
 
-		const id = makeId()
+		const relayHashes = (localPayload.queued || [])
+			.map(m => m?.relay_hash)
+			.filter(Boolean)
 
-		conn.sender.sendJson({
-			t: 'krisys_mesh_inventory_v1',
-			id,
-			crisisId,
-			chain_tip: localPayload.chain_tip || null,
-			relay_hashes: (localPayload.queued || [])
-				.map(m => m?.relay_hash)
-				.filter(Boolean)
-				.slice(0, INVENTORY_MAX_RELAY_HASHES),
-			sentAt: safeNow(),
+		// -------------------------
+		// STEP 1: INVENTORY
+		// -------------------------
+		const inventoryId = makeId()
+
+		const inventoryRes = await new Promise((resolve) => {
+
+			const handler = (obj) => {
+				if (obj?.t === 'station_to_client_inventory_res' && obj.id === inventoryId) {
+					conn.receiver?.unregisterTempHandler?.(handler)
+					resolve(obj)
+				}
+			}
+
+			conn.receiver?.registerTempHandler?.(handler)
+
+			// SEND AFTER handler is registered (avoids race)
+			conn.sender.sendJson({
+				t: 'client_to_station_inventory_req',
+				id: inventoryId,
+				crisisId,
+				chain_tip: localPayload.chain_tip || null,
+				relay_hashes: relayHashes,
+				sentAt: Date.now(),
+			})
+
+			setTimeout(() => {
+				conn.receiver?.unregisterTempHandler?.(handler)
+				resolve(null)
+			}, 5000)
 		})
 
-		conn.lastActivity = safeNow()
+		if (!inventoryRes) {
+			log('[SYNC] Station inventory timeout')
+			return
+		}
+
+		log('[SYNC] Station inventory received')
+
+		const missingFromStation = inventoryRes.want_relay_hashes || []
+		const stationNeeds = inventoryRes.missing_relay_hashes || []
+
+		let queuedToPush = []
+
+		if (stationNeeds.length > 0) {
+			queuedToPush = (localPayload.queued || []).filter(m =>
+				stationNeeds.includes(m?.relay_hash)
+			)
+		}
+
+		// -------------------------
+		// STEP 2: SYNC
+		// -------------------------
+		const syncId = makeId()
+
+		const syncRes = await new Promise((resolve) => {
+
+			const handler = (obj) => {
+				if (obj?.t === 'station_to_client_sync_res' && obj.id === syncId) {
+					conn.receiver?.unregisterTempHandler?.(handler)
+					resolve(obj)
+				}
+			}
+
+			conn.receiver?.registerTempHandler?.(handler)
+
+			conn.sender.sendJson({
+				t: 'client_to_station_sync_req',
+				id: syncId,
+				crisisId,
+				queued: queuedToPush,
+				want_relay_hashes: missingFromStation,
+				want_blocks_from: inventoryRes.want_blocks_from,
+				max_blocks: 10,
+				sentAt: Date.now(),
+			})
+
+			setTimeout(() => {
+				conn.receiver?.unregisterTempHandler?.(handler)
+				resolve(null)
+			}, 5000)
+		})
+
+		if (!syncRes) {
+			log('[SYNC] Station sync timeout')
+			return
+		}
+
+		log('[SYNC] Station sync received',
+			'blocks=', (syncRes.blocks || []).length,
+			'queued=', (syncRes.queued || []).length)
+
+		// -------------------------
+		// STEP 3: IMPORT
+		// -------------------------
+		try {
+			await disasterStorage.importSyncPayloadAsync({
+				crisisId,
+				familyId,
+				payload: {
+					version: 1,
+					deviceId: 'station_peer',
+					crisisId,
+					generatedAt: Date.now(),
+					chain_tip: null,
+					blocks: syncRes.blocks || [],
+					queued: syncRes.queued || [],
+					confirmed: {},
+				},
+			})
+
+			log('[SYNC] Station import complete')
+
+		} catch (e) {
+			log('[SYNC] Station import failed: ' + (e?.message || e))
+		}
 
 	}, [crisisId, familyId, log])
+
+
 
 	const sendRelayInventoryNow = useCallback( async (conn) => {
 		// Guard: require a connection object
@@ -411,15 +521,19 @@ export function P2PProvider({ children, crisisId, familyId }) {
 
 				// RELAY CLIENT
 				if (conn.transportRole === 'relay_client') {
-					if (!conn.relayPollInterval) {
-						log(`Starting relay polling for ${conn.id}`)
-
-						conn.relayPollInterval = setInterval(() => {
-							if (conn.status !== 'connected') return
-							sendRelayInventoryNow(conn)
-						}, RELAY_POLL_INTERVAL_MS)
-					}
+					// Manual sync only (no automatic polling)
+					log(`Relay connection ${conn.id} ready (manual sync only)`)
 				}
+				// if (conn.transportRole === 'relay_client') {
+				// 	if (!conn.relayPollInterval) {
+				// 		log(`Starting relay polling for ${conn.id}`)
+
+				// 		conn.relayPollInterval = setInterval(() => {
+				// 			if (conn.status !== 'connected') return
+				// 			sendRelayInventoryNow(conn)
+				// 		}, RELAY_POLL_INTERVAL_MS)
+				// 	}
+				// }
 
 				// STATION CLIENT
 				if (conn.transportRole === 'station_client') {
@@ -1271,6 +1385,174 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		log('Disconnected all connections')
 	}, [disconnectById, log])
 	// -------------------
+
+	// ==============================
+	// FULL STATION SYNC (NEW PROTOCOL)
+	// ==============================
+	const runStationSync = useCallback(async (connId) => {
+
+		const conn = connectionsRef.current.get(connId)
+		if (!conn || conn.transportRole !== 'station_client') {
+			log('runStationSync: invalid connection')
+			return
+		}
+
+		if (conn.status !== 'connected') {
+			log('runStationSync: connection not ready')
+			return
+		}
+
+		if (!conn.sender) {
+			log('runStationSync: no sender')
+			return
+		}
+
+		log('[SYNC] Starting station sync')
+
+		// ------------------------------
+		// STEP 1: INVENTORY REQUEST
+		// ------------------------------
+		const localPayload = disasterStorage.exportSyncPayload({
+			crisisId,
+			familyId,
+		})
+
+		const relayHashes = (localPayload.queued || [])
+			.map(m => m?.relay_hash)
+			.filter(Boolean)
+
+		const inventoryId = makeId()
+
+		conn.sender.sendJson({
+			t: 'client_to_station_inventory_req',
+			id: inventoryId,
+			crisisId,
+			chain_tip: localPayload.chain_tip || null,
+			relay_hashes: relayHashes,
+			sentAt: Date.now(),
+		})
+
+		log('[SYNC] Sent inventory request')
+
+		// ------------------------------
+		// STEP 2: WAIT FOR RESPONSE
+		// ------------------------------
+		const waitForInventory = () => new Promise((resolve) => {
+
+			const handler = (obj) => {
+				if (obj?.t === 'station_to_client_inventory_res' && obj.id === inventoryId) {
+					resolve(obj)
+				}
+			}
+
+			conn.receiver?.registerTempHandler?.(handler)
+
+			setTimeout(() => resolve(null), 5000)
+		})
+
+		const inventoryRes = await waitForInventory()
+
+		if (!inventoryRes) {
+			log('[SYNC] Inventory response timeout')
+			return
+		}
+
+		log('[SYNC] Received inventory response')
+
+		// ------------------------------
+		// STEP 3: BUILD SYNC REQUEST
+		// ------------------------------
+		const missingFromStation = inventoryRes.want_relay_hashes || []
+		const stationNeeds = inventoryRes.missing_relay_hashes || []
+
+		let queuedToPush = []
+
+		if (stationNeeds.length > 0) {
+			queuedToPush = (localPayload.queued || []).filter(m =>
+				stationNeeds.includes(m?.relay_hash)
+			)
+		}
+
+		const syncId = makeId()
+
+		conn.sender.sendJson({
+			t: 'client_to_station_sync_req',
+			id: syncId,
+			crisisId,
+
+			// PUSH (what station needs)
+			queued: queuedToPush,
+
+			// REQUEST (what we want)
+			want_relay_hashes: missingFromStation,
+
+			want_blocks_from: inventoryRes.want_blocks_from,
+			max_blocks: 10,
+
+			sentAt: Date.now(),
+		})
+
+		log(
+			'[SYNC] Sent sync request',
+			'push=', queuedToPush.length,
+			'request=', missingFromStation.length
+		)
+
+		// ------------------------------
+		// STEP 4: WAIT FOR SYNC RESPONSE
+		// ------------------------------
+		const waitForSync = () => new Promise((resolve) => {
+
+			const handler = (obj) => {
+				if (obj?.t === 'station_to_client_sync_res' && obj.id === syncId) {
+					resolve(obj)
+				}
+			}
+
+			conn.receiver?.registerTempHandler?.(handler)
+
+			setTimeout(() => resolve(null), 5000)
+		})
+
+		const syncRes = await waitForSync()
+
+		if (!syncRes) {
+			log('[SYNC] Sync response timeout')
+			return
+		}
+
+		log(
+			'[SYNC] Received sync response',
+			'blocks=', (syncRes.blocks || []).length,
+			'queued=', (syncRes.queued || []).length
+		)
+
+		// ------------------------------
+		// STEP 5: IMPORT DATA
+		// ------------------------------
+		try {
+			await disasterStorage.importSyncPayloadAsync({
+				crisisId,
+				familyId,
+				payload: {
+					version: 1,
+					deviceId: 'station_peer',
+					crisisId,
+					generatedAt: Date.now(),
+					chain_tip: null,
+					blocks: syncRes.blocks || [],
+					queued: syncRes.queued || [],
+					confirmed: {},
+				},
+			})
+
+			log('[SYNC] Import complete')
+
+		} catch (e) {
+			log('[SYNC] Import failed: ' + (e?.message || e))
+		}
+
+	}, [crisisId, familyId, log])
 
 	const sendPing = useCallback(() => {
 		for (const [id, conn] of connectionsRef.current.entries()) {

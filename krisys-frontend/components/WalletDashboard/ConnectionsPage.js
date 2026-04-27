@@ -80,7 +80,8 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 	const [loadingPools, setLoadingPools] = useState(false)
 	const [selectedOffer, setSelectedOffer] = useState('') // DEV NOTE: no longer manually entering offer codes, this is done via connect buttons
 
-	const localCounts = useMemo(() => getLocalCounts({ crisisId, familyId }), [lastResult, crisisId, familyId])
+	const localCounts = useMemo(() => getLocalCounts({ crisisId, familyId }), [lastResult])
+	// const localCounts = useMemo(() => getLocalCounts({ crisisId, familyId }), [lastResult, crisisId, familyId])
 
 	const setPreset = (url, label) => {
 		const nextUrl = typeof url === 'string' ? url.trim() : ''

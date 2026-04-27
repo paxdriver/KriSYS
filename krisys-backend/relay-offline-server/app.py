@@ -1811,83 +1811,78 @@ def relay_answer():
 
 	return jsonify(resp.json()), 200
 
+def relay_sync_cycle():
+	"""
+	Relay can sync with HQ but only when called explicity. 
+	
+	DEV NOTE: Consider background loop on low cadence.
+	"""
+	logger.info("Relay sync cycle triggered")
 
-def relay_background_loop():
-	logger.warning("Relay auto-pull loop started (enabled=%s)",RELAY_AUTO_PULL,)
+	ok, err = relay_can_reach_central()
+	RELAY_RUNTIME["central_ok"] = bool(ok)
+	RELAY_RUNTIME["last_err"] = err
 
-	while not RELAY_STOP_EVENT.is_set():
-		now_ms = _now_ms()
+	if not ok:
+		logger.info("Relay cannot reach HQ: %s", err)
+		return
 
-		if not RELAY_AUTO_PULL:
-			time.sleep(1.0)
-			continue
+	try:
+		# Submit queued messages to HQ
+		queued = db_list_queued(limit=MAX_QUEUED_PER_PAYLOAD)
 
-		if now_ms >= int(RELAY_RUNTIME["next_pull_at_ms"] or 0):
-			ok, err = relay_can_reach_central()
-			RELAY_RUNTIME["central_ok"] = bool(ok)
-			RELAY_RUNTIME["last_err"] = err
+		pending = [
+			m for m in queued
+			if (m.get("status") or "pending") == "pending"
+		]
 
-			if ok:
-				try:
-					# Submit queued messages to HQ
-					queued = db_list_queued(limit=MAX_QUEUED_PER_PAYLOAD)
-					pending = [
-						m for m in queued
-						if (m.get("status") or "pending") == "pending"
-					]
+		for msg in pending:
+			relay_hash = msg.get("relay_hash")
 
-					# for msg in pending:
-					# 	relay_hash = msg.get("relay_hash")
-					# 	try:
-					# 		resp = requests.post(
-					# 			f"{CENTRAL_URL}/transaction",
-					# 			json=msg,
-					# 			timeout=5,
-					# 		)
+			try:
+				resp = requests.post(
+					f"{CENTRAL_URL}/transaction",
+					json=msg,
+					timeout=5,
+				)
 
-					# 		if resp.status_code in (200, 201):
-					# 			pass
-					# 			# logger.info("Relay posted relay_hash=%s to HQ", relay_hash)
-					# 			# Do NOT delete here.
-					# 			# Pruning happens after block pull.
-					# 		else:
-					# 			logger.warning(
-					# 				"Relay post failed relay_hash=%s HTTP=%s",
-					# 				relay_hash,
-					# 				resp.status_code,
-					# 			)
-					# 	except Exception as e:
-					# 		logger.warning(
-					# 			"Relay post exception relay_hash=%s err=%s",
-					# 			relay_hash,
-					# 			e,
-					# 		)
+				if resp.status_code not in (200, 201):
+					logger.warning(
+						"Relay post failed relay_hash=%s HTTP=%s",
+						relay_hash,
+						resp.status_code,
+					)
 
-					#Pull blocks from HQ
-					stored = relay_pull_from_central()
-					if stored > 0:
-						logger.info("Relay pulled %d new block(s) from HQ", stored)
+			except Exception as e:
+				logger.warning(
+					"Relay post exception relay_hash=%s err=%s",
+					relay_hash,
+					e,
+				)
 
-				except Exception as e:
-					logger.warning("Relay sync cycle failed: %s", e)
+		# Pull blocks from HQ
+		stored = relay_pull_from_central()
 
-		time.sleep(0.25)
+		if stored > 0:
+			logger.info("Relay pulled %d new block(s) from HQ", stored)
+
+	except Exception as e:
+		logger.warning("Relay sync cycle failed: %s", e)
 
 _relay_bg_started = False
 
-def start_relay_background_once():
-	global _relay_bg_started
+# def start_relay_background_once():
+# 	global _relay_bg_started
 
-	logger.info(f'RELAY STATE IS: {relay_state()}')
+# 	logger.info(f'RELAY STATE IS: {relay_state()}')
 
-	if _relay_bg_started:
-		return
-	_relay_bg_started = True
+# 	if _relay_bg_started:
+# 		return
+# 	_relay_bg_started = True
 
-	t = threading.Thread(target=relay_background_loop, daemon=True)
-	t.start()
-
-start_relay_background_once()
+# 	t = threading.Thread(target=relay_sync_cycle, daemon=True)
+# 	t.start()
+# start_relay_background_once()
 
 if __name__ == "__main__":
 	app.run(host="0.0.0.0", port=5000, debug=True)
