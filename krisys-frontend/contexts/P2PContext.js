@@ -235,7 +235,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		}
 	}, [])
 
-	
+
 
 	// CLIENT SYNC WITH CONNECTED STATION
 	const sendStationInventoryNow = useCallback(async (conn) => {
@@ -304,10 +304,15 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		}
 
 		log('[SYNC] Station inventory received')
+		
+		const stationRelayHashes = new Set(inventoryRes.relay_hashes || [])
+		const clientRelayHashes = new Set(relayHashes)
 
-		const missingFromStation = inventoryRes.want_relay_hashes || []
-		const stationNeeds = inventoryRes.missing_relay_hashes || []
+		// What client is missing FROM station
+		const missingFromStation = [...stationRelayHashes].filter( rh => !clientRelayHashes.has(rh) )
 
+		// What station is missing FROM client
+		const stationNeeds = [...clientRelayHashes].filter( rh => !stationRelayHashes.has(rh) )
 		let queuedToPush = []
 
 		if (stationNeeds.length > 0) {
