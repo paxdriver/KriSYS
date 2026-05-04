@@ -232,6 +232,32 @@ Next peer scheduled later.
 No further coordination required.
 
 ---
+### Core Invariants Summary
+#### Invariant 1 - Confirmation truth
+If relay_hash is in a verified block
+→ it MUST be in confirmed
+→ it MUST NOT be in queued
+#### Invariant 2 - Queue correctness
+queued ∩ confirmed = ∅
+#### Invariant 3 - Convergence
+If two nodes have same chain_tip
+→ eventually queued sets converge to same state
+#### Invariant 4 - No phantom requests
+If queued is empty
+→ want_relay_hashes MUST be empty
+#### Invariant 5 - Block authority
+Only blocks can confirm relay_hash
+
+#### Debugging Sync Logic
+Invariant 1 broken → check confirmation logic
+Invariant 3 broken → check block propagation
+Invariant 4 broken → check inventory logic
+
+Does relay have block? → no → propagation bug
+Does relay confirm? → no → confirmation bug
+Does relay prune? → no → queue bug
+
+---
 
 ## 7. Convergence Model
 Convergence is incremental.
