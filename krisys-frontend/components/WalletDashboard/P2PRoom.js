@@ -13,6 +13,7 @@ export default function P2PRoom() {
 	const {
 		getConnectionsSnapshot,		// manual refresh button for the active connections
 		fullSyncByConnDerivedTransportRole,	// manual sync on specific active connection
+		disconnectById,	// manually close an active connection
 
 		canWebRTC,
 		error,
@@ -150,6 +151,16 @@ export default function P2PRoom() {
 									marginBottom: '8px',
 								}}
 							>
+								{/* Disconnect this specific connection */}
+								<button
+									type="button"
+									className="btn"
+									style={{ marginTop: '6px', background: '#b33' }} // red-ish for clarity
+									onClick={() => disconnectById(conn.id)} // pass connection id
+								>
+									Disconnect
+								</button>
+
 								{/* SYNC THIS CONNECTION */}
 								<button
 									type="button"
@@ -171,9 +182,7 @@ export default function P2PRoom() {
 								<div><strong>Station Poll:</strong> {String(conn.stationPollActive)}</div>
 								<div>
 									<strong>Last Activity:</strong>{' '}
-									{conn.lastActivity
-										? new Date(conn.lastActivity).toLocaleTimeString()
-										: 'n/a'}
+									{conn.lastActivity ? new Date(conn.lastActivity).toLocaleTimeString() : 'n/a'}
 								</div>
 							</div>
 						))

@@ -1136,7 +1136,13 @@ def _apply_confirmations_from_block(block: dict) -> None:
 			continue
 
 		rh = tx.get("relay_hash")
-		if not isinstance(rh, str) or not rh:
+
+		# strict validation + normalization
+		if not isinstance(rh, str):
+			continue
+
+		rh = rh.strip()  # normalize whitespace
+		if not rh:  # catches '' and ' '
 			continue
 
 		info = {
@@ -1224,8 +1230,19 @@ def process_incoming_blocks(incoming_blocks: list[dict]) -> int:
 			existing_hash = db_get_block_hash(b["block_index"])
 			if existing_hash:
 				continue
+
 			db_put_block_verified(b)
-			_apply_confirmations_from_block(b)
+
+			# skip confirmation pass if block has no valid relay_hash entries
+			txs = b.get("transactions") or []
+			has_valid_relay = any(
+				isinstance(tx.get("relay_hash"), str) and tx.get("relay_hash").strip()
+				for tx in txs if isinstance(tx, dict)
+			)
+
+			if has_valid_relay:
+				_apply_confirmations_from_block(b)
+
 			stored += 1
 
 		return stored
@@ -1247,7 +1264,17 @@ def process_incoming_blocks(incoming_blocks: list[dict]) -> int:
 			continue
 
 		db_put_block_verified(b)
-		_apply_confirmations_from_block(b)
+
+		# skip confirmation pass if block has no valid relay_hash entries
+		txs = b.get("transactions") or []
+		has_valid_relay = any(
+			isinstance(tx.get("relay_hash"), str) and tx.get("relay_hash").strip()
+			for tx in txs if isinstance(tx, dict)
+		)
+
+		if has_valid_relay:
+			_apply_confirmations_from_block(b)
+
 		current_tip = b
 		stored += 1
 
@@ -1611,12 +1638,19 @@ def mesh_inventory():
 		}
 
 	# DEBUGGINMG
-	print("[3] RELAY inventory compute")
-	print("    queued_known:", sorted(list(queued_known)))
-	print("    client_known:", sorted(list(client_known_set)))
-	print("    missing_relay_hashes:", sorted(missing_relay_hashes))
-	print("    want_relay_hashes:", sorted(want_relay_hashes))
-	time.sleep(2)
+	print("[3] RELAY inventory computed")
+	print(f"  queued_count: {len(queued_known)}")
+	print(f"  client_count: {len(client_known_set)}")
+	print(f"  missing_from_relay (client → relay): {len(missing_relay_hashes)}")
+	print(f"  missing_from_client (relay → client): {len(want_relay_hashes)}")
+	# show small samples instead of full dump
+	if missing_relay_hashes: print("  sample missing_from_relay:", missing_relay_hashes[:3])
+	if want_relay_hashes:print("  sample missing_from_client:", want_relay_hashes[:3])
+	# print("[3] RELAY inventory computed")
+	# print("    queued_known:", sorted(list(queued_known)))
+	# print("    client_known:", sorted(list(client_known_set)))
+	# print("    missing_relay_hashes:", sorted(missing_relay_hashes))
+	# print("    want_relay_hashes:", sorted(want_relay_hashes))
 
 	return jsonify({
 		"crisisId": db_get_crisis_id(),

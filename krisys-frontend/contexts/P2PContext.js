@@ -529,16 +529,6 @@ export function P2PProvider({ children, crisisId, familyId }) {
 					// Manual sync only (no automatic polling)
 					log(`Relay connection ${conn.id} ready (manual sync only)`)
 				}
-				// if (conn.transportRole === 'relay_client') {
-				// 	if (!conn.relayPollInterval) {
-				// 		log(`Starting relay polling for ${conn.id}`)
-
-				// 		conn.relayPollInterval = setInterval(() => {
-				// 			if (conn.status !== 'connected') return
-				// 			sendRelayInventoryNow(conn)
-				// 		}, RELAY_POLL_INTERVAL_MS)
-				// 	}
-				// }
 
 				// STATION CLIENT
 				if (conn.transportRole === 'station_client') {
@@ -631,25 +621,31 @@ export function P2PProvider({ children, crisisId, familyId }) {
 				const relayTipIndex = typeof obj.chain_tip?.block_index === 'number' ?
 					obj.chain_tip.block_index : -1
 
-				// 3. Determine what the relay says it is missing FROM US.
-				//    (We must PUSH these queued items to the relay.)
+				// 3. Determine what the relay says it is missing FROM US
+				// (We must PUSH these queued items to the relay)
 				const relayMissingFromUs = Array.isArray(obj.missing_relay_hashes) ? 
 					obj.missing_relay_hashes.slice(0, INVENTORY_MAX_RELAY_HASHES) : []
 
-				// 4. Determine what we are missing FROM THE RELAY.
-				//    (We must REQUEST these from the relay.)
+				// 4. Determine what we are missing FROM THE RELAY
+				// (We must REQUEST these from the relay)
 				const weMissingFromRelay = Array.isArray(obj.want_relay_hashes) ? 
 					obj.want_relay_hashes.slice(0, INVENTORY_MAX_RELAY_HASHES) : []
 
-				// Debug visibility
-				// console.log('relayMissingFromUs:', relayMissingFromUs)
-				// console.log('weMissingFromRelay:', weMissingFromRelay)
-
-				// 5. Determine if we need block suffix from relay.
-				//    (Block negotiation separate from queued negotiation.)
+				// 5. Determine if we need block suffix from relay
+				// (Block negotiation separate from queued negotiation)
 				const wantBlocksFrom = relayTipIndex > localTipIndex ? localTipIndex + 1 : null
 
-				// 6. If NOTHING is needed in either direction, stop.
+				// If wallet is ahead, push blocks to relay
+				let blocksToPush = []
+				if (localTipIndex > relayTipIndex) {
+					const allBlocks = disasterStorage.getBlockchain({ crisisId }) || []
+					blocksToPush = allBlocks.filter(b =>
+						typeof b.block_index === 'number' &&
+						b.block_index > relayTipIndex
+					).slice(0, RELAY_MAX_BLOCKS_PER_POLL)
+				}
+
+				// 6. If NOTHING is needed in either direction, stop
 				if (relayMissingFromUs.length === 0 && weMissingFromRelay.length === 0 && wantBlocksFrom == null) {
 					log('Relay and client are already aligned')
 					return
@@ -659,7 +655,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 				conn.lastActivity = safeNow()
 
 				// 7. Build selective PUSH payload (only what relay is missing)
-				//    This is data we SEND TO relay.
+				// This is data we SEND TO relay
 				let queuedToPush = []
 				if (relayMissingFromUs.length > 0) {
 					const localQueued = Array.isArray(localPayload.queued) ? localPayload.queued : []
@@ -674,12 +670,15 @@ export function P2PProvider({ children, crisisId, familyId }) {
 				// 8. Send relay sync request.
 				//    This goes: Wallet → Node server.js → Flask /mesh/sync → Node → Wallet
 				sendJson(conn, {
-					t: 'krisys_relay_sync_req_v1',     // Relay sync request
-					id: makeId(),                     // Unique request id
-					crisisId,                         // Crisis pin for safety
+					t: 'krisys_relay_sync_req_v1',	// Relay sync request
+					id: makeId(),	// Unique request id
+					crisisId,		// Crisis pin for safety
 
 					// PUSH: items relay said it is missing
 					queued: queuedToPush,
+
+					// push blocks if we are ahead
+					blocks: blocksToPush,
 
 					// REQUEST: items we are missing from relay
 					want_relay_hashes: weMissingFromRelay,
@@ -696,7 +695,8 @@ export function P2PProvider({ children, crisisId, familyId }) {
 				log(
 					`sent relay_sync_req push=${queuedToPush.length} ` +
 					`request=${weMissingFromRelay.length} ` +
-					`blocksFrom=${wantBlocksFrom}`
+					`blocksFrom=${wantBlocksFrom}` +
+					`blocksToPush=${blocksToPush}`
 				)
 
 				return

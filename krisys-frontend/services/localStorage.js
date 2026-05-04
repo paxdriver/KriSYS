@@ -251,9 +251,9 @@ class DisasterStorage {
 		// Build a quick lookup set of existing relay_hash values in our queue
 		const localQueue = this.getMessageQueue({ crisisId, familyId })
 		// use namespaced queue + confirmed
-		const localRelayHashes = new Set(
-			localQueue.map((m) => m && m.relay_hash)
-				.filter((rh) => typeof rh === 'string' && rh.length > 0)
+		const localRelayHashes = new Set( localQueue.map((m) =>
+				typeof m?.relay_hash === 'string' ? 
+					m.relay_hash.trim() : null).filter((rh) => rh)
 		)
 
 		// Helper to check string length
@@ -268,8 +268,13 @@ class DisasterStorage {
 				break
 			}
 
-			const relayHash = msg.relay_hash
-			if (!isString(relayHash) || !relayHash.trim()) {
+			// Omit empty strings from results
+			let relayHash = msg.relay_hash
+			if (!isString(relayHash)) {
+				continue
+			}
+			relayHash = relayHash.trim()
+			if (!relayHash) {
 				continue
 			}
 
@@ -561,8 +566,14 @@ class DisasterStorage {
 
 		const queue = this._getJson(key, [])
 
+		const normalizedRelayHash =
+			typeof message.relay_hash === 'string'
+				? message.relay_hash.trim()
+				: message.relay_hash
+
 		queue.push({
 			...message,
+			relay_hash: normalizedRelayHash,
 			queuedAt: Date.now(),
 			attempts: 0,
 			status: 'pending',
@@ -742,15 +753,31 @@ class DisasterStorage {
 
 		for (const tx of transactions) {
 			const relayHash = tx.relay_hash
-			if (!relayHash || confirmed[relayHash]) {
+
+			// HARD FILTER: must be a non-empty string
+			// - filters out '', null, undefined, non-strings
+			// - prevents pollution of confirmed map
+			if (typeof relayHash !== 'string') {
 				continue
 			}
 
-			confirmed[relayHash] = {
-				confirmedAt: Date.now(),
-				txId: tx.transaction_id,
-				timestampPosted: tx.timestamp_posted,
+			const cleanRelayHash = relayHash.trim()
+
+			if (cleanRelayHash === '') {
+				continue
 			}
+
+			// Skip if already confirmed
+			if (confirmed[cleanRelayHash]) {
+				continue
+			}
+
+			confirmed[cleanRelayHash] = {
+				confirmedAt: Date.now(), // local confirmation time (ms)
+				txId: tx.transaction_id, // reference to on-chain tx
+				timestampPosted: tx.timestamp_posted, // canonical timestamp (seconds)
+			}
+
 			updated = true
 		}
 
@@ -758,11 +785,20 @@ class DisasterStorage {
 			// write back to shared-domain confirmed relays
 			const key = this._sharedKey({ crisisId, bucket: 'confirmed_relays' })
 			this._setJson(key, confirmed)
-			// Fire event to trigger re-render
-			this._emit(this.EVENTS.CONFIRMED_UPDATED, { source: 'syncConfirmedFromTransactions', })
 
+			// trigger UI updates
+			this._emit(this.EVENTS.CONFIRMED_UPDATED, {
+				source: 'syncConfirmedFromTransactions',
+			})
+
+			// Prune queue AFTER confirmations updated
 			this.pruneConfirmedFromQueue({ crisisId, familyId })
 		}
+
+		console.log('[DEBUG] MATCH CHECK:',
+			transactions.map(tx => tx.relay_hash),
+			this.getMessageQueue({ crisisId, familyId }).map(m => m.relay_hash)
+		)
 	}
 
 	/*  Build a payload to sync with another device (in DEV use 2 different browsers so they don't share localStorage)
@@ -902,7 +938,9 @@ class DisasterStorage {
 		let queueChanged = false
 
 		for (const msg of incomingQueued) {
-			const relayHash = msg.relay_hash
+			let relayHash = msg.relay_hash
+			if (!isString(relayHash)) continue
+			relayHash = relayHash.trim()
 			if (!relayHash) continue
 
 			// Skip if already confirmed (locally or after merge above)
@@ -954,6 +992,11 @@ class DisasterStorage {
 		//    transactions as confirmed, and prune the local queue.
 		const blocks = this.getBlockchain({ crisisId }) || []
 		const recentBlocks = blocks // DEV NOTE: optimize later
+
+		// DEBUGGING ---------------------------------------------
+		console.log('[DEBUG] BLOCK TX RELAY HASHES:', recentBlocks.map(b => (b.transactions || []).map(tx => tx.relay_hash)))
+		// DEBUGGING ---------------------------------------------
+		
 		const recentTxs = recentBlocks.flatMap((b) => b.transactions || [])
 		this.syncConfirmedFromTransactions({
 			crisisId,
