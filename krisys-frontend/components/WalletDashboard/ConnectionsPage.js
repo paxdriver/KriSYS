@@ -2,13 +2,13 @@
 'use client'
 import { useMemo, useEffect, useState } from 'react'
 import { syncWithMeshHost } from '@/services/meshSync'
+import { performStationHandshake } from '@/services/stationHandshake'
 import { disasterStorage } from '@/services/localStorage'
 import { createJoinCode, parseJoinCode } from '@/services/poolJoinCode'
 import { createPublicKeyShareCode, parsePublicKeyShareCode } from '@/services/walletPublicKeyShare'
 import { showTextQr } from '@/utils/qr'
 import QRScanner from '../Scanner/QRScanner'
 import { parseStationQr } from '@/services/stationQr'
-import { performStationHandshake } from '@/services/stationHandshake'
 import P2PRoom from './P2PRoom'
 import { useP2P } from '@/contexts/P2PContext'
 
@@ -63,8 +63,6 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 	const [keyCodeInput, setKeyCodeInput] = useState('')
 	const [scannerMode, setScannerMode] = useState(null)      // join, key, or null
 	const [scannerOpen, setScannerOpen] = useState(false)
-	const [syncing, setSyncing] = useState(false)
-	const [lastResult, setLastResult] = useState(null)
 	const [error, setError] = useState(null)
 
 	const crisis = useMemo(() => disasterStorage.getCrisisMetadata(), [])
@@ -75,13 +73,11 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 	const [trustedStations, setTrustedStations] = useState(() => crisisId ? disasterStorage.getStations({ crisisId }) : {})
 	const [selectedStationId, setSelectedStationId] = useState(null)
 
-	const { connectToStation, connectToRelay, sendPing } = useP2P()
+	const { connectToStation, connectToRelay, lastResult, setLastResult, sendPing, setSyncing, syncing } = useP2P()
 	const [stationPools, setStationPools] = useState({})
 	const [loadingPools, setLoadingPools] = useState(false)
-	const [selectedOffer, setSelectedOffer] = useState('') // DEV NOTE: no longer manually entering offer codes, this is done via connect buttons
 
 	const localCounts = useMemo(() => getLocalCounts({ crisisId, familyId }), [lastResult])
-	// const localCounts = useMemo(() => getLocalCounts({ crisisId, familyId }), [lastResult, crisisId, familyId])
 
 	const setPreset = (url, label) => {
 		const nextUrl = typeof url === 'string' ? url.trim() : ''
@@ -96,7 +92,6 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 			// DEV NOTE: TODO - THESE MUST BE SCOPED AND WRAPPED IN disasterStorage CLASS IN services/localStorage.js!!!!
 			localStorage.setItem(STORAGE_LAST_HOST_URL, nextUrl)
 			localStorage.setItem(STORAGE_LAST_HOST_LABEL, nextLabel)
-			// DEV NOTE: TODO - THESE MUST BE SCOPED AND WRAPPED IN disasterStorage CLASS IN services/localStorage.js!!!!
 		}
 		catch {
 			// ignore
@@ -145,12 +140,9 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 
 		try {
 			const station = trustedStations[selectedStationId] // UI to test connection to station as if user scanned station's qr code
-			// const res = await fetch(`${hostUrl}/station/pools`)
 			const res = await fetch(`${hostUrl}/station/peers`) // UI to test trusted station exposing LAN-connected stations the user has not yet scanned
 			if (!res.ok) throw new Error("Failed to fetch station's known trusted peers (on same LAN)")
-			// if (!res.ok) throw new Error('Failed to fetch pools')
 			const data = await res.json()
-			// setStationPools(data.pools || [])
 			setStationPools(data || {})
 		} 
 		catch (e) {
@@ -160,77 +152,45 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 			setLoadingPools(false)
 		}
 	}
+
+	// Save a station from pool list into trusted storage
+	const saveStationFromPool = async (peer) => {
+		try {
+			if (!peer?.base_url) {
+				throw new Error('Missing base_url for station')
+			}
+
+			// Fetch full trusted identity from station
+			const res = await fetch(`${peer.base_url}/station/profile`)
+			if (!res.ok) {
+				throw new Error('Failed to fetch station profile')
+			}
+
+			const profile = await res.json()
+
+			// Validate proper structure (same as addStationFromJson)
+			if (!profile.station_id || !profile.station_public_key || !profile.fingerprint) {
+				throw new Error('Invalid station profile')
+			}
+
+			// Save using existing logic
+			disasterStorage.saveStation({
+				crisisId,
+				station: profile,
+			})
+
+			setTrustedStations(disasterStorage.getStations({ crisisId }))
+
+		} catch (e) {
+			setError(e?.message || String(e))
+		}
+	}
+
 	// END HELPER FUNCS
 	// ------------------------------
 
-	// const runSync = async () => { // this is for stations
-	// 	setSyncing(true)
-	// 	setError(null)
-	// 	setLastResult(null)
-
-	// 	const trimmedUrl = (hostUrl || '').trim()
-	// 	if (!trimmedUrl) {
-	// 		setError('Enter a host URL')
-	// 		setSyncing(false)
-	// 		return
-	// 	}
-
-	// 	try {
-	// 		try {
-	// 			localStorage.setItem(STORAGE_LAST_HOST_URL, trimmedUrl)
-	// 			localStorage.setItem(STORAGE_LAST_HOST_LABEL, (hostLabel || '').trim())
-	// 		}
-	// 		catch {
-	// 			// ignore
-	// 		}
-
-	// 		// Label is just UI sugar (helps logs + results read nicer)
-	// 		const label = (hostLabel || '').trim() || (
-	// 			trimmedUrl === DEFAULT_STATION_URL ? 'Station' : 
-	// 				trimmedUrl === DEFAULT_RELAY_URL ? 'Relay' : 'Host')
-	// 		console.log(label)
-	// 		console.log(`trimmedUrl in connectionspage: ${trimmedUrl}`)
-
-	// 		// const selectedStation = trustedStations[Object.keys(trustedStations)[0]]
-	// 		// if (!selectedStation) {
-	// 		// 	setError('No trusted station selected')
-	// 		// 	setSyncing(false)
-	// 		// 	return
-	// 		// }
-	// 		if (!selectedStationId) {
-	// 			setError('No trusted station selected')
-	// 			setSyncing(false)
-	// 			return
-	// 		}
-
-	// 		const selectedStation = trustedStations[selectedStationId]
-
-	// 		await performStationHandshake({
-	// 			baseUrl: trimmedUrl,
-	// 			storedStation: selectedStation,
-	// 		})
-
-	// 		const result = await syncWithMeshHost({ baseUrl: trimmedUrl, label, familyId })
-	// 		setLastResult({
-	// 			...result,
-	// 			at: Date.now(),
-	// 			hostUrl: trimmedUrl,
-	// 			label,
-	// 		})
-
-	// 		if (onRefresh) onRefresh()
-	// 	}
-	// 	catch (e) {
-	// 		setError(e?.message || String(e))
-	// 	}
-	// 	finally {
-	// 		setSyncing(false)
-	// 	}
-	// }
-
 	const handleGenerateJoinCode = async () => {
 		setError(null)
-
 		try {
 			const crisisMeta = disasterStorage.getCrisisMetadata()
 
@@ -399,18 +359,12 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 		<div id="connections-page" className="page">
 			<div className="page-header">
 				<h1 className="page-title">Connections</h1>
-				<button className="btn" onClick={ ()=> {
-					// runSync // in the process of converting to an automatic loop instead of manually running sync after connected to station
-					}} disabled={syncing}>
-					{syncing ? 'Syncing...' : 'Sync Now'}
-				</button>
-
 				<button
 					className="btn"
 					type="button"
 					onClick={sendPing}
 				>
-					SEND PING
+					SEND PING TO ALL
 				</button>
 			</div>
 
@@ -435,6 +389,205 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 			)}
 
 			{error && <div className="error">{error}</div>}
+			
+			{/* STATION HANDSHAKE */}
+			<div className="card">
+				<div className="card-header">
+					<h3 className="card-title">Trusted Stations</h3>
+				</div>
+				<div className="card-body">
+
+					{/* Dev helper: Fetch profile */}
+					<div style={{ marginBottom: '1rem' }}>
+						<button
+							className="btn"
+							type="button"
+							onClick={async () => {
+								try {
+									const profile = await fetchStationProfile()
+									setStationJsonInput(JSON.stringify(profile, null, 2))
+								} catch (e) {
+									setError(e?.message || String(e))
+								}
+							}}
+						>
+							Fetch Station Profile
+						</button>
+					</div>
+
+					{/* Paste / Scan station JSON */}
+					<div className="form-group">
+						<label>Paste station profile JSON</label>
+						<textarea
+							className="form-input"
+							rows="6"
+							value={stationJsonInput}
+							onChange={(e) => setStationJsonInput(e.target.value)}
+							placeholder='{"station_id": "..."}'
+						/>
+					</div>
+
+					<div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+						<button
+							className="btn"
+							type="button"
+							onClick={addStationFromJson}
+							disabled={!stationJsonInput.trim()}
+						>
+							Add Station
+						</button>
+
+						<button
+							className="btn"
+							type="button"
+							onClick={() => openScanner('station')}
+						>
+							Scan Station QR
+						</button>
+
+						<button
+							className="btn"
+							type="button"
+							onClick={connectToStation}
+						>
+							CONNECT TO STATION
+						</button>
+					</div>
+
+					{/* Station List */}
+					{Object.keys(trustedStations).length === 0 ? (
+						<div className="privacy-notice">No trusted stations yet.</div>
+					) : (
+						Object.values(trustedStations).map((station) => {
+							const isActive = station.station_id === selectedStationId
+
+							return (
+								<div key={station.station_id} 
+									className="contact-item"
+									style={{
+										borderLeft: isActive ? '4px solid var(--primary)' : '4px solid transparent',
+										paddingLeft: '0.5rem',
+									}}
+								>
+									<div>
+										<strong>{station.station_id}</strong>
+										<div className="contact-address">
+											{station.fingerprint?.slice(0, 16)}...
+										</div>
+									</div>
+
+									<div style={{ display: 'flex', gap: '0.5rem' }}>
+										<button className="btn-icon save" type="button"
+											onClick={() => {
+												setSelectedStationId(station.station_id)
+												setHostUrl(DEFAULT_STATION_URL)
+												setHostLabel(station.station_id)
+											}}
+										>
+											{isActive ? 'Selected' : 'Select'}
+										</button>
+
+										<button className="btn" type="button"
+											onClick={() => removeStation(station.station_id)}
+											style={{ background: 'var(--danger)' }}
+										>
+											Remove
+										</button>
+
+										<button className="btn" type="button"
+											style={{ background: 'var(--danger)' }}
+											onClick={async () => {
+												const res = await fetch(`${hostUrl}/station/qr`)
+												const data = await res.json()
+												await showTextQr({
+													text: data.qr_string,
+													displayName: 'Station QR',
+													title: 'Station QR Code',
+													heading: 'Scan to Trust Station',
+												})
+											}}
+										>
+											Show Station QR
+										</button>
+									</div>
+								</div>
+							)
+						})
+					)}
+					
+				</div>
+			</div>
+
+			{/* AVAILABLE POOLS */}
+				<hr style={{ margin: '12px 0', opacity: 0.2 }} />
+
+				<div>
+					<div style={{ fontWeight: 700, marginBottom: '6px' }}>
+						Available Pools
+					</div>
+
+					<h3>Available Station Pools</h3>
+					{Array.isArray(stationPools?.peers) && stationPools.peers.length === 0 && (
+						<p>No station pools found.</p>
+					)}
+					Active connections: {stationPools?.activePeers ?? 'unknown'}
+					<hr />
+					<br />
+					{Array.isArray(stationPools?.peers) && stationPools.peers.map((peer) => {
+						const isSaved = !!trustedStations[peer.station_id]
+
+						return (
+							<div key={peer.station_id} style={{ marginBottom: 12 }}>
+								<strong>{peer.name || 'Station Pool'}</strong>
+								<br />
+								Peer Pool ID: {peer.station_id}
+								<br />
+								Active connections: {peer.activePeers ?? 'unknown'}
+								<hr />
+								<div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+									<button
+										onClick={async () => {
+											setHostUrl(peer.base_url)
+											setHostLabel(peer.station_id)
+											setSelectedStationId(peer.station_id)
+
+											await connectToStation()
+										}}
+									>
+										Connect
+									</button>
+									{/* Save / Remove toggle */}
+									{isSaved ? (
+										<button
+											className="btn"
+											style={{ background: 'var(--danger)' }}
+											onClick={() => removeStation(peer.station_id)}
+										>
+											Remove
+										</button>
+									) : (
+										<button
+											className="btn"
+											onClick={() => saveStationFromPool(peer)}
+										>
+											Save
+										</button>
+									)}
+								</div>
+							</div>
+						)}
+					)}
+
+					<button
+						className="btn"
+						type="button"
+						onClick={fetchStationPools}
+						disabled={!selectedStationId || loadingPools}
+						style={{ marginBottom: '10px' }}
+					>
+						{loadingPools ? 'Loading...' : 'Refresh Pools'}
+					</button>
+				</div>
 
 			<div className="card-grid">
 				<div className="card">
@@ -446,7 +599,8 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 							<label>Paste join code</label>
 							<textarea
 								className="form-input"
-								rows="4"
+								style={{fontSize: "10px"}}
+								rows="6"
 								value={joinCodeInput}
 								onChange={(e) => setJoinCodeInput(e.target.value)}
 								placeholder="krisys:join:v1:..."
@@ -602,125 +756,6 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 					</div>
 				</div>
 
-				{/* STATION HANDSHAKE */}
-				<div className="card">
-					<div className="card-header">
-						<h3 className="card-title">Trusted Stations</h3>
-					</div>
-					<div className="card-body">
-
-						{/* Dev helper: Fetch profile */}
-						<div style={{ marginBottom: '1rem' }}>
-							<button
-								className="btn"
-								type="button"
-								onClick={async () => {
-									try {
-										const profile = await fetchStationProfile()
-										setStationJsonInput(JSON.stringify(profile, null, 2))
-									} catch (e) {
-										setError(e?.message || String(e))
-									}
-								}}
-							>
-								Fetch Station Profile
-							</button>
-						</div>
-
-						{/* Paste / Scan station JSON */}
-						<div className="form-group">
-							<label>Paste station profile JSON</label>
-							<textarea
-								className="form-input"
-								rows="6"
-								value={stationJsonInput}
-								onChange={(e) => setStationJsonInput(e.target.value)}
-								placeholder='{"station_id": "..."}'
-							/>
-						</div>
-
-						<div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-							<button
-								className="btn"
-								type="button"
-								onClick={addStationFromJson}
-								disabled={!stationJsonInput.trim()}
-							>
-								Add Station
-							</button>
-
-							<button
-								className="btn"
-								type="button"
-								onClick={() => openScanner('station')}
-							>
-								Scan Station QR
-							</button>
-						</div>
-
-						{/* Station List */}
-						{Object.keys(trustedStations).length === 0 ? (
-							<div className="privacy-notice">No trusted stations yet.</div>
-						) : (
-							Object.values(trustedStations).map((station) => {
-								const isActive = station.station_id === selectedStationId
-
-								return (
-									<div key={station.station_id} 
-										className="contact-item"
-										style={{
-											borderLeft: isActive ? '4px solid var(--primary)' : '4px solid transparent',
-											paddingLeft: '0.5rem',
-										}}
-									>
-										<div>
-											<strong>{station.station_id}</strong>
-											<div className="contact-address">
-												{station.fingerprint?.slice(0, 16)}...
-											</div>
-										</div>
-
-										<div style={{ display: 'flex', gap: '0.5rem' }}>
-											<button className="btn-icon save" type="button"
-												onClick={() => {
-													setSelectedStationId(station.station_id)
-													setHostUrl(DEFAULT_STATION_URL)
-													setHostLabel(station.station_id)
-												}}
-											>
-												{isActive ? 'Selected' : 'Select'}
-											</button>
-
-											<button className="btn" type="button"
-												onClick={() => removeStation(station.station_id)}
-												style={{ background: 'var(--danger)' }}
-											>
-												Remove
-											</button>
-
-											<button className="btn" type="button"
-												onClick={async () => {
-													const res = await fetch(`${hostUrl}/station/qr`)
-													const data = await res.json()
-													await showTextQr({
-														text: data.qr_string,
-														displayName: 'Station QR',
-														title: 'Station QR Code',
-														heading: 'Scan to Trust Station',
-													})
-												}}
-											>
-												Show Station QR
-											</button>
-										</div>
-									</div>
-								)
-							})
-						)}
-						
-					</div>
-				</div>
-
 				<div className="card">
 					<div className="card-header">
 						<h3 className="card-title">Local Cache</h3>
@@ -728,7 +763,7 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 					<div className="card-body">
 						<div>Blocks cached: {localCounts.blockCount}</div>
 						<div>Queued pending: {localCounts.queuedPendingCount}</div>
-						<div>Confirmed relays: {localCounts.confirmedCount}</div>
+						<div>Confirmed messages: {localCounts.confirmedCount}</div>
 					</div>
 				</div>
 			</div>
@@ -741,74 +776,40 @@ export default function ConnectionsPage({ onRefresh, walletData }) {
 					{!lastResult ? (
 						<div className="privacy-notice">No sync run yet.</div>
 					) : (
-						<div>
-							<div>
-								Host: {lastResult.label} ({lastResult.hostUrl})
+						<div style={{
+							fontSize: '12px',           // smaller text
+							lineHeight: '1.9',
+							wordBreak: 'break-all',     // forces long strings to wrap
+							overflowWrap: 'anywhere',   // modern wrap fallback
+							maxWidth: '100%',
+							padding: '8px',
+							background: '#111',
+							color: '#ddd',
+							borderRadius: '6px'
+						}}>
+							<div>Host: {lastResult?.label} ({lastResult?.hostUrl})</div>
+							<div>Time: {new Date(lastResult?.at).toLocaleString()}</div>
+							<div>Type: {lastResult?.type}</div>
+							<div>Connection ID: {lastResult?.connId}</div>
+							<div>Connection Object: 
+								<pre style={{
+									marginTop: '4px',
+									fontSize: '11px',
+									whiteSpace: 'pre-wrap',	// wrap JSON
+									wordBreak: 'break-word',
+									maxHeight: '250px',		// prevent huge overflow
+									overflowY: 'auto',		// scroll if large
+									background: '#000',
+									padding: '6px',
+									borderRadius: '4px'
+								}}>
+									{lastResult?.connObj}
+								</pre>
 							</div>
-							<div>Time: {new Date(lastResult.at).toLocaleString()}</div>
-							<div>Sent queued to host: {lastResult.sentQueuedCount}</div>
-							<div>Host blocks returned: {lastResult.hostBlocksCount}</div>
-							<div>Host queued returned: {lastResult.hostQueuedCount}</div>
-							<div>Host tip: {lastResult.hostTip?.block_index ?? 'n/a'}</div>
 						</div>
 					)}
 				</div>
 			</div>
-				{/* AVAILABLE POOLS */}
-				<hr style={{ margin: '12px 0', opacity: 0.2 }} />
-
-				<div>
-					<div style={{ fontWeight: 700, marginBottom: '6px' }}>
-						Available Pools
-					</div>
-
-					<h3>Available Station Pools</h3>
-					{Array.isArray(stationPools?.peers) && stationPools.peers.length === 0 && (
-						<p>No station pools found.</p>
-					)}
-					Active connections: {stationPools?.activePeers ?? 'unknown'}
-					<hr />
-					<br />
-					{Array.isArray(stationPools?.peers) && stationPools.peers.map((peer) => (
-						<div key={peer.station_id} style={{ marginBottom: 12 }}>
-							<strong>{peer.name || 'Station Pool'}</strong>
-							<br />
-							Peer Pool ID: {peer.station_id}
-							<br />
-							Active connections: {peer.activePeers ?? 'unknown'}
-							<hr />
-							<button
-								onClick={async () => {
-									setHostUrl(peer.base_url)
-									setHostLabel(peer.station_id)
-									setSelectedStationId(peer.station_id)
-
-									await connectToStation()
-								}}
-							>
-								Connect
-							</button>
-						</div>
-					))}
-
-					<button
-						className="btn"
-						type="button"
-						onClick={fetchStationPools}
-						disabled={!selectedStationId || loadingPools}
-						style={{ marginBottom: '10px' }}
-					>
-						{loadingPools ? 'Loading...' : 'Refresh Pools'}
-					</button>
-
-					<button
-						className="btn"
-						type="button"
-						onClick={connectToStation}
-					>
-						CONNECT TO STATION
-					</button>
-				</div>
 
 		</div>
 	)

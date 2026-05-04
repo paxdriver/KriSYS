@@ -96,6 +96,9 @@ export function P2PProvider({ children, crisisId, familyId }) {
 	const [remoteOfferInput, setRemoteOfferInput] = useState('')
 	const [remoteAnswerInput, setRemoteAnswerInput] = useState('')
 	const [logLines, setLogLines] = useState([])
+	
+	const [syncing, setSyncing] = useState(false)	// setting button disabled while sync runs
+	const [lastResult, setLastResult] = useState(null) // setting a simple viewer for status updates
 
 	const [metrics, setMetrics] = useState(null) 	// { send: {bytesSent,...}, recv: {bytesReceived,...} }
 
@@ -473,14 +476,12 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			}
 	}
 
-
 	useEffect(() => {
 		emitP2PStatus({
 			active: getAnyConnectedConnections(),
 			metrics: metrics || null,
 		})
 	}, [emitP2PStatus, metrics])
-
 
 	const reset = useCallback(() => {
 		log("RESET CALLED")
@@ -1337,6 +1338,14 @@ export function P2PProvider({ children, crisisId, familyId }) {
 	// Disconnection Helpers
 	const disconnectById = useCallback( id => {
 		const conn = connectionsRef.current.get(id)
+		setLastResult({
+			at: Date.now(),
+			label: 'disconnected connection',
+			hostUrl: 'TO-DO',
+			type: 'ping',
+			connId: conn?.id.toString(),
+			connObj: JSON.stringify(conn, null, 2),
+		})
 		if (!conn) return
 
 		try { conn.sender?.destroy?.() } catch {}
@@ -1572,6 +1581,40 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			}
 		}
 	}, [log])
+	// Send ping to a specific connection only
+	const sendPingToConnection = useCallback((connId) => {
+		if (!connId || typeof connId !== 'string') {
+			log('ping: invalid connId')
+			return
+		}
+
+		const conn = connectionsRef.current.get(connId)
+
+		if (!conn) {
+			log(`ping: connection not found (${connId})`)
+			return
+		}
+
+		if (conn.status !== 'connected') {
+			log(`ping: connection ${connId} not connected`)
+			return
+		}
+
+		try {
+			conn.sender?.sendJson({
+				t: 'krisys_p2p_ping',
+				at: safeNow(),
+			})
+
+			log(`sent ping to ${connId}`)
+
+			// mark activity so idle timeout doesn’t kill active test
+			conn.lastActivity = safeNow()
+
+		} catch (e) {
+			log(`ping failed for ${connId}: ${e?.message || e}`)
+		}
+	}, [log])
 
 	const value = useMemo(() => {
 		return {
@@ -1598,6 +1641,8 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			error,
 			metrics,
 			logLines,
+			lastResult,
+			setLastResult,
 
 			reset,
 			connectToStation,
@@ -1606,6 +1651,9 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			joinWithOffer,
 			hostApplyAnswer,
 			sendPing,
+			sendPingToConnection,
+			syncing,
+			setSyncing,
 
 			getConnectionsSnapshot,
 			fullSyncByConnDerivedTransportRole,
@@ -1623,6 +1671,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		hostApplyAnswer,
 		joinWithOffer,
 		logLines,
+		lastResult,
 		metrics,
 		offerCode,
 		pushOnlyOnJoin,
@@ -1630,6 +1679,8 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		remoteOfferInput,
 		reset,
 		sendPing,
+		sendPingToConnection,
+		syncing,
 	])
 
 	return <P2PContext.Provider value={value}>{children}</P2PContext.Provider>

@@ -794,11 +794,6 @@ class DisasterStorage {
 			// Prune queue AFTER confirmations updated
 			this.pruneConfirmedFromQueue({ crisisId, familyId })
 		}
-
-		console.log('[DEBUG] MATCH CHECK:',
-			transactions.map(tx => tx.relay_hash),
-			this.getMessageQueue({ crisisId, familyId }).map(m => m.relay_hash)
-		)
 	}
 
 	/*  Build a payload to sync with another device (in DEV use 2 different browsers so they don't share localStorage)

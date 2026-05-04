@@ -4,36 +4,24 @@
 import { useState } from 'react'
 import QRScanner from '../Scanner/QRScanner'
 import { showTextQr } from '@/utils/qr'
-import { disasterStorage } from '@/services/localStorage'
 import { useP2P } from '@/contexts/P2PContext'
 
 export default function P2PRoom() {
-	const crisisId = disasterStorage.getCrisisMetadata()?.id || null
-
 	const {
 		getConnectionsSnapshot,		// manual refresh button for the active connections
 		fullSyncByConnDerivedTransportRole,	// manual sync on specific active connection
 		disconnectById,	// manually close an active connection
-
-		canWebRTC,
+		sendPingToConnection, // manually send ping to this active connection
 		error,
 		metrics,
-
-		offerCode,
-		answerCode,
-		remoteOfferInput,
-		remoteAnswerInput,
 		pushOnlyOnJoin,
-
+		lastResult,
+		setLastResult,
 		logLines,
-
 		setRemoteOfferInput,
 		setRemoteAnswerInput,
-		setPushOnlyOnJoin,
-
-		createHostOffer,
-		joinWithOffer,
-		hostApplyAnswer,
+		setSyncing,
+		syncing,
 	} = useP2P()
 
 	const [scannerOpen, setScannerOpen] = useState(false)
@@ -71,27 +59,6 @@ export default function P2PRoom() {
 		}
 
 		setScanTarget(null)
-	}
-
-	const onJoinCreateAnswer = async () => {
-		const raw = (remoteOfferInput || '').trim()
-		if (!raw) return
-
-		const mode =
-			window.confirm(
-				'Join room in push-only mode?\n\n' +
-					'OK = Push only (no download)\n' +
-					'Cancel = Full sync (push + pull)'
-			) === true
-
-		setPushOnlyOnJoin(mode)
-		await joinWithOffer(raw, { pushOnly: mode })
-	}
-
-	const onHostApplyAnswer = async () => {
-		const raw = (remoteAnswerInput || '').trim()
-		if (!raw) return
-		await hostApplyAnswer(raw)
 	}
 
 	const sendBytes = metrics?.send?.bytesSent ?? 0
@@ -156,7 +123,15 @@ export default function P2PRoom() {
 									type="button"
 									className="btn"
 									style={{ marginTop: '6px', background: '#b33' }} // red-ish for clarity
-									onClick={() => disconnectById(conn.id)} // pass connection id
+									onClick={() => {
+										setLastResult({
+											at: Date.now(),
+											type: 'disconnected',
+											connId: conn.id,
+											connObj: conn,
+										})
+										disconnectById(conn.id)
+									}} // pass connection id
 								>
 									Disconnect
 								</button>
@@ -166,9 +141,39 @@ export default function P2PRoom() {
 									type="button"
 									className="btn"
 									style={{ marginTop: '6px' }}
-									onClick={() => fullSyncByConnDerivedTransportRole(conn.id)}
+									onClick={async () => {
+										await fullSyncByConnDerivedTransportRole(conn.id)
+										setLastResult({
+											at: Date.now(),
+											label: 'sync connection',
+											hostUrl: 'TO-DO',
+											type: 'manual-sync',
+											connId: conn.id.toString(),
+											connObj: JSON.stringify(conn, null, 2),
+										})
+									}}
 								>
 									Full Sync
+								</button>
+
+								{/* SEND PING TO THIS CONNECTION */}
+								<button
+									type="button"
+									className="btn"
+									style={{ marginTop: '6px' }}
+									onClick={() => {
+										sendPingToConnection(conn.id)
+										setLastResult({
+											at: Date.now(),
+											label: 'sync connection',
+											hostUrl: 'TO-DO',
+											type: 'ping',
+											connId: conn.id.toString(),
+											connObj: JSON.stringify(conn, null, 2),
+										})
+									}}
+								>
+									Ping
 								</button>
 								
 								{/* THIS CONNECTION'S DETAILS */}
@@ -203,144 +208,22 @@ export default function P2PRoom() {
 				)}
 
 				<hr style={{ margin: '14px 0', opacity: 0.2 }} />
-				{/* DEPRECATING MANUALY COPY-PASTE OF OFFER ANDSWER JOIN METHOD - replace with connect bottom and sync loops */}
-				<div style={{ display: 'grid', gap: '14px' }}>
-					<div>
+					<div style={{ display: 'grid', gap: '14px' }}>
 						<div>
-							<div style={{ fontWeight: 700, marginBottom: '6px' }}>Log</div>
+							<div style={{ fontWeight: 700, marginBottom: '6px', textAlign:"center" }}>Log</div>
 							<textarea
 								className="form-input"
-								rows="8"
+								rows="16"
 								value={logLines.join('\n')}
+								style={{fontSize: "10px" }}
 								readOnly
 							/>
 						</div>
-						
-						<div style={{ fontWeight: 700, marginBottom: '6px' }}>
-							Host (create room)
+						<div className="privacy-notice">
+							Logs show message metadata (type/id/chunks/bytes), not full payload
+							contents.
 						</div>
-
-						<div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-							<button
-								type="button"
-								className="btn"
-								onClick={createHostOffer}
-								disabled={!canWebRTC}
-							>
-								Create Offer
-							</button>
-
-							<button
-								type="button"
-								className="btn"
-								onClick={() => showQr(offerCode, 'WebRTC Offer')}
-								disabled={!offerCode}
-							>
-								Show Offer QR
-							</button>
-						</div>
-
-						<textarea
-							className="form-input"
-							rows="4"
-							value={offerCode}
-							readOnly
-							placeholder="Offer code will appear here"
-							style={{ marginTop: '8px' }}
-						/>
-
-						<div style={{ marginTop: '10px', fontWeight: 700 }}>
-							Host: Paste/Scan Answer
-						</div>
-
-						<div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-							<button
-								type="button"
-								className="btn"
-								onClick={() => scanInto('answer')}
-								disabled={!canWebRTC}
-							>
-								Scan Answer
-							</button>
-
-							<button
-								type="button"
-								className="btn"
-								onClick={onHostApplyAnswer}
-								disabled={!remoteAnswerInput.trim()}
-							>
-								Apply Answer
-							</button>
-						</div>
-
-						<textarea
-							className="form-input"
-							rows="3"
-							value={remoteAnswerInput}
-							onChange={(e) => setRemoteAnswerInput(e.target.value)}
-							placeholder="Paste answer here"
-							style={{ marginTop: '8px' }}
-						/>
 					</div>
-
-					<div>
-						<div style={{ fontWeight: 700, marginBottom: '6px' }}>
-							Join (connect to room)
-						</div>
-
-						<div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-							<button
-								type="button"
-								className="btn"
-								onClick={() => scanInto('offer')}
-								disabled={!canWebRTC}
-							>
-								Scan Offer
-							</button>
-
-							<button
-								type="button"
-								className="btn"
-								onClick={onJoinCreateAnswer}
-								disabled={!remoteOfferInput.trim()}
-							>
-								Create Answer
-							</button>
-
-							<button
-								type="button"
-								className="btn"
-								onClick={() => showQr(answerCode, 'WebRTC Answer')}
-								disabled={!answerCode}
-							>
-								Show Answer QR
-							</button>
-						</div>
-
-						<textarea
-							className="form-input"
-							rows="3"
-							value={remoteOfferInput}
-							onChange={(e) => setRemoteOfferInput(e.target.value)}
-							placeholder="Paste offer here"
-							style={{ marginTop: '8px' }}
-						/>
-
-						<textarea
-							className="form-input"
-							rows="4"
-							value={answerCode}
-							readOnly
-							placeholder="Answer code will appear here"
-							style={{ marginTop: '8px' }}
-						/>
-					</div>
-
-					<div className="privacy-notice">
-						Logs show message metadata (type/id/chunks/bytes), not full payload
-						contents.
-					</div>
-				</div>
 			</div>
 		</div>
 	)

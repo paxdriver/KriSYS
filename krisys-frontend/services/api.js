@@ -13,93 +13,93 @@ const ADMIN_TOKEN = process.env.NEXT_PUBLIC_ADMIN_TOKEN // this should be taken 
 
 // Block all Axios requests when in offline-dev mode
 apiClient.interceptors.request.use(config => {
-  if (typeof window !== 'undefined' && window.KRISYS_OFFLINE_MODE) {
-    // Simulate network down
-    return Promise.reject(new Error('Simulated offline mode'))
-  }
-  return config
+if (typeof window !== 'undefined' && window.KRISYS_OFFLINE_MODE) {
+	// Simulate network down
+	return Promise.reject(new Error('Simulated offline mode'))
+}
+return config
 })
 // DEV NOTE: SIMULATED OFFLINE MODE FOR DEVELOPMENT ONLINE
 
 // Add request interceptor to include dev headers (used in production with verified stations)
 apiClient.interceptors.request.use((config) => {
-    if (config.url?.includes('/health') || config.url?.includes('/blockchain')) {
-        console.log('API CALL:', config.url)
-        console.trace() // DEBUGGING
-    }
+	if (config.url?.includes('/health') || config.url?.includes('/blockchain')) {
+		console.log('API CALL:', config.url)
+		// console.trace() // DEBUGGING
+	}
 
-    // Add rate limit override header if enabled
-    if (localStorage.getItem('dev_bypass_rate_limit') === 'true') {
-        config.headers['X-Dev-Rate-Override'] = 'true'
-    }
-    // Add admin token for admin endpoints
-    if (config.url?.startsWith('/admin/')) {
-        // DEV NOTE: For development, we'll read the master private key from a known location
-        // In production, this would be handled more securely
-        config.headers['X-Admin-Token'] = ADMIN_TOKEN
-    }
-    
-    return config
+	// Add rate limit override header if enabled
+	if (localStorage.getItem('dev_bypass_rate_limit') === 'true') {
+		config.headers['X-Dev-Rate-Override'] = 'true'
+	}
+	// Add admin token for admin endpoints
+	if (config.url?.startsWith('/admin/')) {
+		// DEV NOTE: For development, we'll read the master private key from a known location
+		// In production, this would be handled more securely
+		config.headers['X-Admin-Token'] = ADMIN_TOKEN
+	}
+	
+	return config
 })
 
 // Add response interceptor for better error handling
 apiClient.interceptors.response.use(
-    (response) => response,
-    (error) => {
-        // Check if it's a network error
-        if (!error.response && (error.code === 'ECONNREFUSED' || error.message === 'Simulated offline mode' || error.message.includes('Network Error'))) {
-            error.isNetworkError = true
-        }
-        return Promise.reject(error)
-    }
+	(response) => response,
+	(error) => {
+		// Check if it's a network error
+		if (!error.response && (error.code === 'ECONNREFUSED' || error.message === 'Simulated offline mode' || error.message.includes('Network Error'))) {
+			error.isNetworkError = true
+		}
+		return Promise.reject(error)
+	}
 )
 
 export const api = {
-    // Blockchain endpoints
-    getBlockchain: () => apiClient.get(`${API_BASE}/blockchain`),
-    getCrisisInfo: () => apiClient.get(`${API_BASE}/crisis`),
-    getCurrentPolicy: () => apiClient.get('/policy'),
-  
-    // Wallet endpoints
-    createWallet: (numMembers, passphrase) => 
-        axios.post(`${API_BASE}/wallet`, { 
-            num_members: numMembers,
-            passphrase: passphrase 
-        }),
-    getWallet: (familyId) => apiClient.get(`${API_BASE}/wallet/${familyId}`),
-    getWalletTransactions: (familyId) => apiClient.get(`${API_BASE}/wallet/${familyId}/transactions`),
-    getWalletQR: (familyId, address) => apiClient.get(`${API_BASE}/wallet/${familyId}/qr/${address}`),
-        
-    // Auth endpoints
-    unlockWallet: (familyId, passphrase) => 
-        axios.post(`${API_BASE}/auth/unlock`, {
-            family_id: familyId,
-            passphrase: passphrase || "" // Empty for dev
-        }).then(res => res.data)
-        .catch(error => {
-            console.error("Unlock error:", error.response?.data);
-            throw new Error(error.response?.data?.error || "Unlock failed");
-        }),
+	// Blockchain endpoints
+	getBlockchain: () => apiClient.get(`${API_BASE}/blockchain`),
+	getCrisisInfo: () => apiClient.get(`${API_BASE}/crisis`),
+	getCurrentPolicy: () => apiClient.get('/policy'),
 
-    // Transaction endpoints
-    addTransaction: (transaction) => apiClient.post('/transaction', transaction),
-    
-    // CHECKING IN FROM A VERIFIED STATION USING LOCALLY STORED API KEY PROVIDED BY THE BLOCKCHAIN PROVIDER EXCLUSIVELY 
-    // (replaces passphrase protection that the typical wallets would use and does not pgp encrypt its messages, all plain text)
-    checkin: (address, stationId = 'STATION_001', stationApiKey) =>
-    axios.post( `${API_BASE}/checkin`,
-        { address, station_id: stationId },
-        { headers: stationApiKey
-            ? { 'X-Station-API-Key': stationApiKey }
-            : {}
-        }
-    ),
-    adminMine: () => {
-        return apiClient.post('/admin/mine').then(res => res.data)
-    },
+	// Wallet endpoints
+	createWallet: (numMembers, passphrase) => 
+		axios.post(`${API_BASE}/wallet`, { 
+			num_members: numMembers,
+			passphrase: passphrase 
+		}),
+	getWallet: (familyId) => apiClient.get(`${API_BASE}/wallet/${familyId}`),
+	getWalletTransactions: (familyId) => apiClient.get(`${API_BASE}/wallet/${familyId}/transactions`),
+	getWalletQR: (familyId, address) => apiClient.get(`${API_BASE}/wallet/${familyId}/qr/${address}`),
+		
+	// Auth endpoints
+	unlockWallet: (familyId, passphrase) => 
+		axios.post(`${API_BASE}/auth/unlock`, {
+			family_id: familyId,
+			passphrase: passphrase || "" // Empty for dev
+		}).then(res => res.data)
+		.catch(error => {
+			console.error("Unlock error:", error.response?.data);
+			throw new Error(error.response?.data?.error || "Unlock failed");
+		}),
 
-    adminAlert: (message, priority) => {
-        return apiClient.post('/admin/alert', { message, priority })
-    },
+	// Transaction endpoints
+	addTransaction: (transaction) => apiClient.post('/transaction', transaction),
+	
+	// CHECKING IN FROM A VERIFIED STATION USING LOCALLY STORED API KEY PROVIDED BY THE BLOCKCHAIN PROVIDER EXCLUSIVELY 
+	// (replaces passphrase protection that the typical wallets would use and does not pgp encrypt its messages, all plain text)
+	checkin: (address, stationId = 'STATION_001', stationApiKey) =>
+	axios.post( `${API_BASE}/checkin`,
+		{ address, station_id: stationId },
+		{ headers: stationApiKey
+			? { 'X-Station-API-Key': stationApiKey }
+			: {}
+		}
+	),
+	adminMine: () => {
+		return apiClient.post('/admin/mine').then(res => res.data)
+	},
+
+	adminAlert: (message, priority) => {
+		return apiClient.post('/admin/alert', { message, priority })
+	},
 
 }

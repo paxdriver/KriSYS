@@ -85,14 +85,23 @@ export default function UserHostedRoom({ crisisId }) {
 
 	// JOIN MODE
 	async function handleJoinRoom() {
-		if (!remoteOfferInput.trim()) return
+		const raw = (remoteOfferInput || '').trim()
+		if (!raw) return
+
+		const pushOnly =
+			window.confirm(
+				'Join room in push-only mode?\n\n' +
+				'OK = Push only (no download)\n' +
+				'Cancel = Full sync (push + pull)'
+			) === true
+
 		setMode('join')
-		await joinWithOffer(remoteOfferInput)
+
+		await joinWithOffer(raw, { pushOnly })
 	}
 
 	return (
 		<div className="page">
-
 			<h2>User Hosted Room</h2>
 
 			{/* MODE SELECTOR */}
