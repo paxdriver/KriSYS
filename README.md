@@ -740,7 +740,7 @@ Typical offline workflow tests:
 │       ├── UserSettings.js
 │       └── UnlockForm.js
 ├── contexts
-│   ├── UserHostedRoomContext.js (later room features)
+│   ├── UserHostedRoomContext.js
 │   └── P2PContext.js
 ├── Dockerfile
 ├── package.json

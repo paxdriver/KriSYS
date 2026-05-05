@@ -88,22 +88,18 @@ function safeNow() {
 export function P2PProvider({ children, crisisId, familyId }) {
 	const connectionsRef = useRef(new Map())	// connection registry of all active RTC connections
 	const pendingSyncIdsRef = useRef(new Set())
-
-	const [error, setError] = useState(null)
-
+	
 	const [offerCode, setOfferCode] = useState('')
 	const [answerCode, setAnswerCode] = useState('')
 	const [remoteOfferInput, setRemoteOfferInput] = useState('')
 	const [remoteAnswerInput, setRemoteAnswerInput] = useState('')
 	const [logLines, setLogLines] = useState([])
 	
+	const [error, setError] = useState(null)
 	const [syncing, setSyncing] = useState(false)	// setting button disabled while sync runs
 	const [lastResult, setLastResult] = useState(null) // setting a simple viewer for status updates
-
 	const [metrics, setMetrics] = useState(null) 	// { send: {bytesSent,...}, recv: {bytesReceived,...} }
 
-	// Persisted across page switches
-	const [pushOnlyOnJoin, setPushOnlyOnJoin] = useState(false)
 
 	if (!crisisId || !familyId) {
 		throw new Error('P2PProvider requires crisisId and familyId')
@@ -185,8 +181,29 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			return
 		}
 
-		// DEV NOTE: TODO - FULL FLOW
-		// Relay client path
+		// USER HOSTED ROOM PEER
+		if (conn.transportRole === 'user_hosted_room_peer') {
+			log(`fullSync: triggering peer sync on ${connId}`)
+
+			// Use wallet - wallet protocol
+			const payload = disasterStorage.exportSyncPayload({
+				crisisId,
+				familyId,
+			})
+			const id = makeId()
+			sendJson(conn, {
+				t: 'krisys_mesh_sync_req_v1',
+				id,
+				payload,
+				mode: conn.pushOnly === true,
+				// mode: false, // "push only mode" ? client's unconfirmed messages push-only : full sync (push + pull)
+				sentAt: Date.now(),
+			})
+
+			return
+		}
+
+		// RELAY CLIENT
 		if (conn.transportRole === 'relay_client') {
 			log(`fullSync: triggering relay inventory on ${connId}`)
 			sendRelayInventoryNow(conn)
@@ -194,7 +211,6 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		}
 
 		// STATION CLIENT
-		// ==============================
 		if (conn.transportRole === 'station_client') {
 			log(`fullSync: triggering station inventory on ${connId}`)
 			sendStationInventoryNow(conn)
@@ -497,7 +513,6 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		setLogLines([])
 		setMetrics(null)
 		pendingSyncIdsRef.current = new Set()
-		setPushOnlyOnJoin(false)
 
 		emitP2PStatus({ active: false, status: 'closed', transportRole: 'idle' })
 	}, [emitP2PStatus, log])
@@ -1261,7 +1276,6 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			return
 		}
 
-		setPushOnlyOnJoin(!!pushOnly)
 		log('Joining with offer...')
 
 		const parsed = parseWebRTCRoomCode(raw)
@@ -1277,6 +1291,7 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		}
 
 		const conn = createConnection({ transportRole: 'user_hosted_room_peer' })
+		conn.pushOnly = !!pushOnly	// if user joins client room but doesn't want to pull data, only push unconfirmed messages...
 		attachCommonHandlers(conn)
 
 		conn.pc.ondatachannel = evt => {
@@ -1635,9 +1650,6 @@ export function P2PProvider({ children, crisisId, familyId }) {
 			remoteAnswerInput,
 			setRemoteAnswerInput,
 
-			pushOnlyOnJoin,
-			setPushOnlyOnJoin,
-
 			error,
 			metrics,
 			logLines,
@@ -1674,7 +1686,6 @@ export function P2PProvider({ children, crisisId, familyId }) {
 		lastResult,
 		metrics,
 		offerCode,
-		pushOnlyOnJoin,
 		remoteAnswerInput,
 		remoteOfferInput,
 		reset,

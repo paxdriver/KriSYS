@@ -6,15 +6,14 @@ import { useP2P } from '@/contexts/P2PContext'
 import { parseWebRTCRoomCode } from '@/services/webrtcRoomCode'
 import { showTextQr } from '@/utils/qr'
 
-export default function UserHostedRoom({ crisisId }) {
+export default function UserHostedRoom() {
 
 	// Pull required transport-layer functions from P2P context
 	const {
-	createHostOffer,	// generates a new host offer (creates new connection)
-	joinWithOffer,		// join another host using offer
-	hostApplyAnswer,	// apply answer to a specific connection
-	offerCode,			// DEV NOTE: legacy single-offer value, deprecated now, phasing out
-	answerCode,			// answer generated when joining
+		createHostOffer,	// generates a new host offer (creates new connection)
+		joinWithOffer,		// join another host using offer
+		hostApplyAnswer,	// apply answer to a specific connection
+		answerCode,			// answer generated when joining
 		setRemoteOfferInput,
 		remoteOfferInput,
 		status,
@@ -30,7 +29,6 @@ export default function UserHostedRoom({ crisisId }) {
 	// Track per-offer answer input temporarily
 	const [answers, setAnswers] = useState({}) // { connId: answerText }
 
-	
 	// USER HOSTS ROOM
 	async function handleGenerateOffer() {
 		// Call transport-layer function to create new host offer
@@ -83,13 +81,12 @@ export default function UserHostedRoom({ crisisId }) {
 		})
 	}
 
-	// JOIN MODE
+	// JOIN MODE - push only means client connecting to another user's hosted room can choose to not download any data and only push their own unconfirmed message queue to help propagate their messages without receiving any payloads. 
 	async function handleJoinRoom() {
 		const raw = (remoteOfferInput || '').trim()
 		if (!raw) return
 
-		const pushOnly =
-			window.confirm(
+		const pushOnly = window.confirm(
 				'Join room in push-only mode?\n\n' +
 				'OK = Push only (no download)\n' +
 				'Cancel = Full sync (push + pull)'
