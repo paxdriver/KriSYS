@@ -50,12 +50,14 @@ export default function ContactName({
 		setEditing(false)
 	}
 
-	const deleteContact = () => {
-		if (!canUseContacts) return
-
-		if (confirm(`Remove contact name for ${address}?`)) {
-			contactStorage.deleteContact({ crisisId, familyId, address })
-			setEditing(false)
+	// Copy the raw wallet/member address, not the display name to send in a message to another user via krisys or email or whatever
+	const copyAddress = async () => {
+		try {
+			await navigator.clipboard.writeText(address)
+			alert('Address copied to clipboard')
+		}
+		catch {
+			alert('Failed to copy address')
 		}
 	}
 
@@ -70,7 +72,7 @@ export default function ContactName({
 					placeholder="Enter name for this address"
 					className="contact-input"
 					autoFocus
-					onKeyPress={(e) => e.key === 'Enter' && saveContact()}
+					onKeyUp={(e) => e.key === 'Enter' && saveContact()}
 				/>
 				<button
 					onClick={saveContact}
@@ -79,6 +81,16 @@ export default function ContactName({
 				>
 					✅
 				</button>
+				
+				<button
+					onClick={copyAddress}
+					className="btn-icon copy"
+					title="Copy address"
+					type="button"
+				>
+					📋
+				</button>
+			
 				<button
 					onClick={() => setEditing(false)}
 					className="btn-icon cancel"
@@ -86,15 +98,6 @@ export default function ContactName({
 				>
 					❌
 				</button>
-				{isKnownContact && (
-					<button
-						onClick={deleteContact}
-						className="btn-icon delete"
-						title="Delete contact"
-					>
-						🗑️
-					</button>
-				)}
 			</span>
 		)
 	}

@@ -2,14 +2,14 @@
 'use client'
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { api } from '../../services/api'
+import { api } from '@/services/api'
 import { disasterStorage } from '@/services/localStorage'
 import ContactName from './ContactName'
 import { KeyManager } from '@/services/keyManager'
 import TransactionItem from './TransactionItem'
 import QRScanner from '../Scanner/QRScanner'
 import { parsePublicKeyShareCode } from '@/services/walletPublicKeyShare'
-import { contactStorage } from '../../services/contactStorage'	// resolve typed contact addresses by name
+import { contactStorage } from '@/services/contactStorage'	// resolve typed contact addresses by name
 
 async function sha256HexUtf8(text) {
 	const enc = new TextEncoder()
@@ -721,6 +721,7 @@ const handleImportPublicKey = async () => {
 							<TransactionItem
 								key={tx.transaction_id}
 								transaction={tx}
+								crisisId={crisisId}
 								privateKey={privateKey}
 								familyId={walletData.family_id}
 								isConfirmed={tx._isConfirmed}
