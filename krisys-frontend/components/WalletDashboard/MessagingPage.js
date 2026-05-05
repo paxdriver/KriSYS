@@ -31,6 +31,8 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 	const [error, setError] = useState('')
 	const searchParams = useSearchParams()
 
+	const messageInputRef = useRef(null)	// to focus message compose area after pressing 'reply'
+
 	// Local state bumpers for re-rendering when storage changes
 	const [queueVersion, setQueueVersion] = useState(1)
 	const [keyCacheVersion, setKeyCacheVersion] = useState(0)
@@ -302,6 +304,19 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 
 		setSelectedRecipients( prev => (prev.includes(value) ? prev : [...prev, value]) )
 		setManualRecipientInput('')
+	}
+
+	const handleReplyToAddress = (address) => {
+		if (!address) return	// Ignore missing sender addresses
+
+		// Add the sender address as a recipient if it is not already selected
+		setSelectedRecipients((prev) => {	
+			if (prev.includes(address)) return prev
+			return [...prev, address]
+		})
+
+		// Move keyboard focus into the compose box on the next frame after React has applied any pending state updates
+		requestAnimationFrame(() => messageInputRef.current?.focus() )
 	}
 
 	const selectedFamilyIds = useMemo(() => {
@@ -685,7 +700,8 @@ const handleImportPublicKey = async () => {
 
 						<div className="form-group">
 							<label>Message:</label>
-							<textarea
+							<textarea 
+								ref={messageInputRef} // move focus to textarea when replying to a received message 
 								value={messageText}
 								onChange={(e) => setMessageText(e.target.value)}
 								className="form-input"
@@ -725,6 +741,7 @@ const handleImportPublicKey = async () => {
 								privateKey={privateKey}
 								familyId={walletData.family_id}
 								isConfirmed={tx._isConfirmed}
+								onReply={handleReplyToAddress}
 							/>
 						))
 					)}

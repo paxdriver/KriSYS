@@ -3,7 +3,7 @@
 import MessageDisplay from './MessageDisplay'
 import ContactName from './ContactName'
 
-export default function TransactionItem({ transaction, privateKey, familyId, crisisId, isConfirmed=true }) {
+export default function TransactionItem({ transaction, privateKey, familyId, crisisId, isConfirmed=true, onReply }) {
 	const itemClass = `message-item ${isConfirmed ? 'confirmed' : 'unconfirmed'}`  // checking block signature to see if message is canonical on chain, signed by the server, or a message relayed from another user
 
 
@@ -35,6 +35,19 @@ export default function TransactionItem({ transaction, privateKey, familyId, cri
 			) : (
 				<div className="tx-message">
 					{transaction.message_data}
+				</div>
+			)}
+
+			{/* REPLY TO MESSAGE */}
+			{transaction.station_address && typeof onReply === 'function' && (
+				<div style={{ marginTop: '8px' }}>
+					<button
+						type="button"
+						className="btn"
+						onClick={() => onReply(transaction.station_address)}
+					>
+						Reply
+					</button>
 				</div>
 			)}
 		</div>
