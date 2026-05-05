@@ -525,7 +525,6 @@ body {
     background-color: #fff8e1; /* light yellow */
 }
 
-
 /* TRANSACTIONS */
 .transaction {
     padding: 0.75rem 0;
@@ -548,6 +547,76 @@ body {
 .tx-time {
     font-size: 0.85rem;
     color: var(--gray);
+}
+
+/* Thread list wrapper */
+.message-thread-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+/* Base thread block */
+.message-thread {
+    border: 1px solid #d7d7d7;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #ffffff;
+}
+
+/* Closed thread */
+.message-thread.collapsed {
+    background: #fafafa;
+}
+
+/* Open thread */
+.message-thread.expanded {
+    background: #f4f8ff;
+    border-color: #9bb8e8;
+}
+
+/* Clickable thread header */
+.message-thread-summary {
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    text-align: left;
+    font: inherit;
+}
+
+/* Hover cue for demo purposes */
+.message-thread-summary:hover {
+    background: rgba(0, 0, 0, 0.04);
+}
+
+/* Expanded message container */
+.message-thread-messages {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    border-top: 1px solid #d7e3f7;
+    background: #fcfdff;
+}
+
+/* Default incoming message appearance */
+.message-item.incoming {
+    max-width: 88%;
+    margin-right: auto;
+}
+
+/* Outgoing messages shift slightly to the right and appear a bit more compact */
+.message-item.outgoing {
+    max-width: 82%;
+    margin-left: auto;
+    font-size: 0.95rem;
+    opacity: 0.95;
 }
 
 /* STATUS INDICATORS */

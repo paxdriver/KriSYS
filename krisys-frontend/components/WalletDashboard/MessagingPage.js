@@ -42,6 +42,9 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 	const [pubKeyImportError, setPubKeyImportError] = useState('')
 	const [scannerOpen, setScannerOpen] = useState(false)
 
+	// Track which thread is currently expanded. null means no thread is open.
+	const [expandedThreadAddress, setExpandedThreadAddress] = useState(null)
+
 	// Controls whether the recipient suggestions are visible, and detect click out of bounds of input and dropdown area
 	const [showRecipientSuggestions, setShowRecipientSuggestions] = useState(false)
 	const recipientInputRef = useRef(null)
@@ -86,6 +89,30 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 		return address.includes('-') ? 
 			address.split('-').slice(0, -1).join('-') : address
 	}
+
+	// -- MESSAGE THREAD HELPERS --------
+	const getSenderAddressFromTransaction = tx => {
+		return tx?.station_address || null
+	}
+	const getOtherPartyAddress = tx => {	// Determine whether this message was sent by this wallet/member
+		const senderAddress = getSenderAddressFromTransaction(tx)
+		const fromMe = !!senderAddress && myAddresses.includes(senderAddress)
+
+		// If this message is FROM ME the thread key should be the first recipient that is NOT ONE OF MY FAMILY ADDRESSES
+		if (fromMe) {
+			const recipients = Array.isArray(tx.related_addresses) ? tx.related_addresses : []
+			return recipients.find((addr) => !myAddresses.includes(addr)) || null
+		}
+
+		// If this message is NOT FROM ME, the thread key is the SENDER.
+		return senderAddress
+	}
+	const isOutgoingMessage = (tx) => {
+		// Outgoing means the sender is one of my wallet member addresses.
+		const senderAddress = getSenderAddressFromTransaction(tx)
+		return !!senderAddress && myAddresses.includes(senderAddress)
+	}
+	// --------------------------------
 
 	const walletId = walletData?.family_id || null
 	const familyId = walletId
@@ -240,6 +267,70 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 
 		return [...canonical, ...queued].sort((a, b) => b._sortTimestamp - a._sortTimestamp)
 	}, [myMessages, queuedMyMessages])
+
+
+	// THREADS TO DISPLAY
+	const messageThreads = useMemo(() => {
+		const threadsMap = new Map()
+
+		for (const tx of allMessages) {
+			const otherPartyAddress = getOtherPartyAddress(tx)
+
+			// Skip messages that cannot be assigned to a simple one-address thread.
+			if (!otherPartyAddress) {
+				continue
+			}
+
+			if (!threadsMap.has(otherPartyAddress)) {
+				threadsMap.set(otherPartyAddress, {
+					address: otherPartyAddress,
+					messages: [],
+					latestTimestamp: 0,
+				})
+			}
+
+			const thread = threadsMap.get(otherPartyAddress)
+
+			thread.messages.push(tx)
+
+			const txTimestamp =
+				typeof tx._sortTimestamp === 'number'
+					? tx._sortTimestamp
+					: typeof tx.timestamp_posted === 'number'
+						? tx.timestamp_posted
+						: tx.timestamp_created || 0
+
+			if (txTimestamp > thread.latestTimestamp) {
+				thread.latestTimestamp = txTimestamp
+			}
+		}
+
+		// Sort messages inside each thread oldest -> newest for reading order.
+		for (const thread of threadsMap.values()) {
+			thread.messages.sort((a, b) => {
+				const aTime =
+					typeof a._sortTimestamp === 'number'
+						? a._sortTimestamp
+						: typeof a.timestamp_posted === 'number'
+							? a.timestamp_posted
+							: a.timestamp_created || 0
+
+				const bTime =
+					typeof b._sortTimestamp === 'number'
+						? b._sortTimestamp
+						: typeof b.timestamp_posted === 'number'
+							? b.timestamp_posted
+							: b.timestamp_created || 0
+
+				return aTime - bTime
+			})
+		}
+
+		// Sort threads newest activity first.
+		return Array.from(threadsMap.values()).sort(
+			(a, b) => b.latestTimestamp - a.latestTimestamp
+		)
+	}, [allMessages, myAddresses])
 
 	useEffect(() => {
 		const urlRecipient = searchParams.get('recipient')
@@ -730,20 +821,70 @@ const handleImportPublicKey = async () => {
 					<h3 className="card-title">My Messages ({allMessages.length})</h3>
 				</div>
 				<div className="card-body">
-					{allMessages.length === 0 ? (
+					{messageThreads.length === 0 ? (
 						<p>No messages yet</p>
 					) : (
-						allMessages.map((tx) => (
-							<TransactionItem
-								key={tx.transaction_id}
-								transaction={tx}
-								crisisId={crisisId}
-								privateKey={privateKey}
-								familyId={walletData.family_id}
-								isConfirmed={tx._isConfirmed}
-								onReply={handleReplyToAddress}
-							/>
-						))
+						<div className="message-thread-list">
+							{messageThreads.map((thread) => {
+								const isExpanded = expandedThreadAddress === thread.address
+
+								return (
+									<div
+										key={thread.address}
+										className={`message-thread ${
+											isExpanded ? 'expanded' : 'collapsed'
+										}`}
+									>
+										<button
+											type="button"
+											className="message-thread-summary"
+											onClick={() =>
+												setExpandedThreadAddress((prev) =>
+													prev === thread.address ? null : thread.address
+												)
+											}
+										>
+											<span className="message-thread-contact">
+												Messages with{' '}
+												<ContactName
+													address={thread.address}
+													isUnlocked={!!privateKey}
+													editable={false}
+													crisisId={crisisId}
+													familyId={walletData.family_id}
+												/>
+											</span>
+
+											<span className="message-thread-meta">
+												<span className="message-thread-latest-time">
+													{new Date(thread.latestTimestamp * 1000).toLocaleString()}
+												</span>
+												<span className="message-thread-count">
+													{thread.messages.length}
+												</span>
+											</span>
+										</button>
+
+										{isExpanded && (
+											<div className="message-thread-messages">
+												{thread.messages.map((tx) => (
+													<TransactionItem
+														key={tx.transaction_id}
+														transaction={tx}
+														privateKey={privateKey}
+														familyId={walletData.family_id}
+														crisisId={crisisId}
+														isConfirmed={tx._isConfirmed}
+														onReply={handleReplyToAddress}
+														isOutgoing={isOutgoingMessage(tx)}
+													/>
+												))}
+											</div>
+										)}
+									</div>
+								)
+							})}
+						</div>
 					)}
 				</div>
 			</div>
