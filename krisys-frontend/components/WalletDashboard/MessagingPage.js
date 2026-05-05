@@ -1,6 +1,6 @@
-'use client'
 // components/WalletDashboard/MessagingPage.js
-import { useState, useEffect, useMemo } from 'react'
+'use client'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { api } from '../../services/api'
 import { disasterStorage } from '@/services/localStorage'
@@ -9,6 +9,7 @@ import { KeyManager } from '@/services/keyManager'
 import TransactionItem from './TransactionItem'
 import QRScanner from '../Scanner/QRScanner'
 import { parsePublicKeyShareCode } from '@/services/walletPublicKeyShare'
+import { contactStorage } from '../../services/contactStorage'	// resolve typed contact addresses by name
 
 async function sha256HexUtf8(text) {
 	const enc = new TextEncoder()
@@ -38,6 +39,10 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 	const [pubKeyInput, setPubKeyInput] = useState('')
 	const [pubKeyImportError, setPubKeyImportError] = useState('')
 	const [scannerOpen, setScannerOpen] = useState(false)
+
+	// Controls whether the recipient suggestions are visible, and detect click out of bounds of input and dropdown area
+	const [showRecipientSuggestions, setShowRecipientSuggestions] = useState(false)
+	const recipientInputRef = useRef(null)
 
 	const crisisId = useMemo(() => {
 		try {
@@ -77,11 +82,78 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 	// Utility: derive familyId from an address
 	const getFamilyIdFromAddress = (address) => {
 		return address.includes('-') ? 
-            address.split('-').slice(0, -1).join('-') : address
+			address.split('-').slice(0, -1).join('-') : address
 	}
 
 	const walletId = walletData?.family_id || null
 	const familyId = walletId
+
+
+	// Load saved contacts for this wallet context : shape is { [address]: displayName }.
+	const savedContacts = useMemo(() => {
+		if (!crisisId || !familyId) {
+			return {}
+		}
+		return contactStorage.getContacts({ crisisId, familyId })
+	}, [crisisId, familyId])
+
+	// Convert the saved contacts object into an array that is easier to filter and render.
+	const contactOptions = useMemo(() => {
+		return Object.entries(savedContacts).map(([address, name]) => ({ address, name }))
+	}, [savedContacts])
+
+	// Filter contacts based on what the user typed.
+	// We match: [contact display name] TO [raw address] (but exclude any address that is already selected)
+	const recipientSuggestions = useMemo(() => {
+		const query = manualRecipientInput.trim().toLowerCase()
+
+		// No typed input means no suggestions.
+		if (!query) {
+			return []
+		}
+
+		return contactOptions
+			.filter((contact) => {
+				// Skip malformed contacts.
+				if (!contact?.address) {
+					return false
+				}
+
+				// Skip contacts already selected as recipients.
+				if (recipientsList.includes(contact.address)) {
+					return false
+				}
+
+				const nameText =
+					typeof contact.name === 'string' ? contact.name.toLowerCase() : ''
+				const addressText = contact.address.toLowerCase()
+
+				// Match either the saved name or the underlying address.
+				return nameText.includes(query) || addressText.includes(query)
+			})
+			// Keep the suggestion list small and readable.
+			.slice(0, 8)
+	}, [contactOptions, manualRecipientInput, recipientsList])
+
+	// Close the suggestions dropdown when the user clicks outside it.
+	useEffect(() => {
+		const handleDocumentClick = (event) => {
+			// If the click happened inside the recipient input area, keep the dropdown open.
+			if (recipientInputRef.current?.contains(event.target)) {
+				return
+			}
+
+			// Otherwise hide suggestions.
+			setShowRecipientSuggestions(false)
+		}
+
+		document.addEventListener('mousedown', handleDocumentClick)
+
+		return () => {
+			document.removeEventListener('mousedown', handleDocumentClick)
+		}
+	}, [])
+
 
 	// Canonical, on-chain messages involving this wallet (sent or received)
 	const myMessages = useMemo(() => {
@@ -174,7 +246,7 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 		setSelectedRecipients( prev => {
 			// If the recipient is already selected, keep the existing array unchanged
 			if (prev.includes(urlRecipient)) return prev
-			
+
 			// ... otherwise append the recipient from the url query string
 			else return [...prev, urlRecipient]
 		})
@@ -185,15 +257,50 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 		setSelectedRecipients((prev) => {
 			const arr = Array.isArray(prev) ? prev : []
 			return arr.includes(address) ? 
-                arr.filter((a) => a !== address) : [...arr, address]
+				arr.filter((a) => a !== address) : [...arr, address]
 		})
+	}
+
+
+	// Add a recipient chosen from the suggestions dropdown.
+	const handleSelectSuggestedRecipient = (address) => {
+		if (!address) return 	// Ignore empty addresses
+
+		// Add the selected address once only.
+		setSelectedRecipients((prev) => {
+			if (prev.includes(address)) return prev
+			return [...prev, address]
+		})
+
+		setManualRecipientInput('') 	// Clear the input after selection so the user can add another person.
+		setShowRecipientSuggestions(false)	// Hide the dropdown after a choice is made.
 	}
 
 	const handleAddManualRecipient = () => {
 		const value = manualRecipientInput.trim()
 		if (!value) return
 
-		setSelectedRecipients((prev) => (prev.includes(value) ? prev : [...prev, value]))
+		// First try exact name match against saved contacts
+		const exactNameMatch = contactOptions.find((contact) => {
+			if (typeof contact.name !== 'string') return false
+			
+			// This lets a user type a full saved contact name and add it directly
+			return contact.name.trim().toLowerCase() === value.toLowerCase()
+		})
+
+		// If there is an exact name match, use that contact's real address
+		if (exactNameMatch?.address) {
+			setSelectedRecipients((prev) => {
+				if (prev.includes(exactNameMatch.address)) return prev
+				return [...prev, exactNameMatch.address]
+			})
+
+			setManualRecipientInput('')
+			setShowRecipientSuggestions(false)
+			return
+		}
+
+		setSelectedRecipients( prev => (prev.includes(value) ? prev : [...prev, value]) )
 		setManualRecipientInput('')
 	}
 
@@ -401,11 +508,23 @@ const handleImportPublicKey = async () => {
 						<div className="form-group">
 							<label>Send to:</label>
 
-							<div className="manual-address-input">
+							<div 
+								className="manual-address-input"
+								ref={recipientInputRef}
+								style={{ position: 'relative' }}
+							>
 								<input
 									type="text"
 									value={manualRecipientInput}
-									onChange={(e) => setManualRecipientInput(e.target.value)}
+									onChange={(e) => {
+										setManualRecipientInput(e.target.value) 	// Update the typed text
+										setShowRecipientSuggestions(true)			// Open suggestions while there is input
+									}}
+									onFocus={() => {
+										if (manualRecipientInput.trim()) {	// Re-open suggestions when the input regains focus
+											setShowRecipientSuggestions(true)
+										}
+									}}
 									className="form-input"
 									placeholder="Paste wallet address (e.g. familyId-memberId)"
 									disabled={sending}
@@ -418,6 +537,47 @@ const handleImportPublicKey = async () => {
 								>
 									Add recipient
 								</button>
+								{showRecipientSuggestions && recipientSuggestions.length > 0 && (
+									<div
+										style={{
+											position: 'absolute',
+											top: '100%',
+											left: 0,
+											right: 0,
+											zIndex: 20,
+											background: '#111',
+											border: '1px solid #333',
+											borderRadius: '6px',
+											marginTop: '4px',
+											padding: '4px 0',
+										}}
+									>
+										{recipientSuggestions.map((contact) => (
+											<button
+												key={contact.address}
+												type="button"
+												onClick={() => handleSelectSuggestedRecipient(contact.address)}
+												style={{
+													display: 'block',
+													width: '100%',
+													textAlign: 'left',
+													background: 'transparent',
+													color: '#ddd',
+													border: 'none',
+													padding: '8px 12px',
+													cursor: 'pointer',
+												}}
+											>
+												<div>
+													<strong>{contact.name || contact.address}</strong>
+												</div>
+												<div style={{ fontSize: '12px', opacity: 0.8 }}>
+													{contact.address}
+												</div>
+											</button>
+										))}
+									</div>
+								)}
 							</div>
 
 							<div className="family-members-picker">
