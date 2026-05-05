@@ -169,11 +169,16 @@ export default function MessagingPage({ walletData, transactions, privateKey }) 
 
 	useEffect(() => {
 		const urlRecipient = searchParams.get('recipient')
-		if (urlRecipient) {
-			setSelectedRecipients((prev) => {
-				prev.includes(urlRecipient) ? prev : [...prev, urlRecipient]
-            })
-		}
+		if (!urlRecipient) return
+
+		setSelectedRecipients( prev => {
+			// If the recipient is already selected, keep the existing array unchanged
+			if (prev.includes(urlRecipient)) return prev
+			
+			// ... otherwise append the recipient from the url query string
+			else return [...prev, urlRecipient]
+		})
+	
 	}, [searchParams])
 
 	const toggleRecipient = (address) => {
