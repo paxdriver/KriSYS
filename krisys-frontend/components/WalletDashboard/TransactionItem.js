@@ -4,15 +4,15 @@ import MessageDisplay from './MessageDisplay'
 import ContactName from './ContactName'
 
 export default function TransactionItem({ transaction, privateKey, familyId, crisisId, isConfirmed=true, onReply, isOutgoing=false }) {
-	const itemClass = `message-item ${isConfirmed ? 'confirmed' : 'unconfirmed'}`  // checking block signature to see if message is canonical on chain, signed by the server, or a message relayed from another user
-		
+	
 	// DEV NOTE: TODO -> set reorder button, styles for unread messages, preview on home screen of recent messages, etc
-
+	
 	// Build explicit message direction class names for CSS readability
 	// - outgoing: messages sent by this wallet/member
 	// - incoming: messages received by this wallet/member
 	
 	const directionClass = isOutgoing ? 'outgoing' : 'incoming'	
+	const itemClass = `message-item ${isConfirmed ? 'confirmed' : 'unconfirmed'} ${directionClass}`  // checking block signature to see if message is canonical on chain, signed by the server, or a message relayed from another user
 
 	return (
 		<div className={itemClass}>

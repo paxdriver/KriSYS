@@ -831,18 +831,12 @@ const handleImportPublicKey = async () => {
 								return (
 									<div
 										key={thread.address}
-										className={`message-thread ${
-											isExpanded ? 'expanded' : 'collapsed'
-										}`}
+										className={`message-thread ${isExpanded ? 'expanded' : 'collapsed'}`}
 									>
 										<button
 											type="button"
 											className="message-thread-summary"
-											onClick={() =>
-												setExpandedThreadAddress((prev) =>
-													prev === thread.address ? null : thread.address
-												)
-											}
+											onClick={() => setExpandedThreadAddress(prev => prev === thread.address ? null : thread.address ) }
 										>
 											<span className="message-thread-contact">
 												Messages with{' '}
