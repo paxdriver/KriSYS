@@ -23,10 +23,21 @@ import React from 'react'
 */
 
 /*
-	Convert internal transport role values into readable labels.
-
-	This keeps raw internal strings out of the UI.
+	TODO: FOR TOMORROW
+		- Add position: relative to the indicator wrapper so the quick panel anchors to the icon.
+		- Pass onOpenConnectionsPage into ConnectionQuickPanel.
+		- Remove the second-click behavior on the icon and let the quick panel button handle opening the Connections page.
+		- Make the icon click only toggle the quick panel open and closed.
+		- Add a handler that closes the quick panel and routes to the Connections page when the panel button is pressed.
+		- Add CSS for final icon positioning and move it out of the sidebar.
+		- Verify the quick panel import path/file name matches the actual file exactly.
+		- Check getConnectionsSnapshot() and confirm hosted-room connections are included in the returned snapshot.
+		- Check why user_hosted_room_host or user_hosted_room_peer may stay at connecting instead of transitioning to connected.
+		- Fix the host/peer connection status source so hosted-room connections count as active in the summary and icon state.
 */
+
+
+// Convert internal transport role values into readable labels. This keeps raw internal strings out of the UI
 function getTransportLabel(transportRole) {
 	if (transportRole === 'station_client') {
 		return 'Station'
@@ -80,22 +91,23 @@ export default function ConnectionQuickPanel({
 	return (
 		/*	Outer panel container: // TODO Inline styles are used for now to get the behavior working before deciding where permanent CSS should live */
 		<div
-			role='dialog' // Announces this as an interactive panel.
-			aria-label={title} // Accessibility label.
+			role='dialog' // Announces this as an interactive panel
+			aria-label={title} // Accessibility label
 			style={{
-				position: 'absolute', // Lets the parent anchor it near the icon.
-				top: '100%', // Places it below the trigger area.
-				right: 0, // Align to the right edge of the trigger wrapper.
-				marginTop: '8px', // Small gap below the icon/button.
-				width: '320px', // Compact but large enough for rows and actions.
-				maxWidth: '90vw', // Prevent overflow on smaller screens.
-				background: '#111827', // Dark panel background.
-				color: '#f9fafb', // Light readable text.
-				border: '1px solid #374151', // Subtle outline.
-				borderRadius: '10px', // Soft corners.
-				boxShadow: '0 12px 30px rgba(0, 0, 0, 0.35)', // Floating panel depth.
-				padding: '12px', // Internal spacing.
-				zIndex: 1000, // Keep above surrounding layout.
+				position: 'relative',
+				display: 'inline-block',
+				top: '100%', // Places it below the trigger area
+				right: 0, // Align to the right edge of the trigger wrapper
+				marginTop: '8px', // Small gap below the icon/button
+				width: '320px', // Compact but large enough for rows and actions
+				maxWidth: '90vw', // Prevent overflow on smaller screens
+				background: '#111827', // Dark panel background
+				color: '#f9fafb', // Light readable text
+				border: '1px solid #374151', // Subtle outline
+				borderRadius: '10px', // Soft corners
+				boxShadow: '0 12px 30px rgba(0, 0, 0, 0.35)', // Floating panel depth
+				padding: '12px', // Internal spacing
+				zIndex: 1000, // Keep above surrounding layout
 			}}
 		>
 			{/* Panel heading */}
@@ -171,9 +183,7 @@ export default function ConnectionQuickPanel({
 									borderTop: '1px solid rgba(255,255,255,0.06)',
 								}}
 							>
-								{/*
-									Left side: readable connection info.
-								*/}
+								{/* Left side: readable connection info */}
 								<div style={{ minWidth: 0 }}>
 									<div
 										style={{
@@ -197,9 +207,7 @@ export default function ConnectionQuickPanel({
 									</div>
 								</div>
 
-								{/*
-									Right side: selective disconnect action.
-								*/}
+								{/* Right side: selective disconnect action */}
 								<button
 									type='button'
 									onClick={() => {
@@ -226,11 +234,7 @@ export default function ConnectionQuickPanel({
 				)}
 			</div>
 
-			{/*
-				Footer actions.
-
-				We separate quick interruption actions from navigation action.
-			*/}
+			{/* Footer actions. Separate quick interruption actions from navigation action */}
 			<div
 				style={{
 					display: 'flex',
@@ -284,13 +288,3 @@ export default function ConnectionQuickPanel({
 		</div>
 	)
 }
-
-/* // TODO Later the wrapper should pass:
-	- activeConnections
-	- activeConnectionCount
-	- hasHosting
-	- hostedPeerCount
-	- onDisconnectById
-	- onDisconnectAll
-	- onOpenConnectionsPage
-*/
