@@ -1086,13 +1086,11 @@ Targets:
 	- [ ] Document relay reset/wipe procedures
 	- [ ] Separate ferry container from static relay container
 	- [ ] Add relay role indicator in `/health` endpoint
-	- [ ] Add relay role indicator in admin telemetry panel
 
 #### Phase 6.1 — Visibility MVP
 Add structured log emitter utility in:
 - [x] backend
 - [x] station
-- [ ] relay
 - [x] Add admin telemetry endpoint on HQ
 
 Add admin UI panel:
@@ -1128,17 +1126,17 @@ HQ:
 - [ ] block interval
 - [ ] adaptive trigger frequency
 
-#### Phase 6.3 — Coordination of Public Pools (In Progress)
+#### Coordination of Public Pools
 Iron out rules and flow of coordinating P2P:
 - [x] Bulletin board hosted by stations to publish join codes
 - [x] Establish public gathering to facilitate offline pools / exchanges
 - [x] Automate propagation between pools (pool-2-pool sharing)
 - [x] Aggregate propagated unconfirmed queues to stations
 
-#### Phase 6.4 — Safe Admin Controls
+#### Safe Admin Controls
 Add admin controls:
 - [ ] Admin auth lock and session state management
-- [ ] Revoke station (set status = revoked)
+- [x] Revoke station (set status = revoked)
 - [ ] Provision new station / passphrase
 - [ ] Pause station intake remotely
 - [ ] Force pull blocks
@@ -1148,7 +1146,7 @@ On state change actions:
 - [x] Does not alter historical blocks
 - [x] Does not break determinism
 
-#### Phase 6.5 Relay Modes
+#### Relay Modes
 Relay Role Architecture
 - [x] Define `mode` enum: station | relay | uninitialized
 - [x] Define `relay_role` enum: LAN_amplifier | delivery_facilitation | user_volunteer
