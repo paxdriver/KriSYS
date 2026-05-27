@@ -716,9 +716,15 @@ Typical offline workflow tests:
 │   │   ├── BlockList.js
 │   │   ├── index.js
 │   │   └── WalletCreator.js
+│   ├── connection-status
+│	│   ├── ConnectionStatusIndicator.js
+│	│   ├── ConnectionQuickPanel.js
+│   │   └── utils.js
 │   ├── DevTools
 │   │   ├── devtools.css
 │   │   └── index.js
+│   ├── icons
+│   │   └── ConnectionIndicatorIcon.js.js
 │   ├── Scanner
 │   │   └── QRScanner.js
 │   └── WalletDashboard
