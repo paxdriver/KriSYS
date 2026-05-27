@@ -1,5 +1,7 @@
 // components/WalletDashboard/Sidebar.js
 'use client'
+import ConnectionStatusIndicator from "../connection-status/ConnectionStatusIndicator"
+
 export default function Sidebar({ walletData, currentPage, onPageChange }) {
 	const navItems = [
 		{ id: 'overview', icon: '📊', label: 'Overview' },
@@ -14,7 +16,7 @@ export default function Sidebar({ walletData, currentPage, onPageChange }) {
 		{ id: 'settings', icon: '⚙️', label: 'Settings' },
 	]
 
-	return (
+	return (<>
 		<aside className="sidebar">
 			<div className="wallet-header">
 				<div className="wallet-icon">F</div>
@@ -27,6 +29,7 @@ export default function Sidebar({ walletData, currentPage, onPageChange }) {
 			</div>
 
 			<ul className="nav-menu">
+				<ConnectionStatusIndicator />
 				{navItems.map(item => (
 					<li key={item.id} className="nav-item">
 						<a
@@ -36,7 +39,7 @@ export default function Sidebar({ walletData, currentPage, onPageChange }) {
 								e.preventDefault()
 								onPageChange(item.id)
 							}}
-						>
+							>
 							<span className="nav-icon">{item.icon}</span>
 							<span>{item.label}</span>
 						</a>
@@ -44,5 +47,5 @@ export default function Sidebar({ walletData, currentPage, onPageChange }) {
 				))}
 			</ul>
 		</aside>
-	)
+	</>)
 }

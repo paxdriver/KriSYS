@@ -264,3 +264,5 @@ export default function ConnectionIndicatorIcon({
 		</svg>
 	)
 }
+
+/* Thank you to https://publicdomainvectors.org/ for the public domain vector image! */

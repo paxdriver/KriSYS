@@ -890,3 +890,8 @@ body {
     cursor: pointer;
     border-radius: 4px;
 }
+
+/* CONNECTION STATUS INDICATOR STYLES */
+.btn-connection-status-icon {
+    border: 1px dotted purple;  /* placeholder */
+}
